@@ -1,0 +1,320 @@
+package dev.turbodl.core
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
+
+/**
+ * TurboDL 下载引擎入口（SDK 门面）。
+ *
+ * 用法：
+ * ```
+ * val client = TurboClient(TurboConfig(maxConnectionsPerTask = 16))
+ * val id = client.submit(DownloadRequest(url, File("out.bin")))
+ * client.events.collect { ... }   // 观测事件
+ * client.await(id)                 // 挂起直到完成
+ * client.shutdown()
+ * ```
+ *
+ * 线程/协程安全；所有下载在内部 SupervisorJob 作用域中执行。
+ * 本类**不含任何插件/扩展点代码**；[events] 仅作为观测流。
+ */
+class TurboClient(config: TurboConfig = TurboConfig()) {
+
+    @Volatile
+    var config: TurboConfig = config
+        private set
+
+    /** 运行时热更新配置（限速、并发等即时生效；已在跑的任务连接数不回缩）。 */
+    fun updateConfig(newConfig: TurboConfig) {
+        this.config = newConfig
+        httpClient = HttpClientFactory.build(newConfig)
+    }
+
+    @Volatile
+    private var httpClient = HttpClientFactory.build(config)
+
+    private val downloader = SegmentDownloader { httpClient }
+    private val speedLimiter = SpeedLimiter { config.globalSpeedLimitBytesPerSec }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val idGen = AtomicLong(0)
+
+    private val _events = MutableSharedFlow<TurboEvent>(extraBufferCapacity = 256)
+    val events: SharedFlow<TurboEvent> = _events.asSharedFlow()
+
+    private val _progress = MutableStateFlow<Map<Long, TaskProgress>>(emptyMap())
+    val progress: StateFlow<Map<Long, TaskProgress>> = _progress.asStateFlow()
+
+    private val jobs = ConcurrentHashMap<Long, Job>()
+    private val completions = ConcurrentHashMap<Long, CompletableDeferred<Result<File>>>()
+    private val requests = ConcurrentHashMap<Long, DownloadRequest>()
+
+    /** 并发任务槽。 */
+    private val activeCount = AtomicInteger(0)
+
+    /** 提交下载任务，立即入队并异步开始。返回任务 id。 */
+    fun submit(request: DownloadRequest): Long {
+        val id = idGen.incrementAndGet()
+        requests[id] = request
+        completions[id] = CompletableDeferred()
+        emit(TurboEvent.Created(id, request))
+        setState(id, request, TaskState.QUEUED)
+
+        val job = scope.launch {
+            try {
+                awaitSlot(id)
+                if (coroutineContext[Job]?.isActive != true) return@launch
+                activeCount.incrementAndGet()
+                try {
+                    runTask(id, request)
+                } finally {
+                    activeCount.decrementAndGet()
+                }
+            } catch (e: CancellationException) {
+                completions[id]?.complete(Result.failure(e))
+                setState(id, request, TaskState.CANCELED)
+            } catch (e: Exception) {
+                emit(TurboEvent.Failed(id, e.message ?: e.javaClass.simpleName))
+                updateProgress(id) { it.copy(state = TaskState.FAILED, error = e.message) }
+                completions[id]?.complete(Result.failure(e))
+            }
+        }
+        jobs[id] = job
+        return id
+    }
+
+    /** 挂起直到任务结束，返回结果（成功=文件，失败=异常）。 */
+    suspend fun await(id: Long): Result<File> =
+        completions[id]?.await() ?: Result.failure(IllegalArgumentException("未知任务 $id"))
+
+    /** 暂停任务（保留断点）。 */
+    fun pause(id: Long) {
+        downloader.cancelCalls(id)
+        val job = jobs.remove(id)
+        scope.launch {
+            job?.let { runCatching { it.cancelAndJoin() } }
+            requests[id]?.let { setState(id, it, TaskState.PAUSED) }
+        }
+    }
+
+    /** 恢复已暂停的任务（断点续传）。 */
+    fun resume(id: Long): Boolean {
+        val req = requests[id] ?: return false
+        if (jobs.containsKey(id)) return false
+        completions.putIfAbsent(id, CompletableDeferred())
+        val job = scope.launch {
+            try {
+                awaitSlot(id)
+                if (coroutineContext[Job]?.isActive != true) return@launch
+                activeCount.incrementAndGet()
+                try { runTask(id, req) } finally { activeCount.decrementAndGet() }
+            } catch (e: CancellationException) {
+                setState(id, req, TaskState.PAUSED)
+            } catch (e: Exception) {
+                emit(TurboEvent.Failed(id, e.message ?: e.javaClass.simpleName))
+                completions[id]?.complete(Result.failure(e))
+            }
+        }
+        jobs[id] = job
+        return true
+    }
+
+    /** 取消任务并清理临时分片。deleteOutput=true 同时删除已保存的目标文件。 */
+    fun cancel(id: Long, deleteOutput: Boolean = false) {
+        downloader.cancelCalls(id)
+        val job = jobs.remove(id)
+        scope.launch {
+            job?.let { runCatching { it.cancelAndJoin() } }
+            chunkDirOf(id).deleteRecursively()
+            if (deleteOutput) requests[id]?.destination?.delete()
+            requests[id]?.let { setState(id, it, TaskState.CANCELED) }
+            completions[id]?.complete(Result.failure(CancellationException("canceled")))
+        }
+    }
+
+    /** 关闭引擎，取消所有任务并释放资源。 */
+    fun shutdown() {
+        scope.coroutineContext[Job]?.cancel()
+        httpClient.dispatcher.executorService.shutdown()
+        httpClient.connectionPool.evictAll()
+    }
+
+    // ---------- 内部 ----------
+
+    private suspend fun awaitSlot(id: Long) {
+        while (coroutineContext[Job]?.isActive == true &&
+            activeCount.get() >= config.maxConcurrentTasks
+        ) {
+            delay(200)
+        }
+    }
+
+    private suspend fun runTask(id: Long, request: DownloadRequest) {
+        setState(id, request, TaskState.PROBING)
+
+        // 探测大小 + Range 支持
+        val (probedSize, supportsRange) = downloader.probe(request.url, request.headers)
+        val total = probedSize
+            ?: request.knownSize.takeIf { it > 0 }
+            ?: -1L
+
+        val chunkDir = chunkDirOf(id).apply { mkdirs() }
+        val startedAt = System.currentTimeMillis()
+        val downloadedRef = AtomicLong(0)
+        val speedRec = SpeedRecorder()
+        val liveConns = AtomicInteger(request.connectionsOverride ?: config.maxConnectionsPerTask)
+        val taskJob = coroutineContext[Job]
+
+        val onBytes: suspend (Long, Long) -> Unit = { _, abs ->
+            downloadedRef.set(abs)
+            val speed = speedRec.sample(abs)
+            val eta = if (speed != null && speed > 0 && total > 0) (total - abs) * 1000 / speed else -1L
+            updateProgress(id) {
+                it.copy(
+                    state = TaskState.DOWNLOADING,
+                    downloadedBytes = abs,
+                    totalBytes = total,
+                    speedBytesPerSec = speed ?: it.speedBytesPerSec,
+                    activeConnections = liveConns.get(),
+                    etaMillis = eta,
+                )
+            }
+        }
+
+        setState(id, request, TaskState.DOWNLOADING)
+
+        // 服务器不支持 Range 或大小未知 → 直接整文件回退（无法分段）
+        if (!supportsRange || total <= 0) {
+            val outPart = File(chunkDir, "whole.part")
+            val ok = downloader.downloadWhole(id, request.url, outPart, request.headers, total) { d ->
+                speedLimiter.awaitAllow(d)
+                val abs = downloadedRef.addAndGet(d)
+                if (coroutineContext[Job]?.isActive != true) return@downloadWhole
+                onBytes(d, abs)
+            }
+            if (!ok) throw IllegalStateException("整文件下载失败（服务器不支持 Range 或响应异常）")
+            finish(id, request, listOf(outPart), total.takeIf { it > 0 } ?: outPart.length())
+            return
+        }
+
+        val connections = (request.connectionsOverride ?: config.maxConnectionsPerTask).coerceIn(1, 256)
+        val scheduler = SegmentScheduler(downloader, config, speedLimiter)
+        val outcome = scheduler.run(
+            taskId = id,
+            url = request.url,
+            total = total,
+            chunkDir = chunkDir,
+            headers = request.headers,
+            connections = connections,
+            resumeFrom = 0L,
+            onBytes = onBytes,
+            onConnections = { c -> liveConns.set(c) },
+            isActive = { taskJob?.isActive == true },
+        )
+
+        when (outcome) {
+            is SegmentScheduler.Outcome.Completed ->
+                finish(id, request, scheduler.finalParts(chunkDir), total)
+            is SegmentScheduler.Outcome.NeedWholeFallback -> {
+                // 分段中途发现服务器忽略 Range → 清分片，整文件回退
+                chunkDir.deleteRecursively(); chunkDir.mkdirs()
+                downloadedRef.set(0)
+                val outPart = File(chunkDir, "whole.part")
+                val ok = downloader.downloadWhole(id, request.url, outPart, request.headers, total) { d ->
+                    speedLimiter.awaitAllow(d)
+                    val abs = downloadedRef.addAndGet(d)
+                    if (coroutineContext[Job]?.isActive != true) return@downloadWhole
+                    onBytes(d, abs)
+                }
+                if (!ok) throw IllegalStateException("整文件回退下载失败")
+                finish(id, request, listOf(outPart), total)
+            }
+            is SegmentScheduler.Outcome.Failed -> {
+                if (coroutineContext[Job]?.isActive != true) return
+                throw IllegalStateException(outcome.reason)
+            }
+        }
+    }
+
+    private suspend fun finish(id: Long, request: DownloadRequest, parts: List<File>, total: Long) {
+        updateProgress(id) { it.copy(state = TaskState.MERGING) }
+        for (p in parts) {
+            if (!p.exists() || p.length() <= 0) throw IllegalStateException("分片缺失/为空：$p")
+        }
+        val dest = request.destination
+        dest.parentFile?.mkdirs()
+        if (!PartMerger.merge(parts, dest)) throw IllegalStateException("合并分片失败")
+        if (total > 0 && dest.length() != total) {
+            throw IllegalStateException("大小校验失败：期望 $total，实际 ${dest.length()}")
+        }
+        chunkDirOf(id).deleteRecursively()
+        updateProgress(id) {
+            it.copy(state = TaskState.COMPLETED, downloadedBytes = dest.length(), totalBytes = dest.length())
+        }
+        emit(TurboEvent.Completed(id, dest, dest.length()))
+        completions[id]?.complete(Result.success(dest))
+    }
+
+    private fun chunkDirOf(id: Long): File {
+        val base = File(System.getProperty("java.io.tmpdir"), "turbodl")
+        return File(base, "task_$id")
+    }
+
+    private fun emit(event: TurboEvent) {
+        scope.launch { _events.emit(event) }
+    }
+
+    private fun setState(id: Long, request: DownloadRequest, state: TaskState) {
+        updateProgress(id) { it.copy(state = state) }
+        emit(TurboEvent.StateChanged(id, state))
+    }
+
+    private fun updateProgress(id: Long, transform: (TaskProgress) -> TaskProgress) {
+        _progress.update { map ->
+            val cur = map[id] ?: TaskProgress(
+                taskId = id, state = TaskState.QUEUED,
+                downloadedBytes = 0, totalBytes = -1,
+                speedBytesPerSec = 0, activeConnections = 0, etaMillis = -1,
+            )
+            val next = transform(cur)
+            emit(TurboEvent.Progress(id, next))
+            map + (id to next)
+        }
+    }
+
+    /** 速度采样：每 500ms 计算一次平均速率。 */
+    private class SpeedRecorder {
+        private var lastBytes = 0L
+        private var lastTime = System.currentTimeMillis()
+        @Synchronized
+        fun sample(total: Long): Long? {
+            val now = System.currentTimeMillis()
+            val dt = now - lastTime
+            if (dt >= 500) {
+                val speed = if (dt > 0) ((total - lastBytes) * 1000 / dt).coerceAtLeast(0) else 0
+                lastBytes = total; lastTime = now
+                return speed
+            }
+            return null
+        }
+    }
+}
