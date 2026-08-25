@@ -1,10 +1,8 @@
 # TurboDL
 
-> High-performance multi-threaded download engine SDK — pure Kotlin/JVM, no Android dependency, embeddable in any JVM application (including Android).
+> 🌐 이 문서는 영어 원문을 그대로 복제한 자리표시자입니다. 번역은 이후 반복에서 다듬을 예정입니다.
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-**Languages:** English · [简体中文](docs/i18n/README_zh-CN.md) · [繁體中文](docs/i18n/README_zh-TW.md) · [日本語](docs/i18n/README_ja.md) · [한국어](docs/i18n/README_ko.md) · [Deutsch](docs/i18n/README_de.md)
+**언어:** [English](../../README.md) · [简体中文](README_zh-CN.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · 한국어 · [Deutsch](README_de.md)
 
 TurboDL is a download core written from scratch. It **only draws on the architectural and algorithmic ideas** of mature download managers (aria2, IDM/XDM, axel, Persepolis, Motrix, ab-download-manager) **without copying any of their source code**, and is therefore released under the permissive **MIT license (with supplemental plugin-ecosystem terms)**, free to use in open-source or commercial projects.
 
@@ -114,4 +112,4 @@ TurboDL's design draws on the ideas of the following open-source projects (ideas
 
 ## License
 
-[MIT License](LICENSE), with "plugin-ecosystem supplemental terms" (clarifying that plugins are independent works, may be licensed freely, and are not considered derivative works merely by interacting through public APIs / extension points).
+[MIT License](../../LICENSE), with "plugin-ecosystem supplemental terms" (clarifying that plugins are independent works, may be licensed freely, and are not considered derivative works merely by interacting through public APIs / extension points).
