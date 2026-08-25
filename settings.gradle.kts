@@ -23,4 +23,5 @@ include(":turbodl-cli")
 // 插件框架（可选，阶段 0 骨架）：core 不依赖以下任何模块。
 include(":turbo-plugin-runtime")
 include(":turbo-plugin-bootstrap")
+include(":turbo-plugin-hls")
 include(":demo")

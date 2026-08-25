@@ -20,8 +20,19 @@ object TurboBackends {
      *   [BackendContext.config] at download time; this parameter only seeds the HTTP client.
      */
     fun builtinHttp(clientConfig: TurboConfig = TurboConfig()): DownloadBackend {
-        val client = HttpClientFactory.build(clientConfig)
+        val client = TurboHttpClients.create(clientConfig)
         val downloader = SegmentDownloader { client }
         return BuiltinHttpBackend(downloader)
     }
+}
+
+/**
+ * Public factory for protocol plugins that need the same HTTP transport policy as core.
+ *
+ * Optional protocol modules (such as HLS) can use this factory to honour [TurboConfig]'s proxy,
+ * DNS, TLS, timeout, and connection-pool settings without accessing core's internal downloader
+ * classes. Callers own the returned client and must release its dispatcher/pool when finished.
+ */
+object TurboHttpClients {
+    fun create(config: TurboConfig): okhttp3.OkHttpClient = HttpClientFactory.build(config)
 }

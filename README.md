@@ -103,6 +103,7 @@ Unit tests use an embedded HTTP(Range) server and cover: multi-threaded byte-lev
 - `turbodl-cli`: command-line example demonstrating SDK usage.
 - `turbo-plugin-runtime`: **optional** plugin runtime kernel (lifecycle / disposer / event bus / service registry / extension points / diagnostics). core does not depend on it; when not included, core works as usual. *(under construction, currently a scaffold)*
 - `turbo-plugin-bootstrap`: **optional** bootstrap module for one-click loading of base plugins; not a mandatory dependency. *(under construction, currently a scaffold)*
+- `turbo-plugin-hls`: **optional** HLS VOD protocol adapter plugin — resolves master/media M3U8 playlists, downloads segments concurrently (with per-segment retry), decrypts AES-128, honors EXT-X-BYTERANGE, and returns ordered parts for the engine to merge. Registers itself as a routed `DownloadBackend`; unsupported constructs (live streams, DRM/SAMPLE-AES, fMP4 EXT-X-MAP, discontinuities) fail explicitly instead of producing corrupt output.
 - `demo`: framework usage examples, not intrusive to the core source. *(under construction, currently a scaffold)*
 
 ## Design notes & acknowledgements
