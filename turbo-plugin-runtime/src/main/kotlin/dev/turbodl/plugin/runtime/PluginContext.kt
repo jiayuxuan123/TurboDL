@@ -18,6 +18,9 @@ interface PluginContext {
     /** This plugin's id. */
     val pluginId: String
 
+    /** The host's current TurboDL public API version (for optional feature detection). */
+    val apiVersion: dev.turbodl.core.ApiVersion
+
     /** Per-plugin cleanup chain, drained on unload (LIFO). */
     val disposer: Disposer
 

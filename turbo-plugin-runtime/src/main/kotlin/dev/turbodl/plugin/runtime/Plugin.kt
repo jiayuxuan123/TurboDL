@@ -25,6 +25,14 @@ interface Plugin {
     /** Human-readable name for diagnostics. */
     val name: String get() = id
 
+    /**
+     * Minimum TurboDL public API version this plugin needs. The host refuses to load the plugin
+     * unless the running [dev.turbodl.core.ApiVersion.CURRENT] satisfies it (same MAJOR and
+     * host >= this). Default targets the 1.x line. Declare a higher value when you start using a
+     * newer additive API so older hosts reject you cleanly instead of failing mysteriously.
+     */
+    val requiredApiVersion: dev.turbodl.core.ApiVersion get() = dev.turbodl.core.ApiVersion(1, 0, 0)
+
     /** Service ids this plugin needs before it can load. Empty = no dependencies. */
     val dependencies: Set<String> get() = emptySet()
 

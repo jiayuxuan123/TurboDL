@@ -159,4 +159,33 @@ class PluginHostTest {
         val host = PluginHost(logger = { _, _ -> })
         assertTrue(host.extensions.all(PluginLoaderProvider.KEY).isEmpty())
     }
+
+    @Test
+    fun incompatiblePluginIsRejectedBeforeOnLoad() {
+        val host = PluginHost(logger = { _, _ -> })
+        var loaded = false
+        // Require a MAJOR higher than the host: must be rejected, onLoad must never run.
+        host.install(object : Plugin {
+            override val id = "future"
+            override val requiredApiVersion =
+                dev.turbodl.core.ApiVersion(dev.turbodl.core.ApiVersion.CURRENT.major + 1, 0, 0)
+            override fun onLoad(context: PluginContext) { loaded = true }
+        })
+        val info = host.diagnostics().plugins.first()
+        assertEquals(PluginState.INCOMPATIBLE, info.state)
+        assertFalse(loaded, "onLoad must not run for an incompatible plugin")
+    }
+
+    @Test
+    fun compatiblePluginSeesHostApiVersion() {
+        val host = PluginHost(logger = { _, _ -> })
+        var seen: dev.turbodl.core.ApiVersion? = null
+        host.install(object : Plugin {
+            override val id = "compat"
+            override val requiredApiVersion = dev.turbodl.core.ApiVersion(1, 0, 0)
+            override fun onLoad(context: PluginContext) { seen = context.apiVersion }
+        })
+        assertEquals(PluginState.LOADED, host.diagnostics().plugins.first().state)
+        assertEquals(dev.turbodl.core.ApiVersion.CURRENT, seen)
+    }
 }

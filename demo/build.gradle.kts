@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":turbodl-core"))
     implementation(project(":turbo-plugin-runtime"))
     implementation(project(":turbo-plugin-bootstrap"))
+    implementation(project(":turbo-plugin-hls"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 }
 
@@ -28,6 +29,6 @@ java {
 }
 
 application {
-    // 占位主类，阶段 4 再补齐 demo 内容。
-    mainClass.set("dev.turbodl.demo.PlaceholderKt")
+    // Entry point dispatches to one of the three examples by name.
+    mainClass.set("dev.turbodl.demo.DemoAppKt")
 }

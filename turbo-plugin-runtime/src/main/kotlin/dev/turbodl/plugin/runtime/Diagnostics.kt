@@ -8,6 +8,8 @@ enum class PluginState {
     LOADED,
     /** onLoad threw; inactive. */
     FAILED,
+    /** Rejected before onLoad because the host API version does not satisfy the plugin. */
+    INCOMPATIBLE,
     /** Unloaded and disposer drained. */
     UNLOADED,
 }

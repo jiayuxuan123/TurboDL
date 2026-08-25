@@ -130,6 +130,19 @@ class PluginHost(
             progressed = false
             for (m in registered.values) {
                 if (m.state != PluginState.WAITING) continue
+                // Version handshake first: a plugin that needs a newer/incompatible API is
+                // rejected loudly here instead of being run against a mismatched host.
+                val required = m.plugin.requiredApiVersion
+                if (!dev.turbodl.core.ApiVersion.CURRENT.satisfies(required)) {
+                    m.state = PluginState.INCOMPATIBLE
+                    m.error = "requires API $required, host is ${dev.turbodl.core.ApiVersion.CURRENT}"
+                    logger(
+                        "plugin '${m.plugin.id}' is INCOMPATIBLE: requires API $required, " +
+                            "host is ${dev.turbodl.core.ApiVersion.CURRENT}",
+                        null,
+                    )
+                    continue
+                }
                 val missing = services.missing(m.plugin.dependencies)
                 if (missing.isEmpty()) {
                     loadManaged(m)
@@ -176,6 +189,8 @@ class PluginHost(
         override val pluginId: String,
         override val disposer: Disposer,
     ) : PluginContext {
+
+        override val apiVersion: dev.turbodl.core.ApiVersion = dev.turbodl.core.ApiVersion.CURRENT
 
         override fun registerService(id: String, instance: Any) {
             services.register(id, instance, pluginId)
