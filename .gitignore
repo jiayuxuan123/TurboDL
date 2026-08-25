@@ -14,3 +14,6 @@ Thumbs.db
 
 # Local
 local.properties
+
+# Kotlin daemon logs
+.kotlin/
