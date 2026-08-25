@@ -15,6 +15,7 @@ dependencies {
     api(project(":turbo-plugin-runtime"))
 
     testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 }
 
 kotlin {
