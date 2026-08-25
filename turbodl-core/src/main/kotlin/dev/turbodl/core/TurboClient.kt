@@ -55,6 +55,24 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     private val downloader = SegmentDownloader { httpClient }
     private val speedLimiter = SpeedLimiter { config.globalSpeedLimitBytesPerSec }
 
+    /** Built-in HTTP backend; always available so core works standalone. */
+    private val builtinBackend: DownloadBackend = BuiltinHttpBackend(downloader)
+
+    /**
+     * Optional backend resolver. Null unless the optional plugin runtime installs one
+     * (its BackendRegistry). core never depends on the runtime; when null, the built-in
+     * backend is always used.
+     *
+     * NOTE: reserved — the runtime sets this so plugin backends can override the built-in
+     * one or add protocols. This is the only hook; core has no knowledge of the registry type.
+     */
+    @Volatile
+    var backendResolver: BackendResolver? = null
+
+    /** Resolve the backend for a request: plugin resolver first, then built-in fallback. */
+    private fun backendFor(request: DownloadRequest): DownloadBackend =
+        backendResolver?.resolve(request) ?: builtinBackend
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val idGen = AtomicLong(0)
 
@@ -171,88 +189,50 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     private suspend fun runTask(id: Long, request: DownloadRequest) {
         setState(id, request, TaskState.PROBING)
 
-        // 探测大小 + Range 支持
-        val (probedSize, supportsRange) = downloader.probe(request.url, request.headers)
-        val total = probedSize
-            ?: request.knownSize.takeIf { it > 0 }
-            ?: -1L
-
         val chunkDir = chunkDirOf(id).apply { mkdirs() }
-        val startedAt = System.currentTimeMillis()
         val downloadedRef = AtomicLong(0)
         val speedRec = SpeedRecorder()
-        val liveConns = AtomicInteger(request.connectionsOverride ?: config.maxConnectionsPerTask)
+        val totalRef = AtomicLong(-1)
+        val liveConnsRef = AtomicInteger(request.connectionsOverride ?: config.maxConnectionsPerTask)
         val taskJob = coroutineContext[Job]
 
-        val onBytes: suspend (Long, Long) -> Unit = { _, abs ->
-            downloadedRef.set(abs)
-            val speed = speedRec.sample(abs)
-            val eta = if (speed != null && speed > 0 && total > 0) (total - abs) * 1000 / speed else -1L
-            updateProgress(id) {
-                it.copy(
-                    state = TaskState.DOWNLOADING,
-                    downloadedBytes = abs,
-                    totalBytes = total,
-                    speedBytesPerSec = speed ?: it.speedBytesPerSec,
-                    activeConnections = liveConns.get(),
-                    etaMillis = eta,
-                )
+        // Backend context: bridges a DownloadBackend to the engine's progress/state/rate-limit
+        // without exposing any client internals. The state machine, event emission, merging and
+        // integrity checks all stay here in TurboClient.
+        val context = object : BackendContext {
+            override val taskId: Long = id
+            override val request: DownloadRequest = request
+            override val workDir: File = chunkDir
+            override val config: TurboConfig get() = this@TurboClient.config
+            override fun isActive(): Boolean = taskJob?.isActive == true
+            override suspend fun throttle(bytes: Long) = speedLimiter.awaitAllow(bytes)
+            override fun reportTotalSize(total: Long) { totalRef.set(total) }
+            override suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int) {
+                downloadedRef.set(absoluteBytes)
+                liveConnsRef.set(activeConnections)
+                val total = totalRef.get()
+                val speed = speedRec.sample(absoluteBytes)
+                val eta = if (speed != null && speed > 0 && total > 0) (total - absoluteBytes) * 1000 / speed else -1L
+                updateProgress(id) {
+                    it.copy(
+                        state = TaskState.DOWNLOADING,
+                        downloadedBytes = absoluteBytes,
+                        totalBytes = total,
+                        speedBytesPerSec = speed ?: it.speedBytesPerSec,
+                        activeConnections = activeConnections,
+                        etaMillis = eta,
+                    )
+                }
             }
         }
 
         setState(id, request, TaskState.DOWNLOADING)
 
-        // 服务器不支持 Range 或大小未知 → 直接整文件回退（无法分段）
-        if (!supportsRange || total <= 0) {
-            val outPart = File(chunkDir, "whole.part")
-            val ok = downloader.downloadWhole(id, request.url, outPart, request.headers, total) { d ->
-                speedLimiter.awaitAllow(d)
-                val abs = downloadedRef.addAndGet(d)
-                if (coroutineContext[Job]?.isActive != true) return@downloadWhole
-                onBytes(d, abs)
-            }
-            if (!ok) throw IllegalStateException("整文件下载失败（服务器不支持 Range 或响应异常）")
-            finish(id, request, listOf(outPart), total.takeIf { it > 0 } ?: outPart.length())
-            return
-        }
-
-        val connections = (request.connectionsOverride ?: config.maxConnectionsPerTask).coerceIn(1, 256)
-        val scheduler = SegmentScheduler(downloader, config, speedLimiter)
-        val outcome = scheduler.run(
-            taskId = id,
-            url = request.url,
-            total = total,
-            chunkDir = chunkDir,
-            headers = request.headers,
-            connections = connections,
-            resumeFrom = 0L,
-            onBytes = onBytes,
-            onConnections = { c -> liveConns.set(c) },
-            isActive = { taskJob?.isActive == true },
-        )
-
-        when (outcome) {
-            is SegmentScheduler.Outcome.Completed ->
-                finish(id, request, scheduler.finalParts(chunkDir), total)
-            is SegmentScheduler.Outcome.NeedWholeFallback -> {
-                // 分段中途发现服务器忽略 Range → 清分片，整文件回退
-                chunkDir.deleteRecursively(); chunkDir.mkdirs()
-                downloadedRef.set(0)
-                val outPart = File(chunkDir, "whole.part")
-                val ok = downloader.downloadWhole(id, request.url, outPart, request.headers, total) { d ->
-                    speedLimiter.awaitAllow(d)
-                    val abs = downloadedRef.addAndGet(d)
-                    if (coroutineContext[Job]?.isActive != true) return@downloadWhole
-                    onBytes(d, abs)
-                }
-                if (!ok) throw IllegalStateException("整文件回退下载失败")
-                finish(id, request, listOf(outPart), total)
-            }
-            is SegmentScheduler.Outcome.Failed -> {
-                if (coroutineContext[Job]?.isActive != true) return
-                throw IllegalStateException(outcome.reason)
-            }
-        }
+        // Delegate the protocol layer to the resolved backend (built-in HTTP by default;
+        // a plugin backend when the optional runtime installs a resolver).
+        val backend = backendFor(request)
+        val result = backend.download(context)
+        finish(id, request, result.orderedParts, result.totalBytes)
     }
 
     private suspend fun finish(id: Long, request: DownloadRequest, parts: List<File>, total: Long) {
