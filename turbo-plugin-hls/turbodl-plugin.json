@@ -1,0 +1,31 @@
+{
+  "manifestVersion": "1.0",
+  "id": "backend.hls",
+  "name": "HLS VOD Backend",
+  "description": "Downloads HLS VOD (.m3u8) streams: master/media playlist resolution, highest-bandwidth variant selection, concurrent segment download with per-segment retry, AES-128 decryption, and EXT-X-BYTERANGE. Rejects live/DRM/fMP4/discontinuity playlists explicitly.",
+  "version": "1.0.0",
+  "author": "TurboDL",
+  "homepage": "https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-hls",
+  "license": "MIT",
+
+  "category": "turbodl-backend",
+  "capabilities": ["turbodl-hls", "turbodl-m3u8"],
+
+  "turbodl": {
+    "apiMajor": 1,
+    "requiredApiVersion": "1.0.0"
+  },
+
+  "entry": {
+    "language": "kotlin",
+    "pluginClass": "dev.turbodl.plugin.hls.HlsPlugin"
+  },
+
+  "artifact": {
+    "type": "maven",
+    "coordinates": "dev.turbodl:turbo-plugin-hls:0.1.0"
+  },
+
+  "extensionPoints": ["turbo.downloadBackend"],
+  "services": ["backend.hls"]
+}
