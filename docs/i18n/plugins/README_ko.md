@@ -1,4 +1,4 @@
-# TurboDL 플러그인 (한국어)
+# TurboDL 플러그인
 
 > 한국어 번역 · 원문: [English](../../../README.md) · [한국어 개요](../README_ko.md)
 

@@ -1,4 +1,4 @@
-# TurboDL 插件市场（基于 GitHub 主题标签）（简体中文）
+# TurboDL 插件市场（基于 GitHub 主题标签）
 
 > 简体中文翻译 · 原文：[English](../../../README.md) · [中文总览](../README_zh-CN.md)
 

@@ -1,10 +1,12 @@
 # TurboDL Plugin-Ökosystem-Entwicklungskonvention
 
+> Deutsche Übersetzung · Original: [English](../../../README.md) · [Deutsch Übersicht](../README_de.md)
+
 **Status:** Offiziell · **Version:** 1.0 · **Gilt für TurboDL-API:** `1.x`
 
 Dies ist der offizielle Vertrag zwischen dem TurboDL-Projekt und Plugin-Autoren. Er existiert, damit das Ökosystem wachsen kann, ohne dass ein kompatibilitätsbrechendes Core-Update stillschweigend jedes Plugin zerstört. Er wird vom TurboDL-Projekt selbst gepflegt (nicht an Dritte delegiert), damit Kompatibilitätsregeln im gesamten Ökosystem konsistent bleiben.
 
-Wenn du nur ein Plugin *schreiben* möchtest, beginne mit [docs/plugins/README.md](README_de.md); dieses Dokument ist das *Regelwerk*, auf das sich jener Guide stützt.
+Wenn du nur ein Plugin *schreiben* möchtest, beginne mit dem [Plugin-Autoren-Guide](README_de.md); dieses Dokument ist das *Regelwerk*, auf das sich jener Guide stützt.
 
 ---
 

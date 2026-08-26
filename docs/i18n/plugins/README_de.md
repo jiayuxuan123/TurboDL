@@ -1,5 +1,7 @@
 # TurboDL Plugins
 
+> Deutsche Übersetzung · Original: [English](../../../README.md) · [Deutsch Übersicht](../README_de.md)
+
 TurboDL ist eine eigenständige Download-Engine **und** eine optionale Plugin-Plattform. Dieses Verzeichnis ist die Heimat für alles, was ein Plugin-Autor benötigt:
 
 - **[Plugin-Autoren-Guide](#ein-plugin-schreiben)** — diese Datei: Konzepte + eine Schritt-für-Schritt-Anleitung.

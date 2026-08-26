@@ -1,4 +1,4 @@
-# TurboDL 插件（简体中文）
+# TurboDL 插件
 
 > 简体中文翻译 · 原文：[English](../../../README.md) · [中文总览](../README_zh-CN.md)
 

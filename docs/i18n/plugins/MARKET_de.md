@@ -1,5 +1,7 @@
 # TurboDL Plugin-Markt (GitHub-Themen-basiert)
 
+> Deutsche Übersetzung · Original: [English](../../../README.md) · [Deutsch Übersicht](../README_de.md)
+
 TurboDL betreibt keinen zentralen Paketserver. Der Plugin-„Markt“ ist einfach **GitHub-Themen-Tags plus ein maschinenlesbares Manifest**. Jeder kann ein Plugin veröffentlichen, indem er ein Repository pusht, die richtigen Themen hinzufügt und ein `turbodl-plugin.json` in die Repo-Wurzel legt. Jeder kann Plugins mit einer GitHub-Themen-Suche entdecken. Das hält das Ökosystem offen, dezentral und infrastrukturfrei.
 
 Dieses Dokument definiert die Tags, das Manifest und den Veröffentlichungs-/Entdeckungsablauf. Es ergänzt die [Plugin-Ökosystem-Entwicklungskonvention](CONVENTION_de.md) (das Kompatibilitäts-Regelwerk) und den [Plugin-Autoren-Guide](README_de.md).
