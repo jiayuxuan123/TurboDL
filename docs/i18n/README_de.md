@@ -1,39 +1,41 @@
 # TurboDL
 
-> 🌐 Dies ist ein Platzhalter, der den englischen Originalinhalt kopiert. Die Übersetzung wird in einer späteren Iteration verfeinert.
+> Hochleistungsfähige Multi-Thread-Download-Engine-SDK — reines Kotlin/JVM, keine Android-Abhängigkeit, direkt in jede JVM-Anwendung (einschließlich Android) integrierbar.
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 
 **Sprachen:** [English](../../README.md) · [简体中文](README_zh-CN.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · Deutsch
 
-TurboDL is a download core written from scratch. It **only draws on the architectural and algorithmic ideas** of mature download managers (aria2, IDM/XDM, axel, Persepolis, Motrix, ab-download-manager) **without copying any of their source code**, and is therefore released under the permissive **MIT license (with supplemental plugin-ecosystem terms)**, free to use in open-source or commercial projects.
+TurboDL ist ein von Grund auf neu geschriebener Multi-Thread-Download-Kern. Er **übernimmt nur die Architektur- und Algorithmus-Ideen** ausgereifter Download-Manager (aria2, IDM/XDM, axel, Persepolis, Motrix, ab-download-manager), **ohne deren Quellcode zu kopieren**, und wird daher unter der freizügigen **MIT-Lizenz (mit ergänzenden Plugin-Ökosystem-Bedingungen)** veröffentlicht, frei nutzbar in Open-Source- oder kommerziellen Projekten.
 
-## Features
+## Funktionen
 
-- **Multi-threaded segmented download**: HTTP Range parallel segments, connection reuse (HTTP/2 multiplexing + keep-alive).
-- **Dynamic segmentation**: fine-grained pre-splitting + work stealing, so slow connections don't drag down the whole transfer and the "last segment finishing on a single thread" long tail is eliminated (IDM/XDM idea).
-- **Sequential segment priority**: earlier segments are downloaded first, enabling progressive preview/playback (axel/Persepolis idea).
-- **Robust fallback & retry**:
-  - Server does not support / ignores Range → automatic fallback to whole-file single-stream download;
-  - A bad/timed-out segment → **only that segment is retried**, the whole task is not discarded;
-  - Verifies that the actually returned bytes match the requested Range (guards against servers tampering with Range and returning the whole file).
-- **Restrained adaptivity**: concurrency is throttled down **only** on 429/503 or when consecutive failures hit a threshold; normal network jitter **never** reduces the thread count (no AIMD jitter heuristics).
-- **Resumable downloads**: segments are persisted; pause/resume continues from the real on-disk progress.
-- **Byte-level integrity check**: total size is verified after merge, rejecting corrupted files.
+- **Multi-Thread-Segmentdownload**: parallele HTTP-Range-Segmente, Wiederverwendung von Verbindungen (HTTP/2-Multiplexing + keep-alive).
+- **Dynamische Segmentierung**: feingranulares Vor-Aufteilen + Work-Stealing, sodass langsame Verbindungen die gesamte Übertragung nicht ausbremsen und der „letztes Segment auf einem einzelnen Thread“-Long-Tail entfällt (IDM/XDM-Idee).
+- **Sequenzielle Segmentpriorität**: frühere Segmente werden zuerst geladen, was progressive Vorschau/Wiedergabe ermöglicht (axel/Persepolis-Idee).
+- **Robuste Fallbacks & Wiederholungen**:
+  - Server unterstützt Range nicht / ignoriert es → automatischer Fallback auf Einzelstrom-Download der ganzen Datei;
+  - ein fehlerhaftes/zeitüberschrittenes Segment → **nur dieses Segment wird wiederholt**, die gesamte Aufgabe wird nicht verworfen;
+  - prüft, ob die tatsächlich zurückgegebenen Bytes zum angeforderten Range passen (schützt davor, dass Server den Range manipulieren und die ganze Datei zurückgeben).
+- **Zurückhaltende Adaptivität**: die Nebenläufigkeit wird **nur** bei 429/503 oder wenn aufeinanderfolgende Fehler einen Schwellwert erreichen gedrosselt; normales Netzwerk-Jitter reduziert die Thread-Anzahl **niemals** (keine AIMD-Jitter-Heuristiken).
+- **Fortsetzbare Downloads**: Segmente werden persistiert; Pause/Fortsetzen setzt beim tatsächlichen Fortschritt auf der Festplatte fort.
+- **Integritätsprüfung auf Byte-Ebene**: die Gesamtgröße wird nach dem Zusammenführen geprüft, beschädigte Dateien werden abgewiesen.
 
-## Nine engine capabilities
+## Neun Engine-Fähigkeiten
 
-| Capability | Config field |
+| Fähigkeit | Konfigurationsfeld |
 |---|---|
-| Global speed limit | `globalSpeedLimitBytesPerSec` (token bucket, 0 = unlimited) |
-| Thread count (up to 256) | `maxConnectionsPerTask` (1..256) |
-| Concurrent tasks | `maxConcurrentTasks` (1..64) |
-| Max download retries | `maxRetries` (0..50) |
-| Dynamic segmentation | `dynamicSegmentation` (true/false) |
-| Manual/auto proxy | `proxy = Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)` |
-| DNS configuration | `dns = System / StaticHosts / DoH(url)` |
-| Ignore SSL | `trustAllCerts` |
-| Theming | handled by the upper-layer app (the SDK does not deal with UI rendering) |
+| Globales Tempolimit | `globalSpeedLimitBytesPerSec` (Token-Bucket, 0 = unbegrenzt) |
+| Thread-Anzahl (bis 256) | `maxConnectionsPerTask` (1..256) |
+| Gleichzeitige Aufgaben | `maxConcurrentTasks` (1..64) |
+| Max. Download-Wiederholungen | `maxRetries` (0..50) |
+| Dynamische Segmentierung | `dynamicSegmentation` (true/false) |
+| Manueller/automatischer Proxy | `proxy = Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)` |
+| DNS-Konfiguration | `dns = System / StaticHosts / DoH(url)` |
+| SSL ignorieren | `trustAllCerts` |
+| Theming | von der übergeordneten App übernommen (das SDK befasst sich nicht mit UI-Rendering) |
 
-## Quick start
+## Schnellstart
 
 ```kotlin
 import dev.turbodl.core.*
@@ -42,14 +44,14 @@ import java.io.File
 val client = TurboClient(
     TurboConfig(
         maxConnectionsPerTask = 16,
-        globalSpeedLimitBytesPerSec = 0,        // unlimited
+        globalSpeedLimitBytesPerSec = 0,        // unbegrenzt
         dynamicSegmentation = true,
         proxy = ProxyMode.Direct,
         dns = DnsMode.System,
     )
 )
 
-// Submit a task
+// Eine Aufgabe einreichen
 val id = client.submit(
     DownloadRequest(
         url = "https://example.com/big.zip",
@@ -57,22 +59,22 @@ val id = client.submit(
     )
 )
 
-// Observe progress events
+// Fortschrittsereignisse beobachten
 scope.launch {
     client.events.collect { event ->
         when (event) {
             is TurboEvent.Progress -> println("${event.progress.percent}%  ${event.progress.speedBytesPerSec} B/s")
-            is TurboEvent.Completed -> println("done: ${event.file}")
-            is TurboEvent.Failed -> println("failed: ${event.reason}")
+            is TurboEvent.Completed -> println("fertig: ${event.file}")
+            is TurboEvent.Failed -> println("fehlgeschlagen: ${event.reason}")
             else -> {}
         }
     }
 }
 
-// Suspend until finished
+// Bis zum Abschluss suspendieren
 val result = client.await(id)   // Result<File>
 
-// Controls
+// Steuerung
 client.pause(id)
 client.resume(id)
 client.cancel(id, deleteOutput = true)
@@ -80,36 +82,50 @@ client.cancel(id, deleteOutput = true)
 client.shutdown()
 ```
 
-## Command line
+## Kommandozeile
 
 ```
 ./gradlew :turbodl-cli:installDist
-./turbodl-cli/build/install/turbodl-cli/bin/turbodl <url> [output] --threads 16 --limit 0 [--insecure] [--no-dynamic]
+./turbodl-cli/build/install/turbodl-cli/bin/turbodl <url> [Ausgabe] --threads 16 --limit 0 [--insecure] [--no-dynamic]
 ```
 
-## Build
+## Bauen
 
 ```
-./gradlew build        # compile + run unit tests
+./gradlew build        # kompilieren + Unit-Tests ausführen
 ```
 
-Unit tests use an embedded HTTP(Range) server and cover: multi-threaded byte-level correctness, dynamic segmentation, fallback when Range is unsupported, fallback when Range is tampered, transient 503 retrying only the affected segment, and global speed limiting.
+Unit-Tests verwenden einen eingebetteten HTTP(Range)-Server und decken ab: Byte-Level-Korrektheit bei Multithreading, dynamische Segmentierung, Fallback bei nicht unterstütztem Range, Fallback bei manipuliertem Range, temporäres 503 mit Wiederholung nur des betroffenen Segments und globales Tempolimit.
 
-## Modules
+## Module
 
-- `turbodl-core`: the download engine SDK (the published library, usable standalone, no plugin-framework dependency).
-- `turbodl-cli`: command-line example demonstrating SDK usage.
-- `turbo-plugin-runtime`: **optional** plugin runtime kernel (lifecycle / disposer / event bus / service registry / extension points / diagnostics). core does not depend on it; when not included, core works as usual. *(under construction, currently a scaffold)*
-- `turbo-plugin-bootstrap`: **optional** bootstrap module for one-click loading of base plugins; not a mandatory dependency. *(under construction, currently a scaffold)*
-- `demo`: framework usage examples, not intrusive to the core source. *(under construction, currently a scaffold)*
+- `turbodl-core`: das Download-Engine-SDK (die veröffentlichte Bibliothek, eigenständig nutzbar, ohne Plugin-Framework-Abhängigkeit).
+- `turbodl-cli`: Kommandozeilen-Beispiel, das die SDK-Nutzung demonstriert.
+- `turbo-plugin-runtime`: **optionaler** Plugin-Runtime-Kernel (Lifecycle / Disposer / Event-Bus / Service-Registry / Erweiterungspunkte / Versions-Handshake / Diagnose). core hängt nicht davon ab; wenn es nicht eingebunden ist, funktioniert core wie gewohnt.
+- `turbo-plugin-bootstrap`: **optionales** Bootstrap-Modul für die Ein-Klick-Anbindung von Basis-Plugins (Kotlin-Loader + HTTP-Backend); keine Pflichtabhängigkeit.
+- `turbo-plugin-hls`: **optionales** HLS-VOD-Protokoll-Adapter-Plugin — löst Master-/Media-M3U8-Playlisten auf, lädt Segmente parallel herunter (mit Wiederholung pro Segment), entschlüsselt AES-128, beachtet EXT-X-BYTERANGE und gibt geordnete Teile zur Zusammenführung an die Engine zurück. Registriert sich selbst als geroutetes `DownloadBackend`; nicht unterstützte Konstrukte (Live-Streams, DRM/SAMPLE-AES, fMP4/EXT-X-MAP, Diskontinuitäten) schlagen explizit fehl, statt beschädigte Ausgaben zu erzeugen.
+- `demo`: Drei ausführbare Beispiele —— Kotlin-natives Plugin / Bootstrap-Nutzung / Shim-Adapter-Vorlage. Ausführen mit `./gradlew :demo:run --args="1"`（oder `2` / `3` / `all`）.
 
-## Design notes & acknowledgements
+## Plugin-Framework (optional)
 
-TurboDL's design draws on the ideas of the following open-source projects (ideas only, **no source copied**), with thanks:
+TurboDL ist eine eigenständige Engine **und** eine optionale Plugin-Plattform. Drei Ideen prägen das Design:
+
+1. **Core funktioniert eigenständig.** `turbodl-core` ist eine vollständige Multi-Threading-Engine ohne jede Plugin-Abhängigkeit. Plugins sind streng additiv.
+2. **Alles ist ein Plugin; der Kernel ist nur Mechanismus.** Der Runtime-Kernel kennt keinerlei Protokoll — er bietet nur Lifecycle, Aufräumen (Disposer), eine Service-Registry, einen typsicheren Event-Bus, eine Erweiterungspunkt-Registry, einen Versions-Handshake und Diagnose. Der Kotlin-Loader, das HTTP-Backend und das HLS-Backend sind alle gewöhnliche Plugins.
+3. **Hybrid A+B.** Core bringt ein eingebautes HTTP-Backend mit (A); ein Plugin-Backend kann es überschreiben oder über die Registry weitere Protokolle hinzufügen (B) — ohne dass core jemals vom Runtime abhängt. Die Abhängigkeitsrichtung ist strikt: `runtime → core`, niemals umgekehrt.
+
+Eine versionierte öffentliche API (`ApiVersion`, derzeit `1.0.0`) plus ein Load-time-Handshake stellt sicher, dass eine künftige, inkompatible Core-Version laut scheitert (ein Plugin wird als `INCOMPATIBLE` markiert und nie geladen), statt das Verhalten stillschweigend zu beschädigen.
+
+Plugin-Dokumentation:
+- [Plugin-Autoren-Guide](plugins/README_de.md) — wie man ein Plugin baut und integriert.
+- [Entwicklungs-Konvention](plugins/CONVENTION_de.md) — das offizielle Kompatibilitäts-Regelwerk (stabile API, Versionierung, Namensgebung, Sicherheit).
+- [Plugin-Markt](plugins/MARKET_de.md) — Plugins über GitHub-Themen (Topics) + ein `turbodl-plugin.json`-Manifest veröffentlichen und entdecken.
+
+## Designhinweise & Danksagungen
+
+TurboDLs Design greift die Ideen der folgenden Open-Source-Projekte auf (nur Ideen, **kein Quellcode kopiert**), mit Dank:
 [aria2](https://github.com/aria2/aria2), [Xtreme Download Manager](https://github.com/subhra74/xdm), [axel](https://github.com/axel-download-accelerator/axel), [Persepolis](https://github.com/persepolisdm/persepolis), [Motrix](https://github.com/agalwood/Motrix), [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> A plugin / extension framework is planned for a later iteration; the current version of this repository does not include a plugin system.
+## Lizenz
 
-## License
-
-[MIT License](../../LICENSE), with "plugin-ecosystem supplemental terms" (clarifying that plugins are independent works, may be licensed freely, and are not considered derivative works merely by interacting through public APIs / extension points).
+[MIT License](../../LICENSE), mit „ergänzenden Plugin-Ökosystem-Bedingungen“ (die klarstellen, dass Plugins eigenständige Werke sind, frei lizenziert werden dürfen und nicht allein dadurch als abgeleitete Werke gelten, dass sie über öffentliche APIs / Erweiterungspunkte interagieren).

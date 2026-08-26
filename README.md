@@ -101,17 +101,30 @@ Unit tests use an embedded HTTP(Range) server and cover: multi-threaded byte-lev
 
 - `turbodl-core`: the download engine SDK (the published library, usable standalone, no plugin-framework dependency).
 - `turbodl-cli`: command-line example demonstrating SDK usage.
-- `turbo-plugin-runtime`: **optional** plugin runtime kernel (lifecycle / disposer / event bus / service registry / extension points / diagnostics). core does not depend on it; when not included, core works as usual. *(under construction, currently a scaffold)*
-- `turbo-plugin-bootstrap`: **optional** bootstrap module for one-click loading of base plugins; not a mandatory dependency. *(under construction, currently a scaffold)*
+- `turbo-plugin-runtime`: **optional** plugin runtime kernel (lifecycle / disposer / event bus / service registry / extension points / version handshake / diagnostics). core does not depend on it; when not included, core works as usual.
+- `turbo-plugin-bootstrap`: **optional** bootstrap module for one-click wiring of base plugins (Kotlin loader + HTTP backend); not a mandatory dependency.
 - `turbo-plugin-hls`: **optional** HLS VOD protocol adapter plugin — resolves master/media M3U8 playlists, downloads segments concurrently (with per-segment retry), decrypts AES-128, honors EXT-X-BYTERANGE, and returns ordered parts for the engine to merge. Registers itself as a routed `DownloadBackend`; unsupported constructs (live streams, DRM/SAMPLE-AES, fMP4 EXT-X-MAP, discontinuities) fail explicitly instead of producing corrupt output.
-- `demo`: framework usage examples, not intrusive to the core source. *(under construction, currently a scaffold)*
+- `demo`: three runnable examples — Kotlin-native plugin, bootstrap usage, and a shim-adapter template. Run with `./gradlew :demo:run --args="1"` (or `2`, `3`, `all`).
+
+## Plugin framework (optional)
+
+TurboDL is a standalone engine **and** an optional plugin platform. Three ideas drive the design:
+
+1. **Core works alone.** `turbodl-core` is a complete multi-threaded engine with zero plugin dependency. Plugins are strictly additive.
+2. **Everything is a plugin; the kernel is only mechanism.** The runtime kernel knows nothing about any protocol — it provides only lifecycle, cleanup (disposer), a service registry, a type-safe event bus, an extension-point registry, a version handshake, and diagnostics. The Kotlin loader, the HTTP backend and the HLS backend are all ordinary plugins.
+3. **Hybrid A+B.** Core ships a built-in HTTP backend (A); a plugin backend can override it or add protocols through the registry (B) — without core ever depending on the runtime. Dependency direction is strict: `runtime → core`, never the reverse.
+
+A versioned public API (`ApiVersion`, currently `1.0.0`) plus a load-time handshake means a future breaking core release fails loudly (a plugin is marked `INCOMPATIBLE` and never loaded) instead of silently corrupting behavior.
+
+Plugin documentation:
+- [Plugin authoring guide](docs/plugins/README.md) — how to build and integrate a plugin.
+- [Development Convention](docs/plugins/CONVENTION.md) — the official compatibility rulebook (stable API, versioning, naming, safety).
+- [Plugin Market](docs/plugins/MARKET.md) — publish/discover plugins via GitHub topics + a `turbodl-plugin.json` manifest.
 
 ## Design notes & acknowledgements
 
 TurboDL's design draws on the ideas of the following open-source projects (ideas only, **no source copied**), with thanks:
 [aria2](https://github.com/aria2/aria2), [Xtreme Download Manager](https://github.com/subhra74/xdm), [axel](https://github.com/axel-download-accelerator/axel), [Persepolis](https://github.com/persepolisdm/persepolis), [Motrix](https://github.com/agalwood/Motrix), [ab-download-manager](https://github.com/amir1376/ab-download-manager).
-
-> A plugin / extension framework is planned for a later iteration; the current version of this repository does not include a plugin system.
 
 ## License
 

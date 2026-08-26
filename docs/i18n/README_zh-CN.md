@@ -101,16 +101,30 @@ client.shutdown()
 
 - `turbodl-core`：下载引擎 SDK（对外发布的库，独立可用，不依赖插件框架）。
 - `turbodl-cli`：命令行示例，演示 SDK 用法。
-- `turbo-plugin-runtime`：**可选**插件运行时内核（生命周期/disposer/事件总线/服务注册/扩展点/诊断）。core 不依赖它；不引入时 core 照常工作。*（建设中，当前为骨架）*
-- `turbo-plugin-bootstrap`：**可选**引导模块，一键装载基础插件；非强制依赖。*（建设中，当前为骨架）*
-- `demo`：框架使用示例，不侵入核心源码。*（建设中，当前为骨架）*
+- `turbo-plugin-runtime`：**可选**插件运行时内核（生命周期/disposer/事件总线/服务注册/扩展点/版本握手/诊断）。core 不依赖它；不引入时 core 照常工作。
+- `turbo-plugin-bootstrap`：**可选**引导模块，一键装配基础插件（Kotlin 加载器 + HTTP 后端）；非强制依赖。
+- `turbo-plugin-hls`：**可选** HLS VOD 协议适配插件 —— 解析 master/media M3U8 播放列表、并发下载分段（分段级重试）、AES-128 解密、支持 EXT-X-BYTERANGE，按序返回分片交由引擎合并。以路由 `DownloadBackend` 注册；不支持的构造（直播流、DRM/SAMPLE-AES、fMP4 EXT-X-MAP、discontinuity）显式失败而非产出损坏文件。
+- `demo`：三个可运行示例 —— Kotlin 原生插件、bootstrap 使用、Shim 适配器模板。运行：`./gradlew :demo:run --args="1"`（或 `2`、`3`、`all`）。
+
+## 插件框架（可选）
+
+TurboDL 既是独立引擎，**也是**可选的插件平台。三条设计理念：
+
+1. **内核独立可用**：`turbodl-core` 是完整的多线程引擎，零插件依赖，插件严格为增量。
+2. **一切皆插件，内核仅机制**：运行时内核不认识任何协议 —— 只提供生命周期、清理（disposer）、服务注册表、类型安全事件总线、扩展点注册表、版本握手与诊断。Kotlin 加载器、HTTP 后端、HLS 后端都是普通插件。
+3. **混合 A+B**：core 内置 HTTP 后端（A）；插件后端可覆盖它或经注册表新增协议（B）—— 且 core 从不依赖运行时。依赖方向严格：`runtime → core`，绝不反向。
+
+版本化的公开 API（`ApiVersion`，当前 `1.0.0`）加上加载期握手，意味着未来 core 的破坏性发布会**显式失败**（插件被标为 `INCOMPATIBLE` 且绝不加载），而非静默损坏行为。
+
+插件文档：
+- [插件接入教程](../plugins/README.md) —— 如何构建并接入插件。
+- [开发协定](../plugins/CONVENTION.md) —— 官方兼容性规则手册（稳定 API、版本、命名、安全）。
+- [插件市场](../plugins/MARKET.md) —— 经 GitHub 标签 + `turbodl-plugin.json` 清单发布/发现插件。
 
 ## 设计说明与致谢
 
 TurboDL 的设计吸收了以下开源项目的思想（仅思想，**未复制源码**），在此致谢：
 [aria2](https://github.com/aria2/aria2)、[Xtreme Download Manager](https://github.com/subhra74/xdm)、[axel](https://github.com/axel-download-accelerator/axel)、[Persepolis](https://github.com/persepolisdm/persepolis)、[Motrix](https://github.com/agalwood/Motrix)、[ab-download-manager](https://github.com/amir1376/ab-download-manager)。
-
-> 插件 / 扩展框架为后续规划，本仓库当前版本不包含插件系统。
 
 ## 许可
 
