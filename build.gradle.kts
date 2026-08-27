@@ -4,7 +4,7 @@ plugins {
 
 allprojects {
     group = "dev.turbodl"
-    version = "0.2.0-rc1"
+    version = "0.2.0-rc2"
 }
 
 // 为可作为 SDK 发布的库模块统一启用 maven-publish（发布到 mavenLocal 供 YunGet 等下游按坐标依赖）。

@@ -35,8 +35,6 @@ internal class BuiltinHttpBackend(
         val total = probedSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
 
-        val liveConns = request.connectionsOverride ?: context.config.maxConnectionsPerTask
-
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
         if (!supportsRange || total <= 0) {
             val outPart = File(chunkDir, "whole.part")
@@ -53,6 +51,8 @@ internal class BuiltinHttpBackend(
 
         val connections = (request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
         val scheduler = SegmentScheduler(downloader, context.config, speedLimiter)
+        // 真实并发数由调度器回报（而非直接用配置值），UI 才能看到实际跑满多少线程。
+        val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(connections)
         val outcome = scheduler.run(
             taskId = context.taskId,
             url = request.url,
@@ -61,8 +61,8 @@ internal class BuiltinHttpBackend(
             headers = request.headers,
             connections = connections,
             resumeFrom = 0L,
-            onBytes = { _, abs -> context.reportProgress(abs, liveConns) },
-            onConnections = { /* reported through reportProgress's connection arg */ },
+            onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
+            onConnections = { live -> liveConnsRef.set(live) },
             isActive = { context.isActive() },
         )
 

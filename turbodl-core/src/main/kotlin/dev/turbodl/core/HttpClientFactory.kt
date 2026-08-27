@@ -32,19 +32,25 @@ internal object HttpClientFactory {
     fun build(config: TurboConfig): OkHttpClient {
         val dispatcher = Dispatcher().apply {
             // 满并发不被 OkHttp 默认的 per-host=5 锁死
-            maxRequests = 512
-            maxRequestsPerHost = 512
+            maxRequests = 1024
+            maxRequestsPerHost = 1024
         }
         val builder = OkHttpClient.Builder()
             .dispatcher(dispatcher)
             .connectionPool(
                 ConnectionPool(
-                    maxIdleConnections = config.maxIdleConnections,
+                    // 空闲连接数至少跟得上单任务并发数，避免分片反复重建 TCP/TLS
+                    maxIdleConnections = maxOf(config.maxIdleConnections, config.maxConnectionsPerTask),
                     keepAliveDuration = config.keepAliveSeconds,
                     timeUnit = TimeUnit.SECONDS,
                 )
             )
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+            // 默认强制 HTTP/1.1：HTTP/2 的多路复用会把所有分片挤到一条 TCP 连接上，
+            // 共享单个拥塞/流控窗口 → 多线程得不到加速（表现为“64 线程跑出单线程速度”）。
+            .protocols(
+                if (config.forceHttp1) listOf(Protocol.HTTP_1_1)
+                else listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+            )
             .connectTimeout(config.connectTimeoutMs, TimeUnit.MILLISECONDS)
             .readTimeout(config.readTimeoutMs, TimeUnit.MILLISECONDS)
             .writeTimeout(config.readTimeoutMs, TimeUnit.MILLISECONDS)

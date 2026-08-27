@@ -32,10 +32,23 @@ data class TurboConfig(
     val dynamicSegmentation: Boolean = true,
 
     /** 分段最小尺寸（字节）。小于 2*该值的分片不再劈分，避免过度碎片化。 */
-    val minSegmentSize: Long = 1L * 1024 * 1024,
+    val minSegmentSize: Long = 64L * 1024,
 
-    /** 固定分块大小（字节），dynamicSegmentation=false 或初始规划时使用。 */
+    /**
+     * 固定分块大小（字节），仅在无法根据连接数推导时作为上限参考。
+     *
+     * 注意：调度器**优先按连接数推导块大小**（保证块数 ≥ 连接数 × [segmentsPerConnection]），
+     * 以便固定 N 线程能全部跑满；本值只限制单块不要过大。
+     */
     val blockSize: Long = 4L * 1024 * 1024,
+
+    /**
+     * 每个连接分配的块数（工作窃取粒度）。
+     *
+     * 块数 = 连接数 × 本值，使快连接能不断领新块、慢连接不拖累整体（等效 IDM/XDM 动态分段的消除长尾）。
+     * 调大更均衢但请求次数增加；范围 1..64。
+     */
+    val segmentsPerConnection: Int = 4,
 
     /**
      * 自适应并发下调策略（**不照搬 AIMD 抖动判断**）：
@@ -62,8 +75,21 @@ data class TurboConfig(
     /** 默认 User-Agent。 */
     val userAgent: String = "TurboDL/0.1",
 
-    /** 连接池最大空闲连接数（连接复用）。 */
-    val maxIdleConnections: Int = 64,
+    /** 连接池最大空闲连接数（连接复用）。应 ≥ maxConnectionsPerTask，否则分片连接会反复重建。 */
+    val maxIdleConnections: Int = 256,
+
+    /**
+     * 强制使用 HTTP/1.1（默认 true，专为多线程下载优化）。
+     *
+     * 原因：HTTP/2 会把所有并发请求**多路复用到同一条 TCP 连接**上，
+     * 共享单个拥塞窗口与流控窗口——即使开 64/256 个分片，吞吐量仍等同单连接，
+     * 这是“开了很多线程却只跑出单线程速度”的典型原因（GitHub / 大多数 CDN 均启用 HTTP/2）。
+     * HTTP/1.1 下每个并发请求各自建立 TCP 连接，各自拥有独立拥塞窗口，
+     * 才能真正获得多连接加速（aria2 / IDM / XDM 同策略）。
+     *
+     * 仅在确实需要 HTTP/2（如服务端仅支持 h2）时才设为 false。
+     */
+    val forceHttp1: Boolean = true,
 
     /** 连接保活时长（秒）。 */
     val keepAliveSeconds: Long = 300,
@@ -75,6 +101,7 @@ data class TurboConfig(
         require(maxRetries in 0..50) { "maxRetries 必须在 0..50" }
         require(minSegmentSize >= 4096) { "minSegmentSize 至少 4KB" }
         require(blockSize >= minSegmentSize) { "blockSize 不能小于 minSegmentSize" }
+        require(segmentsPerConnection in 1..64) { "segmentsPerConnection 必须在 1..64" }
     }
 }
 

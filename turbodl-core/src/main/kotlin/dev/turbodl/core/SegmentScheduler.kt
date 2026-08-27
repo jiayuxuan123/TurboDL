@@ -40,6 +40,11 @@ internal class SegmentScheduler(
     private val config: TurboConfig,
     private val speedLimiter: SpeedLimiter,
 ) {
+    private companion object {
+        /** 背压恢复阀值：连续成功这么多个分片后，归还一个并发名额。 */
+        const val RAMP_UP_SUCCESS_THRESHOLD = 3
+    }
+
     sealed interface Outcome {
         object Completed : Outcome
         object NeedWholeFallback : Outcome
@@ -71,10 +76,21 @@ internal class SegmentScheduler(
         chunkDir.mkdirs()
         val workers = connections.coerceIn(1, 256)
 
-        // 有效块大小：动态分段用更细粒度（blockSize/4，下限 minSegmentSize），否则用 blockSize。
-        val effBlock = if (config.dynamicSegmentation)
-            max(config.minSegmentSize, config.blockSize / 4)
-        else config.blockSize
+        // ---------- 块大小：按「连接数」反推，保证固定 N 线程全部跑满 ----------
+        // 旧策略用固定 blockSize（如 1MB），小文件会出现「块数 ≪ 连接数」：
+        //   20MB 文件 / 1MB = 20 块，但开了 64 连接 → 44 个 worker 一上来 poll() 就为空退出，
+        //   实际并发远低于设定值，表现就像单线程。
+        // 新策略：先确定目标块数 = workers × segmentsPerConnection，再由 total 除出块大小，
+        //   并用 [minSegmentSize, blockSize] 限幅。这样无论文件大小，只要能切得开，
+        //   就能保证每个连接都有活干（且多余块供快连接工作窃取，消除长尾）。
+        val targetSegments = workers.toLong() *
+            config.segmentsPerConnection.coerceIn(1, 64).toLong()
+        val effBlock = run {
+            val byConnections = if (targetSegments > 0) total / targetSegments else total
+            // 下限 minSegmentSize（避免碎片过多），上限 blockSize（避免单块过大）；至少 1 字节。
+            byConnections.coerceIn(1L, config.blockSize)
+                .coerceAtLeast(min(config.minSegmentSize, max(1L, total / workers)))
+        }
 
         // ---------- 预分块：整文件切成 [effBlock] 大小的连续区间 ----------
         val allSegments = ArrayList<Segment>()
@@ -105,10 +121,16 @@ internal class SegmentScheduler(
         val needWholeFallback = AtomicBoolean(false)
         val failReason = AtomicReference<String?>(null)
         val consecutiveFailures = AtomicInteger(0)
+        /** 连续成功分片数（用于背压恢复）。 */
+        val consecutiveSuccesses = AtomicInteger(0)
 
         val desired = AtomicInteger(workers)
         val sem = Semaphore(workers)
         val parked = java.util.concurrent.ConcurrentLinkedDeque<Unit>()
+        /** 当前真实在传输的连接数（供 UI 展示实际并发，而非配置值）。 */
+        val activeConns = AtomicInteger(0)
+        /** 正在传输中的分片数（判定“队列空但仍可能有重试回投”）。 */
+        val inFlight = AtomicInteger(0)
 
         onConnections(workers)
 
@@ -125,48 +147,85 @@ internal class SegmentScheduler(
             onConnections(target)
         }
 
+        /**
+         * 背压恢复：连续成功达阀值后逐步归还被回收的并发名额。
+         *
+         * 不加恢复的话，一次瞬时 429/503 或几个分片失败就会永久把并发减半（甚至逐步降到 1），
+         * 后续即使网络恢复也再也跑不满线程——这是“跑着跑着就变成单线程”的一个成因。
+         * 恢复仍然克制：只在确实持续成功时一次只放一个名额，不做激进探测。
+         */
+        fun rampUpIfHealthy() {
+            if (parked.isEmpty()) return
+            if (consecutiveSuccesses.get() < RAMP_UP_SUCCESS_THRESHOLD) return
+            consecutiveSuccesses.set(0)
+            if (parked.poll() != null) {
+                sem.release()
+                onConnections(desired.incrementAndGet())
+            }
+        }
+
         val ok = try {
             val jobs = List(workers) { idx ->
                 async(Dispatchers.IO) {
                     if (idx in 1..8) delay(idx * 20L)  // 错峰建连
                     while (isActive() && !needWholeFallback.get()) {
-                        val seg = poll() ?: break
+                        val seg = poll()
+                        if (seg == null) {
+                            // 队列暂空：若仍有分片在传（可能因失败/限流被回投），等一下再领，
+                            // 不要立即退出——否则 worker 会提前死掉，并发逐步跌到 1。
+                            if (inFlight.get() > 0) { delay(30); continue }
+                            break  // 真正无活可干：退出
+                        }
                         sem.withPermit {
                             if (needWholeFallback.get() || !isActive()) return@withPermit
-                            val res = downloader.downloadSegment(
-                                taskId, url, seg.start, seg.end, seg.file(chunkDir), headers
-                            ) { bytes ->
-                                speedLimiter.awaitAllow(bytes)
-                                val abs = min(downloaded.addAndGet(bytes), total)
-                                if (!isActive()) return@downloadSegment
-                                onBytes(bytes, abs)
-                            }
-                            when (res) {
-                                SegmentResult.OK -> consecutiveFailures.set(0)
-                                SegmentResult.RANGE_IGNORED ->
-                                    needWholeFallback.compareAndSet(false, true)
-                                SegmentResult.THROTTLED -> {
-                                    val n = consecutiveFailures.incrementAndGet()
-                                    offer(Segment(seg.start, seg.end, seg.attempts))
-                                    if (config.backpressureConsecutiveFailures in 1..n) {
-                                        throttleDown(); consecutiveFailures.set(0)
+                            inFlight.incrementAndGet()
+                            val live = activeConns.incrementAndGet()
+                            onConnections(live)
+                            try {
+                                val res = downloader.downloadSegment(
+                                    taskId, url, seg.start, seg.end, seg.file(chunkDir), headers
+                                ) { bytes ->
+                                    speedLimiter.awaitAllow(bytes)
+                                    val abs = min(downloaded.addAndGet(bytes), total)
+                                    if (!isActive()) return@downloadSegment
+                                    onBytes(bytes, abs)
+                                }
+                                when (res) {
+                                    SegmentResult.OK -> {
+                                        consecutiveFailures.set(0)
+                                        consecutiveSuccesses.incrementAndGet()
+                                        rampUpIfHealthy()
+                                    }
+                                    SegmentResult.RANGE_IGNORED ->
+                                        needWholeFallback.compareAndSet(false, true)
+                                    SegmentResult.THROTTLED -> {
+                                        consecutiveSuccesses.set(0)
+                                        val n = consecutiveFailures.incrementAndGet()
+                                        offer(Segment(seg.start, seg.end, seg.attempts))
+                                        if (config.backpressureConsecutiveFailures in 1..n) {
+                                            throttleDown(); consecutiveFailures.set(0)
+                                        }
+                                    }
+                                    SegmentResult.FAILED -> {
+                                        consecutiveSuccesses.set(0)
+                                        seg.attempts++
+                                        val n = consecutiveFailures.incrementAndGet()
+                                        if (seg.attempts > config.maxRetries) {
+                                            failReason.compareAndSet(
+                                                null,
+                                                "分片 ${seg.start}-${seg.end} 重试 ${seg.attempts} 次仍失败"
+                                            )
+                                        } else {
+                                            offer(seg)  // 仅重试该分片
+                                        }
+                                        if (config.backpressureConsecutiveFailures in 1..n) {
+                                            throttleDown(); consecutiveFailures.set(0)
+                                        }
                                     }
                                 }
-                                SegmentResult.FAILED -> {
-                                    seg.attempts++
-                                    val n = consecutiveFailures.incrementAndGet()
-                                    if (seg.attempts > config.maxRetries) {
-                                        failReason.compareAndSet(
-                                            null,
-                                            "分片 ${seg.start}-${seg.end} 重试 ${seg.attempts} 次仍失败"
-                                        )
-                                    } else {
-                                        offer(seg)  // 仅重试该分片
-                                    }
-                                    if (config.backpressureConsecutiveFailures in 1..n) {
-                                        throttleDown(); consecutiveFailures.set(0)
-                                    }
-                                }
+                            } finally {
+                                onConnections(activeConns.decrementAndGet())
+                                inFlight.decrementAndGet()
                             }
                         }
                     }
