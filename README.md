@@ -84,10 +84,39 @@ client.shutdown()
 
 ## Command line
 
+`turbodl-cli` is a full-featured, Agent/script-friendly downloader (multi-threaded, resumable, JSON output).
+
+Build the standalone fat JAR:
+
 ```
-./gradlew :turbodl-cli:installDist
-./turbodl-cli/build/install/turbodl-cli/bin/turbodl <url> [output] --threads 16 --limit 0 [--insecure] [--no-dynamic]
+./gradlew :turbodl-cli:fatJar
+# => turbodl-cli/build/libs/turbodl-cli-all.jar
+java -jar turbodl-cli-all.jar --help
 ```
+
+Common usage:
+
+```
+# Basic (default file name from URL)
+turbodl <url> -o out.bin -c 64
+
+# Through a proxy, with encrypted DNS, speed limited to 10MB/s
+turbodl <url> -p http://127.0.0.1:7890 --doh https://dns.alidns.com/dns-query -l 10MB
+
+# Machine-readable NDJSON events (start/progress/completed/failed) for scripts & agents
+turbodl <url> --json
+
+# Batch download (each line: <URL> [output])
+turbodl --batch tasks.txt -c 128
+
+# Custom headers / UA / ignore TLS
+turbodl <url> -H "Cookie: k=v" -A "MyAgent/1.0" --insecure
+```
+
+Notes:
+- Interrupted downloads resume automatically when re-running the same command (segments kept in `.turbodl-parts/` next to the output, cleaned up after merge).
+- Exit codes: `0` success, `1` download failed, `2` usage error.
+- `--json` emits one JSON object per line; the final `completed` line contains the absolute file path and size.
 
 ## Build
 
