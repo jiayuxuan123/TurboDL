@@ -63,6 +63,9 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
                 .url(url)
                 .header("Range", "bytes=0-0")
                 .apply { headers.forEach { (k, v) -> header(k, v) } }
+                // identity 在自定义头之后设置，确保总是生效（防止调用方传入 Accept-Encoding: gzip 覆盖）：
+                // 若 gzip 透明解压，实际写入字节会与 Content-Range 不一致 → 大小校验失败。
+                .header("Accept-Encoding", "identity")
                 .get().build()
             val call = client.newCall(req)
             val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
@@ -114,6 +117,8 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
             .url(url)
             .header("Range", "bytes=$from-$end")
             .apply { headers.forEach { (k, v) -> header(k, v) } }
+            // identity 在自定义头之后，确保不被覆盖：避免 gzip 透明解压破坏分片字节计数。
+            .header("Accept-Encoding", "identity")
             .get().build()
         val call = client.newCall(req)
         activeCalls.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(call)
@@ -175,6 +180,7 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
         val req = Request.Builder()
             .url(url)
             .apply { headers.forEach { (k, v) -> header(k, v) } }
+            .header("Accept-Encoding", "identity")
             .get().build()
         val call = client.newCall(req)
         activeCalls.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(call)

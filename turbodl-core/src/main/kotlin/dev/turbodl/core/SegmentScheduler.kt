@@ -90,7 +90,9 @@ internal class SegmentScheduler(
         isActive: () -> Boolean,
     ): Outcome = coroutineScope {
         chunkDir.mkdirs()
-        // per-host 上限：部分 CDN（如迅雷）超过阈值会把 Range 降级为 200 整文件，这里提前限幅。
+        // per-host 并发上限：默认 0 = 不限（只有个别 CDN 如迅雷才需要限，且应由调用方按 host 选择性启用）。
+        // 警告：若对所有下载统一设一个小值（如 16），会把单个下载（全部同一 host）直接限死到该值，
+        // 表现为“设 64 线程却只跑 16 / 速度骤降”。这里仅当 >0 时限幅。
         val hostCap = config.maxConnectionsPerHost.takeIf { it > 0 } ?: Int.MAX_VALUE
         val workers = connections.coerceIn(1, 256).coerceAtMost(hostCap).coerceAtLeast(1)
 

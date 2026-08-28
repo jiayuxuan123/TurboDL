@@ -1,0 +1,9 @@
+# JitPack 构建配置：https://jitpack.io/
+# JitPack 会检出对应的 Git tag，执行下面的 install，把各模块以
+#   com.github.jiayuxuan123.TurboDL:<module>:<tag>
+# 的坐标发布到 JitPack 仓库供下游依赖。
+jdk:
+  - openjdk17
+install:
+  # 跳过测试（测试会起本地 HTTP 服务器，JitPack 沙箱环境不稳定），仅发布库模块到本地 Maven。
+  - ./gradlew :turbodl-core:publishToMavenLocal :turbo-plugin-runtime:publishToMavenLocal :turbo-plugin-bootstrap:publishToMavenLocal :turbo-plugin-hls:publishToMavenLocal -x test
