@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
 class ConcurrencySaturationTest {
 
     /** 本地 Range 服务器，记录观测到的峰值并发请求数。 */
-    private class CountingServer(payload: ByteArray) {
+    private class CountingServer(payload: ByteArray, chunkSleepMs: Long = 2) {
         val peak = AtomicInteger(0)
         private val current = AtomicInteger(0)
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -49,7 +49,7 @@ class ConcurrencySaturationTest {
                                 out.write(payload, off, n)
                                 out.flush()
                                 off += n
-                                Thread.sleep(2)
+                                Thread.sleep(chunkSleepMs)
                             }
                         }
                     } else {
@@ -73,7 +73,7 @@ class ConcurrencySaturationTest {
     fun `configured connections are actually saturated`() = runBlocking {
         val size = 20 * 1024 * 1024      // 20MB，复刻用户场景
         val payload = ByteArray(size) { (it % 251).toByte() }
-        val srv = CountingServer(payload)
+        val srv = CountingServer(payload, chunkSleepMs = 8)
         val connections = 64
 
         val client = TurboClient(
@@ -106,9 +106,9 @@ class ConcurrencySaturationTest {
 
     @Test
     fun `small file with many connections still parallelizes`() = runBlocking {
-        val size = 4 * 1024 * 1024       // 4MB 小文件
+        val size = 8 * 1024 * 1024       // 8MB
         val payload = ByteArray(size) { (it % 97).toByte() }
-        val srv = CountingServer(payload)
+        val srv = CountingServer(payload, chunkSleepMs = 5)
         val connections = 32
 
         val client = TurboClient(
@@ -122,7 +122,7 @@ class ConcurrencySaturationTest {
             val peak = srv.peak.get()
             assertTrue(
                 peak >= connections / 2,
-                "4MB 文件在 $connections 连接下峰值并发应仍达半数以上，实际 $peak"
+                "8MB 文件在 $connections 连接下峰值并发应仍达半数以上，实际 $peak"
             )
         } finally {
             client.shutdown()

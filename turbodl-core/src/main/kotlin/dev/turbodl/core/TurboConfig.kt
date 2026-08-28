@@ -72,8 +72,10 @@ data class TurboConfig(
     /** 读取超时（毫秒）。 */
     val readTimeoutMs: Long = 60_000,
 
-    /** 默认 User-Agent。 */
-    val userAgent: String = "TurboDL/0.1",
+    /** 默认 User-Agent（采用通用浏览器 UA，避免部分 CDN 对非浏览器 UA 直接拦截）。 */
+    val userAgent: String =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 
     /** 连接池最大空闲连接数（连接复用）。应 ≥ maxConnectionsPerTask，否则分片连接会反复重建。 */
     val maxIdleConnections: Int = 256,
@@ -91,8 +93,24 @@ data class TurboConfig(
      */
     val forceHttp1: Boolean = true,
 
+    /**
+     * 每个主机（host）的最大并发分片数。<=0 表示不限（用 [maxConnectionsPerTask]）。
+     *
+     * 部分 CDN（如迅雷）对单 host 的并发 Range 有硬上限，超过后会把 Range 请求降级为 200 整文件，
+     * 反而触发整文件回退。设置该上限可避免被降级。实际生效值 = min(maxConnectionsPerTask, 本值)。
+     */
+    val maxConnectionsPerHost: Int = 0,
+
     /** 连接保活时长（秒）。 */
     val keepAliveSeconds: Long = 300,
+
+    /**
+     * 分片临时目录根。null 时使用系统 java.io.tmpdir/turbodl。
+     *
+     * Android 上系统 tmpdir 可能被清理或受限，宿主应传入应用专属缓存目录（如 externalCacheDir），
+     * 以保证断点分片跨会话、跨进程稳定保留。
+     */
+    val workDir: java.io.File? = null,
 ) {
     init {
         require(maxConnectionsPerTask in 1..256) { "maxConnectionsPerTask 必须在 1..256" }
@@ -102,6 +120,7 @@ data class TurboConfig(
         require(minSegmentSize >= 4096) { "minSegmentSize 至少 4KB" }
         require(blockSize >= minSegmentSize) { "blockSize 不能小于 minSegmentSize" }
         require(segmentsPerConnection in 1..64) { "segmentsPerConnection 必须在 1..64" }
+        require(maxConnectionsPerHost >= 0) { "maxConnectionsPerHost 不能为负" }
     }
 }
 

@@ -16,6 +16,18 @@ data class DownloadRequest(
 
     /** 覆盖本任务的连接数；null 使用全局配置。范围仍受 1..256 限制。 */
     val connectionsOverride: Int? = null,
+
+    /**
+     * 稳定分片目录键（用于断点续传）。
+     *
+     * 引擎默认用内部自增任务 id 命名分片临时目录；但内部 id 在进程重启或重新 submit 后会变化，
+     * 导致「暂停后恢复 / 杀进程后重启」找不到旧分片而从头下载。
+     * 调用方（如 Android 宿主）可传入与业务任务一一对应的稳定键（例如 Room 任务 id），
+     * 使同一任务的多次 submit/resume 复用同一分片目录，真正实现断点续传。
+     *
+     * 为空时回退到内部任务 id 命名（行为与旧版一致）。
+     */
+    val stableKey: String? = null,
 )
 
 /** 任务状态。 */

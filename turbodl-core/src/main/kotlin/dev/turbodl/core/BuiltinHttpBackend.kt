@@ -71,7 +71,34 @@ internal class BuiltinHttpBackend(
                 BackendResult(scheduler.finalParts(chunkDir), total)
 
             is SegmentScheduler.Outcome.NeedWholeFallback -> {
-                // Range ignored mid-flight -> clear parts and fall back to a single stream.
+                // Range 反复被忽略才会走到这里（单次偶发已在调度器重试层容忍）。
+                // 保留已完成的分片，只删那些不完整/部分写入的，避免几百 MB 进度瞬间丢失后从 0 单流重下。
+                // 但若本来就一个完整分片都没有（total 很小或服务器从头就不支持 Range），则直接整文件单流。
+                val keptComplete = chunkDir.listFiles { f ->
+                    f.name.startsWith("seg_") && f.name.endsWith(".part")
+                }?.any { f ->
+                    val name = f.name.removePrefix("seg_").removeSuffix(".part")
+                    val s = name.substringBefore('_').toLongOrNull()
+                    val e = name.substringAfter('_').toLongOrNull()
+                    s != null && e != null && f.length() >= (e - s + 1)
+                } ?: false
+
+                if (keptComplete) {
+                    // 有已完成分片：仍按分片模式完成（调度器下次会跳过已完成块），
+                    // 不能直接整文件回退（会与已有分片混合）。重跑一次调度，让剩余块继续分片下载。
+                    val retry = scheduler.run(
+                        taskId = context.taskId, url = request.url, total = total,
+                        chunkDir = chunkDir, headers = request.headers, connections = connections,
+                        resumeFrom = 0L,
+                        onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
+                        onConnections = { live -> liveConnsRef.set(live) },
+                        isActive = { context.isActive() },
+                    )
+                    if (retry is SegmentScheduler.Outcome.Completed) {
+                        return BackendResult(scheduler.finalParts(chunkDir), total)
+                    }
+                    // 仍不行：清空重新整文件下（兼容真不支持 Range 的服务器）。
+                }
                 chunkDir.deleteRecursively(); chunkDir.mkdirs()
                 val outPart = File(chunkDir, "whole.part")
                 var acc = 0L

@@ -134,12 +134,18 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         }
     }
 
-    /** 恢复已暂停的任务（断点续传）。 */
+    /**
+     * 恢复已暂停的任务（断点续传）。
+     *
+     * 修复竞态：旧实现 pause 异步 cancelAndJoin，resume 可能在旧 job 真正退出前就启动新 job，
+     * 两个协程短暂并发写同一 chunkDir（分片文件互相覆盖）。现在启动前先 join 旧 job。
+     */
     fun resume(id: Long): Boolean {
         val req = requests[id] ?: return false
-        if (jobs.containsKey(id)) return false
         completions.putIfAbsent(id, CompletableDeferred())
         val job = scope.launch {
+            // 先确保旧 job 已彻底退出，避免两个下载协程同时写分片目录。
+            jobs.remove(id)?.let { runCatching { it.cancelAndJoin() } }
             try {
                 awaitSlot(id)
                 if (coroutineContext[Job]?.isActive != true) return@launch
@@ -152,7 +158,9 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 completions[id]?.complete(Result.failure(e))
             }
         }
-        jobs[id] = job
+        // 若已有活动 job，不重复启动（新 job 会在上方 join 阶段自行退出）。
+        val prev = jobs.putIfAbsent(id, job)
+        if (prev != null) { job.cancel(); return false }
         return true
     }
 
@@ -242,7 +250,18 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         }
         val dest = request.destination
         dest.parentFile?.mkdirs()
-        if (!PartMerger.merge(parts, dest)) throw IllegalStateException("合并分片失败")
+        // 合并时上报进度：GB 级文件拼接可能耗时数十秒，UI 不再卡在 MERGING 无进度。
+        var lastReport = 0L
+        val ok = PartMerger.merge(parts, dest) { mergedBytes, totalBytes ->
+            val now = System.currentTimeMillis()
+            if (now - lastReport >= 200) {
+                lastReport = now
+                updateProgress(id) {
+                    it.copy(state = TaskState.MERGING, downloadedBytes = mergedBytes, totalBytes = totalBytes)
+                }
+            }
+        }
+        if (!ok) throw IllegalStateException("合并分片失败")
         if (total > 0 && dest.length() != total) {
             throw IllegalStateException("大小校验失败：期望 $total，实际 ${dest.length()}")
         }
@@ -255,9 +274,17 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     }
 
     private fun chunkDirOf(id: Long): File {
-        val base = File(System.getProperty("java.io.tmpdir"), "turbodl")
-        return File(base, "task_$id")
+        val base = config.workDir ?: File(System.getProperty("java.io.tmpdir"), "turbodl")
+        val req = requests[id]
+        // 优先用调用方提供的稳定键（如 Room 任务 id），使同一业务任务多次 submit/resume 复用同一分片目录；
+        // 为空则回退到内部自增 id（行为与旧版一致）。
+        val key = req?.stableKey?.takeIf { it.isNotBlank() }?.let { sanitizeKey(it) } ?: "task_$id"
+        return File(base, key)
     }
+
+    /** 将稳定键规整为安全目录名（避免路径分隔符/非法字符）。 */
+    private fun sanitizeKey(raw: String): String =
+        "key_" + raw.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }.joinToString("")
 
     private fun emit(event: TurboEvent) {
         scope.launch { _events.emit(event) }

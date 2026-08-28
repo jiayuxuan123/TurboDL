@@ -37,6 +37,14 @@ internal object HttpClientFactory {
         }
         val builder = OkHttpClient.Builder()
             .dispatcher(dispatcher)
+            // 默认 UA 拦截器：若请求未显式携带 User-Agent，注入配置的通用浏览器 UA（避免部分 CDN 拦截）。
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val out = if (req.header("User-Agent").isNullOrBlank())
+                    req.newBuilder().header("User-Agent", config.userAgent).build()
+                else req
+                chain.proceed(out)
+            }
             .connectionPool(
                 ConnectionPool(
                     // 空闲连接数至少跟得上单任务并发数，避免分片反复重建 TCP/TLS
