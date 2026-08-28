@@ -29,11 +29,33 @@ import javax.net.ssl.X509TrustManager
  */
 internal object HttpClientFactory {
 
-    fun build(config: TurboConfig): OkHttpClient {
+    /** 协议偏好：分片并发用 H1_ONLY；探测/单流回退可用 ALLOW_H2。 */
+    enum class ProtocolPreference { H1_ONLY, ALLOW_H2 }
+
+    fun build(config: TurboConfig): OkHttpClient =
+        build(config, defaultPreferenceFor(config))
+
+    /** 根据策略推导默认偏好：FORCE_HTTP2 → ALLOW_H2；其余（AUTO/FORCE_HTTP1）分片链路默认 H1_ONLY。 */
+    private fun defaultPreferenceFor(config: TurboConfig): ProtocolPreference =
+        when (config.effectiveHttpVersionPolicy) {
+            HttpVersionPolicy.FORCE_HTTP2 -> ProtocolPreference.ALLOW_H2
+            else -> ProtocolPreference.H1_ONLY
+        }
+
+    fun build(config: TurboConfig, preference: ProtocolPreference): OkHttpClient {
         val dispatcher = Dispatcher().apply {
             // 满并发不被 OkHttp 默认的 per-host=5 锁死
             maxRequests = 1024
             maxRequestsPerHost = 1024
+        }
+        // 实际协议：由策略 + 偏好共同决定。
+        //  - FORCE_HTTP1：永远 H1；
+        //  - FORCE_HTTP2：允许 h2；
+        //  - AUTO：分片链路（H1_ONLY）走 H1，探测/单流链路（ALLOW_H2）允许 h2。
+        val allowH2 = when (config.effectiveHttpVersionPolicy) {
+            HttpVersionPolicy.FORCE_HTTP1 -> false
+            HttpVersionPolicy.FORCE_HTTP2 -> true
+            HttpVersionPolicy.AUTO -> preference == ProtocolPreference.ALLOW_H2
         }
         val builder = OkHttpClient.Builder()
             .dispatcher(dispatcher)
@@ -53,11 +75,11 @@ internal object HttpClientFactory {
                     timeUnit = TimeUnit.SECONDS,
                 )
             )
-            // 默认强制 HTTP/1.1：HTTP/2 的多路复用会把所有分片挤到一条 TCP 连接上，
-            // 共享单个拥塞/流控窗口 → 多线程得不到加速（表现为“64 线程跑出单线程速度”）。
+            // 协议：多分片并发默认只用 HTTP/1.1（HTTP/2 多路复用会把所有分片挤到一条 TCP 连接，
+            // 共享单个拥塞/流控窗口 → 多线程得不到加速）；单流/探测链路可允许 h2。
             .protocols(
-                if (config.forceHttp1) listOf(Protocol.HTTP_1_1)
-                else listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+                if (allowH2) listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+                else listOf(Protocol.HTTP_1_1)
             )
             .connectTimeout(config.connectTimeoutMs, TimeUnit.MILLISECONDS)
             .readTimeout(config.readTimeoutMs, TimeUnit.MILLISECONDS)

@@ -89,9 +89,21 @@ data class TurboConfig(
      * HTTP/1.1 下每个并发请求各自建立 TCP 连接，各自拥有独立拥塞窗口，
      * 才能真正获得多连接加速（aria2 / IDM / XDM 同策略）。
      *
-     * 仅在确实需要 HTTP/2（如服务端仅支持 h2）时才设为 false。
+     * 注意：当 [httpVersionPolicy] 为 AUTO 时，本字段仅影响“分片并发”链路（仍走 HTTP/1.1），
+     * 而“整文件单流回退”链路允许协商 HTTP/2（单流场景 h2 未必更差且兼容性更好）。
      */
     val forceHttp1: Boolean = true,
+
+    /**
+     * HTTP 版本协商策略（默认 AUTO，按下载模式自动选择）：
+     *  - **AUTO**：多分片并发走 HTTP/1.1（避免 h2 多路复用抹平多连接收益）；
+     *    探测与整文件单流回退允许协商 HTTP/2（兼容仅支持 h2 的服务器，且单流无多连接损失）。
+     *  - **FORCE_HTTP1**：全部链路强制 HTTP/1.1。
+     *  - **FORCE_HTTP2**：全部链路允许 HTTP/2（仅在确知需要时使用，多线程可能无加速）。
+     *
+     * 为兼容旧版：未显式设置本字段时，若 [forceHttp1]=false 则等同 FORCE_HTTP2，否则为 AUTO。
+     */
+    val httpVersionPolicy: HttpVersionPolicy = HttpVersionPolicy.AUTO,
 
     /**
      * 每个主机（host）的最大并发分片数。<=0 表示不限（用 [maxConnectionsPerTask]）。
@@ -146,6 +158,28 @@ data class TurboConfig(
         require(warmUpConnectionCount >= 0) { "warmUpConnectionCount 不能为负" }
         require(slowStartInitial >= 0) { "slowStartInitial 不能为负" }
     }
+
+    /**
+     * 解析实际生效的 HTTP 版本策略（兼容旧的 [forceHttp1] 字段）。
+     * httpVersionPolicy 显式为非 AUTO 时优先；否则由 forceHttp1 推导（true→AUTO, false→FORCE_HTTP2）。
+     */
+    val effectiveHttpVersionPolicy: HttpVersionPolicy
+        get() = when (httpVersionPolicy) {
+            HttpVersionPolicy.AUTO -> if (forceHttp1) HttpVersionPolicy.AUTO else HttpVersionPolicy.FORCE_HTTP2
+            else -> httpVersionPolicy
+        }
+}
+
+/** HTTP 版本协商策略。 */
+enum class HttpVersionPolicy {
+    /** 分片并发走 HTTP/1.1，探测与整文件单流回退允许 HTTP/2。 */
+    AUTO,
+
+    /** 全部链路强制 HTTP/1.1。 */
+    FORCE_HTTP1,
+
+    /** 全部链路允许 HTTP/2（多线程可能无加速）。 */
+    FORCE_HTTP2,
 }
 
 /** 代理模式（参考 ab-download-manager 的 ProxyStrategy）。 */

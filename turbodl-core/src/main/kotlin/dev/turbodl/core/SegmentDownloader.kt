@@ -43,9 +43,14 @@ internal enum class SegmentResult {
  *  - **严格截断**：服务器多返回的字节按预期长度截断，文件永不膨胀；
  *  - **任务级取消**：登记 Call，暂停/取消时立即 cancel 阻塞 IO。
  */
-internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient) {
+internal class SegmentDownloader(
+    private val clientProvider: () -> OkHttpClient,
+    /** 整文件/探测专用客户端（允许 h2）；null 时回退用 [clientProvider]。 */
+    private val streamClientProvider: (() -> OkHttpClient)? = null,
+) {
 
     private val client get() = clientProvider()
+    private val streamClient get() = (streamClientProvider ?: clientProvider)()
     private val activeCalls = ConcurrentHashMap<Long, MutableSet<okhttp3.Call>>()
 
     fun cancelCalls(taskId: Long) {
@@ -228,7 +233,8 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .header("Accept-Encoding", "identity")
             .get().build()
-        val call = client.newCall(req)
+        // 整文件单流：用允许 h2 的客户端（单流无多连接损失，且兼容仅支持 h2 的服务器）。
+        val call = streamClient.newCall(req)
         activeCalls.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(call)
         val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
         try {

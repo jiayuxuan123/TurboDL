@@ -46,13 +46,20 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     /** 运行时热更新配置（限速、并发等即时生效；已在跑的任务连接数不回缩）。 */
     fun updateConfig(newConfig: TurboConfig) {
         this.config = newConfig
-        httpClient = HttpClientFactory.build(newConfig)
+        segmentClient = HttpClientFactory.build(newConfig, HttpClientFactory.ProtocolPreference.H1_ONLY)
+        streamClient = HttpClientFactory.build(newConfig, HttpClientFactory.ProtocolPreference.ALLOW_H2)
     }
 
+    // 双客户端：分片并发用 H1_ONLY（避免 h2 多路复用抹平多连接）；
+    // 探测/整文件单流回退用 ALLOW_H2（单流无多连接损失，且兼容仅支持 h2 的服务器）。
+    // FORCE_HTTP1/FORCE_HTTP2 策略下两个客户端实际协议相同（均由 effectiveHttpVersionPolicy 决定）。
     @Volatile
-    private var httpClient = HttpClientFactory.build(config)
+    private var segmentClient = HttpClientFactory.build(config, HttpClientFactory.ProtocolPreference.H1_ONLY)
+    @Volatile
+    private var streamClient = HttpClientFactory.build(config, HttpClientFactory.ProtocolPreference.ALLOW_H2)
 
-    private val downloader = SegmentDownloader { httpClient }
+    // 分片下载器用 H1 客户端；整文件/探测下载器用允许 h2 的客户端。
+    private val downloader = SegmentDownloader({ segmentClient }, { streamClient })
     private val speedLimiter = SpeedLimiter { config.globalSpeedLimitBytesPerSec }
 
     /** Built-in HTTP backend; always available so core works standalone. */
@@ -180,8 +187,10 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     /** 关闭引擎，取消所有任务并释放资源。 */
     fun shutdown() {
         scope.coroutineContext[Job]?.cancel()
-        httpClient.dispatcher.executorService.shutdown()
-        httpClient.connectionPool.evictAll()
+        streamClient.dispatcher.executorService.shutdown()
+        streamClient.connectionPool.evictAll()
+        segmentClient.dispatcher.executorService.shutdown()
+        segmentClient.connectionPool.evictAll()
     }
 
     // ---------- 内部 ----------

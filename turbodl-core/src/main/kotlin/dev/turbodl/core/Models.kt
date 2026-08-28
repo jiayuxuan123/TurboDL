@@ -28,6 +28,14 @@ data class DownloadRequest(
      * 为空时回退到内部任务 id 命名（行为与旧版一致）。
      */
     val stableKey: String? = null,
+
+    /**
+     * 自定义透传：仅对本任务生效的额外元数据（不影响引擎行为，供上层/插件透传业务信息）。
+     *
+     * 例如宿主可在此放入网盘类型、业务任务 id、来源标记等，
+     * 在事件回调（[TurboEvent]）中原样拿回，无需自建 roomId→业务信息映射。
+     */
+    val tags: Map<String, String> = emptyMap(),
 )
 
 /** 任务状态。 */
