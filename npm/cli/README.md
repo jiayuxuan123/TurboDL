@@ -1,4 +1,4 @@
-# @turbodl/cli
+# @jiaayuxuan/turbodl
 
 TurboDL 命令行下载器的 NPM 入口（薄包装）。高性能多线程 HTTP(S) 下载，支持断点续传、批量、代理/DoH、NDJSON 输出。
 
@@ -9,14 +9,14 @@ TurboDL 命令行下载器的 NPM 入口（薄包装）。高性能多线程 HTT
 
 ```bash
 # 方式一：全局安装
-npm install -g @turbodl/cli
+npm install -g @jiaayuxuan/turbodl
 turbodl "https://example.com/file.zip" -o file.zip -c 64
 
 # 方式二：免安装直接跑（首次自动下载运行时到 ~/.turbodl/）
-npx @turbodl/cli "https://example.com/file.zip" -o file.zip -c 64
+npx @jiaayuxuan/turbodl "https://example.com/file.zip" -o file.zip -c 64
 
 # Agent / 脚本：NDJSON 事件流逐行输出
-npx @turbodl/cli "https://example.com/file.zip" -o file.zip -c 256 --json
+npx @jiaayuxuan/turbodl "https://example.com/file.zip" -o file.zip -c 256 --json
 ```
 
 ## 常用参数（与 JVM CLI 完全一致）
@@ -34,7 +34,7 @@ npx @turbodl/cli "https://example.com/file.zip" -o file.zip -c 256 --json
 | `-b, --batch <文件>` | 批量下载（每行 `URL [输出]`） |
 | `--insecure` | 忽略 SSL 证书校验 |
 
-完整参数：`npx @turbodl/cli --help`
+完整参数：`npx @jiaayuxuan/turbodl --help`
 
 ## 断点续传
 

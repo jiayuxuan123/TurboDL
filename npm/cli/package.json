@@ -1,5 +1,5 @@
 {
-  "name": "@turbodl/cli",
+  "name": "@jiaayuxuan/turbodl",
   "version": "0.2.0-rc7",
   "description": "TurboDL command-line downloader — high-performance multi-threaded HTTP(S) downloads with resume, batch, and NDJSON output. Thin NPM wrapper around the TurboDL JVM CLI.",
   "license": "Apache-2.0",

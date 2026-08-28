@@ -124,13 +124,13 @@ A thin Node.js shell around the JVM CLI (no download logic in JS — it auto-dow
 
 ```bash
 # After publishing:
-npm install -g @turbodl/cli      # then: turbodl <url> -o out -c 64
-npx @turbodl/cli <url> --json    # zero-install, agent-friendly NDJSON output
+npm install -g @jiaayuxuan/turbodl      # then: turbodl <url> -o out -c 64
+npx @jiaayuxuan/turbodl <url> --json    # zero-install, agent-friendly NDJSON output
 
 # Requires Java 17+; jar cached in ~/.turbodl/; TURBODL_JAR overrides the jar path.
 ```
 
-Source: [`npm/cli`](npm/cli). To publish: `cd npm/cli && npm publish --access public`.
+Source: [`npm/cli`](npm/cli). Published as **@jiaayuxuan/turbodl** (npm requires the scope to match username/org; `@turbodl/cli` would need a "turbodl" org).
 
 ## Build
 
