@@ -118,7 +118,7 @@ Notes:
 - Exit codes: `0` success, `1` download failed, `2` usage error.
 - `--json` emits one JSON object per line; the final `completed` line contains the absolute file path and size.
 
-## NPM wrapper (`@turbodl/cli`)
+## NPM wrapper (`@jiaayuxuan/turbodl`)
 
 A thin Node.js shell around the JVM CLI (no download logic in JS — it auto-downloads and caches the JAR on first run, then passes all args through):
 
