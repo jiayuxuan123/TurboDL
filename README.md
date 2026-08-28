@@ -118,6 +118,20 @@ Notes:
 - Exit codes: `0` success, `1` download failed, `2` usage error.
 - `--json` emits one JSON object per line; the final `completed` line contains the absolute file path and size.
 
+## NPM wrapper (`@turbodl/cli`)
+
+A thin Node.js shell around the JVM CLI (no download logic in JS — it auto-downloads and caches the JAR on first run, then passes all args through):
+
+```bash
+# After publishing:
+npm install -g @turbodl/cli      # then: turbodl <url> -o out -c 64
+npx @turbodl/cli <url> --json    # zero-install, agent-friendly NDJSON output
+
+# Requires Java 17+; jar cached in ~/.turbodl/; TURBODL_JAR overrides the jar path.
+```
+
+Source: [`npm/cli`](npm/cli). To publish: `cd npm/cli && npm publish --access public`.
+
 ## Build
 
 ```

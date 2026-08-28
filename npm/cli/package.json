@@ -1,0 +1,35 @@
+{
+  "name": "@turbodl/cli",
+  "version": "0.2.0-rc7",
+  "description": "TurboDL command-line downloader — high-performance multi-threaded HTTP(S) downloads with resume, batch, and NDJSON output. Thin NPM wrapper around the TurboDL JVM CLI.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jiayuxuan123/TurboDL.git",
+    "directory": "npm/cli"
+  },
+  "homepage": "https://github.com/jiayuxuan123/TurboDL#readme",
+  "bugs": "https://github.com/jiayuxuan123/TurboDL/issues",
+  "keywords": [
+    "download",
+    "downloader",
+    "multithread",
+    "resume",
+    "http",
+    "https",
+    "cli",
+    "agent",
+    "ndjson"
+  ],
+  "bin": {
+    "turbodl": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "preferGlobal": true
+}
