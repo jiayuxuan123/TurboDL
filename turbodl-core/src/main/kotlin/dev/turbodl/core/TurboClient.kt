@@ -308,18 +308,25 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         }
     }
 
-    /** 速度采样：每 500ms 计算一次平均速率。 */
+    /**
+     * 速度采样 + EWMA 平滑：每 500ms 计算一次瞬时速率，并用指数加权移动平均平滑，
+     * 避免多分片并发下瞬时速率剧烈抖动导致 ETA 在大范围内跳变。
+     */
     private class SpeedRecorder {
         private var lastBytes = 0L
         private var lastTime = System.currentTimeMillis()
+        private var ewma = 0.0
+        private var seeded = false
         @Synchronized
         fun sample(total: Long): Long? {
             val now = System.currentTimeMillis()
             val dt = now - lastTime
             if (dt >= 500) {
-                val speed = if (dt > 0) ((total - lastBytes) * 1000 / dt).coerceAtLeast(0) else 0
+                val inst = if (dt > 0) ((total - lastBytes) * 1000.0 / dt).coerceAtLeast(0.0) else 0.0
                 lastBytes = total; lastTime = now
-                return speed
+                // EWMA 平滑（α=0.3）：既保留足够响应速度，又抑制分片抖动。
+                ewma = if (!seeded) { seeded = true; inst } else 0.3 * inst + 0.7 * ewma
+                return ewma.toLong().coerceAtLeast(0)
             }
             return null
         }

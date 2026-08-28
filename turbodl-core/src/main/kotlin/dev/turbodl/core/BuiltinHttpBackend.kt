@@ -54,6 +54,15 @@ internal class BuiltinHttpBackend(
         }
 
         val connections = (request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
+
+        // 连接预热 / DNS 预解析：正式分片前先对解析后的最终 URL 建好若干连接（并解析 DNS），
+        // 填充连接池，避免分片启动时串行等待 DNS + TCP/TLS 握手。
+        if (context.config.warmUpConnections) {
+            val warmCount = context.config.warmUpConnectionCount.takeIf { it > 0 }
+                ?: minOf(connections, 8)
+            runCatching { downloader.warmUp(effectiveUrl, request.headers, warmCount) }
+        }
+
         val scheduler = SegmentScheduler(downloader, context.config, speedLimiter)
         // 真实并发数由调度器回报（而非直接用配置值），UI 才能看到实际跑满多少线程。
         val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(connections)

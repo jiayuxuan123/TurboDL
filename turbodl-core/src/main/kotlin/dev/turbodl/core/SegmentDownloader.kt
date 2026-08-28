@@ -3,6 +3,9 @@ package dev.turbodl.core
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -52,6 +55,33 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
     companion object {
         private const val BUFFER = 256 * 1024
     }
+
+    /**
+     * 连接预热 / DNS 预解析：对目标 URL 并发发起若干极小 Range 请求（bytes=0-0），
+     * 触发 DNS 解析 + TCP/TLS 握手并把连接留在连接池里（OkHttp keep-alive）。
+     * 后续正式分片下载时可直接复用，无需串行等待解析/握手。
+     * 失败沉默忽略（预热仅优化，不影响正确性）。
+     */
+    suspend fun warmUp(url: String, headers: Map<String, String>, connections: Int): Unit =
+        coroutineScope {
+            val n = connections.coerceIn(1, 32)
+            val jobs = (0 until n).map {
+                async(Dispatchers.IO) {
+                    runCatching {
+                        val req = Request.Builder()
+                            .url(url)
+                            .header("Range", "bytes=0-0")
+                            .apply { headers.forEach { (k, v) -> header(k, v) } }
+                            .header("Accept-Encoding", "identity")
+                            .get().build()
+                        val call = client.newCall(req)
+                        // 读取并丢弃响应体，使连接完成并回到连接池复用（而非被弃置）。
+                        call.execute().use { resp -> resp.body?.byteStream()?.use { it.readBytes() } }
+                    }
+                }
+            }
+            jobs.awaitAll()
+        }
 
     /** 探测结果：总大小、是否支持 Range、重定向后的最终 URL。 */
     data class ProbeResult(

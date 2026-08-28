@@ -140,13 +140,22 @@ internal class SegmentScheduler(
 
         // ---------- 并发闸门：workers 个协程按 idx 与 desired 自闸门 ----------
         /** 动态目标并发（可因背压下调、因持续成功恢复；上限 workers）。 */
-        val desired = AtomicInteger(workers)
+        // ---------- 并发闸门：workers 个协程按 idx 与 desired 自闸门 ----------
+        // 慢启动：初始目标并发从较小值开始，随持续成功逐步升到 workers，
+        // 避免瞬时几十连接同时握手冲击服务器/被风控，也避免小文件过度建连。
+        val slowStartInit = when {
+            !config.slowStart -> workers
+            config.slowStartInitial > 0 -> min(config.slowStartInitial, workers)
+            else -> min(workers, 4)
+        }
+        /** 动态目标并发（慢启动从 slowStartInit 升、背压时降、健康时升；上限 workers）。 */
+        val desired = AtomicInteger(slowStartInit)
         /** 当前真实在传输的连接数（供 UI 展示实际并发）。 */
         val activeConns = AtomicInteger(0)
         /** 正在传输中的分片数（判定“队列空但仍可能有重试回投”）。 */
         val inFlight = AtomicInteger(0)
 
-        onConnections(workers)
+        onConnections(slowStartInit)
 
         fun poll(): Segment? = synchronized(pendingLock) { pending.poll() }
         fun offer(seg: Segment) = synchronized(pendingLock) { pending.offer(seg) }
@@ -171,7 +180,6 @@ internal class SegmentScheduler(
          * 现在只要持续成功就一步步把 desired 加回 workers，被 park 的协程随即复活。
          */
         fun rampUpIfHealthy() {
-            if (config.backpressureConsecutiveFailures <= 0) return
             if (desired.get() >= workers) return
             if (consecutiveSuccesses.get() < RAMP_UP_SUCCESS_THRESHOLD) return
             consecutiveSuccesses.set(0)

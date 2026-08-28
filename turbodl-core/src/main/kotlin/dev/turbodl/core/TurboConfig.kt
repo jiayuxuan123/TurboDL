@@ -111,6 +111,28 @@ data class TurboConfig(
      * 以保证断点分片跨会话、跨进程稳定保留。
      */
     val workDir: java.io.File? = null,
+
+    /**
+     * 连接预热 / DNS 预解析（默认开）。
+     *
+     * 探测拿到最终（重定向后）URL 后，在正式分片下载前先并发建立若干空连接（并预解析 DNS），
+     * 填充连接池。这样分片开始时无需串行等待 DNS 解析 + TCP/TLS 握手，启动更快、初期吞吐更高。
+     */
+    val warmUpConnections: Boolean = true,
+
+    /** 预热时建立的空连接数；<=0 时取 min(maxConnectionsPerTask, 8)。 */
+    val warmUpConnectionCount: Int = 0,
+
+    /**
+     * 慢启动（默认开）：分片并发从少逐步上调到 [maxConnectionsPerTask]，而非一上来就全开。
+     *
+     * 好处：避免瞬时几十个连接同时握手冲击服务器/被风控，也避免小文件刚开就过度建连；
+     * 与背压正交：背压负责“遇错降”，慢启动负责“健康升”。
+     */
+    val slowStart: Boolean = true,
+
+    /** 慢启动初始并发；<=0 时取 min(maxConnectionsPerTask, 4)。 */
+    val slowStartInitial: Int = 0,
 ) {
     init {
         require(maxConnectionsPerTask in 1..256) { "maxConnectionsPerTask 必须在 1..256" }
@@ -121,6 +143,8 @@ data class TurboConfig(
         require(blockSize >= minSegmentSize) { "blockSize 不能小于 minSegmentSize" }
         require(segmentsPerConnection in 1..64) { "segmentsPerConnection 必须在 1..64" }
         require(maxConnectionsPerHost >= 0) { "maxConnectionsPerHost 不能为负" }
+        require(warmUpConnectionCount >= 0) { "warmUpConnectionCount 不能为负" }
+        require(slowStartInitial >= 0) { "slowStartInitial 不能为负" }
     }
 }
 
