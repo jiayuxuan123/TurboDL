@@ -30,16 +30,20 @@ internal class BuiltinHttpBackend(
         val chunkDir = context.workDir
         val speedLimiter = SpeedLimiter { context.config.globalSpeedLimitBytesPerSec }
 
-        // Probe size + Range support.
-        val (probedSize, supportsRange) = downloader.probe(request.url, request.headers)
-        val total = probedSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
+        // Probe size + Range support. 同时拿到重定向后的最终 URL。
+        val probe = downloader.probe(request.url, request.headers)
+        val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
+        // 关键：后续分片/整文件下载均使用重定向后的最终 URL（如网盘原始链 302→CDN 临时直链）。
+        // 否则每个分片连接都重走 302，可能命中不同节点或被拒，表现为“显示下载中但字节/线程不动”。
+        val effectiveUrl = probe.resolvedUrl.ifBlank { request.url }
+        val supportsRange = probe.supportsRange
 
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
         if (!supportsRange || total <= 0) {
             val outPart = File(chunkDir, "whole.part")
             var acc = 0L
-            val ok = downloader.downloadWhole(context.taskId, request.url, outPart, request.headers, total) { d ->
+            val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
                 context.throttle(d)
                 acc += d
                 if (!context.isActive()) return@downloadWhole
@@ -55,7 +59,7 @@ internal class BuiltinHttpBackend(
         val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(connections)
         val outcome = scheduler.run(
             taskId = context.taskId,
-            url = request.url,
+            url = effectiveUrl,
             total = total,
             chunkDir = chunkDir,
             headers = request.headers,
@@ -87,7 +91,7 @@ internal class BuiltinHttpBackend(
                     // 有已完成分片：仍按分片模式完成（调度器下次会跳过已完成块），
                     // 不能直接整文件回退（会与已有分片混合）。重跑一次调度，让剩余块继续分片下载。
                     val retry = scheduler.run(
-                        taskId = context.taskId, url = request.url, total = total,
+                        taskId = context.taskId, url = effectiveUrl, total = total,
                         chunkDir = chunkDir, headers = request.headers, connections = connections,
                         resumeFrom = 0L,
                         onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
@@ -102,7 +106,7 @@ internal class BuiltinHttpBackend(
                 chunkDir.deleteRecursively(); chunkDir.mkdirs()
                 val outPart = File(chunkDir, "whole.part")
                 var acc = 0L
-                val ok = downloader.downloadWhole(context.taskId, request.url, outPart, request.headers, total) { d ->
+                val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
                     context.throttle(d)
                     acc += d
                     if (!context.isActive()) return@downloadWhole

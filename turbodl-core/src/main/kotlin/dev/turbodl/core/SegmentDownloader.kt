@@ -53,11 +53,25 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
         private const val BUFFER = 256 * 1024
     }
 
+    /** 探测结果：总大小、是否支持 Range、重定向后的最终 URL。 */
+    data class ProbeResult(
+        val totalSize: Long?,
+        val supportsRange: Boolean,
+        /** 跟随 3xx 重定向后的最终 URL（网盘原始链接常 302 到带签名的 CDN 临时直链）。 */
+        val resolvedUrl: String,
+    )
+
     /**
-     * 探测总大小与 Range 支持。
-     * @return Pair(totalSize 或 null, supportsRange)
+     * 探测总大小与 Range 支持，并返回重定向后的最终 URL。
+     *
+     * 关键：网盘/更新等原始链接常返回 302 跳到**带签名的 CDN 临时直链**，
+     * 只有这个临时直链才支持 Range 多线程；若后续分片仍请求原始链接，
+     * 每个连接都要再走一次 302（可能命中不同节点/签名、甚至被限流），
+     * 表现为「显示下载中但线程/字节都不动，最后 Whole-file download failed」。
+     * 因此这里用 OkHttp 自动跟随重定向后的 [okhttp3.Response.request] URL 作为最终地址，
+     * 交由上层对该稳定地址做多线程分片。
      */
-    suspend fun probe(url: String, headers: Map<String, String>): Pair<Long?, Boolean> =
+    suspend fun probe(url: String, headers: Map<String, String>): ProbeResult =
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(url)
@@ -71,25 +85,27 @@ internal class SegmentDownloader(private val clientProvider: () -> OkHttpClient)
             val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
             try {
                 call.execute().use { resp ->
+                    // resp.request.url 是跟随所有 3xx 之后的最终地址（原始链接 302→CDN 临时直链）。
+                    val finalUrl = resp.request.url.toString()
                     if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
-                        return@use (null to false)
+                        return@use ProbeResult(null, false, finalUrl)
                     }
                     when (resp.code) {
                         206 -> {
                             val total = resp.header("Content-Range")
                                 ?.substringAfter('/')?.toLongOrNull()
-                            (total to true)
+                            ProbeResult(total, true, finalUrl)
                         }
                         200 -> {
                             // 不支持 Range：返回整文件
                             val total = resp.header("Content-Length")?.toLongOrNull()
-                            (total to false)
+                            ProbeResult(total, false, finalUrl)
                         }
-                        else -> (null to false)
+                        else -> ProbeResult(null, false, finalUrl)
                     }
                 }
             } catch (e: Exception) {
-                (null to false)
+                ProbeResult(null, false, url)
             } finally {
                 handle?.dispose()
             }
