@@ -145,6 +145,40 @@ data class TurboConfig(
 
     /** 慢启动初始并发；<=0 时取 min(maxConnectionsPerTask, 4)。 */
     val slowStartInitial: Int = 0,
+
+    /**
+     * 探测（probe）总超时（毫秒，默认 20s）。
+     *
+     * 探测阶段无界限等待会让任务卡在“看似下载中但字节不动”的状态（connect 15s + read 60s 叠加）。
+     * 超时后按 [probeRetries] 重试，全部失败才回退到整文件单流。
+     */
+    val probeTimeoutMs: Long = 20_000,
+
+    /** 探测失败/超时的重试次数（默认 2）。避免瞬时网络抖动直接退化为单线程。 */
+    val probeRetries: Int = 2,
+
+    /**
+     * 卡死（stall）检测阈值（毫秒，默认 45s）0 = 关闭。
+     *
+     * 思路参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--speed-time`：
+     * OkHttp 的 readTimeout 只能管“单次 read 阻塞多久”，若服务器/CDN 涓涓流式吐字节
+     * （每几十秒发几字节），永远不会超时，表现为“显示下载中但进度几乎不动”。
+     * 因此额外做**任务级守护**：这么长时间内总下载字节数零增长，则判定卡死，
+     * 主动 cancel 当前所有在飞请求，让分片进入重试链路（重新建连、可能命中其他 CDN 节点）。
+     */
+    val stallTimeoutMs: Long = 45_000,
+
+    /**
+     * 连续卡死重置次数上限（默认 3）。达到后任务失败，避免无限重试假活。
+     * 分片已保留，用户重试即从断点继续。
+     */
+    val maxStallRecoveries: Int = 3,
+
+    /**
+     * 连接预热单次请求超时（毫秒，默认 8s）。
+     * 预热仅为优化，绝不得拖慢正式下载；超时即放弃。
+     */
+    val warmUpTimeoutMs: Long = 8_000,
 ) {
     init {
         require(maxConnectionsPerTask in 1..256) { "maxConnectionsPerTask 必须在 1..256" }
@@ -157,6 +191,11 @@ data class TurboConfig(
         require(maxConnectionsPerHost >= 0) { "maxConnectionsPerHost 不能为负" }
         require(warmUpConnectionCount >= 0) { "warmUpConnectionCount 不能为负" }
         require(slowStartInitial >= 0) { "slowStartInitial 不能为负" }
+        require(probeTimeoutMs >= 1000) { "probeTimeoutMs 至少 1000ms" }
+        require(probeRetries >= 0) { "probeRetries 不能为负" }
+        require(stallTimeoutMs >= 0) { "stallTimeoutMs 不能为负" }
+        require(maxStallRecoveries >= 0) { "maxStallRecoveries 不能为负" }
+        require(warmUpTimeoutMs >= 500) { "warmUpTimeoutMs 至少 500ms" }
     }
 
     /**

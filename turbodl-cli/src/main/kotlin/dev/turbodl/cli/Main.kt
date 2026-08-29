@@ -30,7 +30,7 @@ import kotlin.system.exitProcess
  *   turbodl <url> --proxy http://127.0.0.1:7890 --doh https://dns.alidns.com/dns-query
  *   turbodl --batch tasks.txt -c 128
  */
-private const val VERSION = "0.2.0-rc7"
+private const val VERSION = "0.2.0-rc8"
 
 /** 一条待下载任务（批量模式逐条构造）。 */
 private class Task(val url: String, val output: File)

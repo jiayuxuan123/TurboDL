@@ -6,6 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -161,6 +162,44 @@ internal class SegmentScheduler(
         fun offer(seg: Segment) = synchronized(pendingLock) { pending.offer(seg) }
         fun queueEmpty(): Boolean = synchronized(pendingLock) { pending.isEmpty() }
 
+        // ---------- 卡死（stall）守护：思路参考 aria2 --lowest-speed-limit / curl --speed-limit ----------
+        // OkHttp 的 readTimeout 只能管“单次 read 阻塞多久”；若 CDN 涓涓吐字节（每几十秒几字节），
+        // 永远不超时，表现为“显示下载中但进度几乎不动”。因此额外监控任务级总字节：
+        // 超过 stallTimeoutMs 零增长 → cancel 所有在飞请求，分片回到重试链路（重建连接、可能换节点）。
+        val stallRecoveries = AtomicInteger(0)
+        val stallFailure = AtomicReference<String?>(null)
+        val watchdog = if (config.stallTimeoutMs > 0) launch(Dispatchers.IO) {
+            var lastBytes = -1L
+            var lastChange = System.currentTimeMillis()
+            while (isActive() && !needWholeFallback.get()) {
+                delay(2000)
+                val cur = downloaded.get()
+                val now = System.currentTimeMillis()
+                if (cur != lastBytes) {
+                    lastBytes = cur
+                    lastChange = now
+                    continue
+                }
+                // 队列与在飞均空：任务即将结束，不该当作卡死
+                if (queueEmpty() && inFlight.get() == 0) continue
+                if (now - lastChange >= config.stallTimeoutMs) {
+                    val n = stallRecoveries.incrementAndGet()
+                    if (n > config.maxStallRecoveries) {
+                        stallFailure.compareAndSet(
+                            null,
+                            "下载停止响应（${config.stallTimeoutMs / 1000}s 无任何字节），已重试 ${n - 1} 次仍失败"
+                        )
+                        downloader.cancelCalls(taskId)
+                        break
+                    }
+                    // 主动断开卡死连接：分片会得到 IOException → FAILED → 回投重试
+                    downloader.cancelCalls(taskId)
+                    lastChange = System.currentTimeMillis()
+                }
+            }
+        } else null
+
+
         /** 背压下调：乘性减半（不低于 1）。仅调整目标整数，被 park 的协程自然让出。 */
         fun throttleDown() {
             if (config.backpressureConsecutiveFailures <= 0) return
@@ -266,7 +305,12 @@ internal class SegmentScheduler(
             true
         } catch (e: CancellationException) {
             throw e
+        } finally {
+            watchdog?.cancel()
         }
+
+        // 卡死重试耗尽：明确失败（分片已保留，用户重试即续传）
+        stallFailure.get()?.let { return@coroutineScope Outcome.Failed(it) }
 
         if (needWholeFallback.get()) return@coroutineScope Outcome.NeedWholeFallback
         if (!isActive()) return@coroutineScope Outcome.Failed("任务已暂停")

@@ -1,5 +1,7 @@
 package dev.turbodl.core
 
+import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext as currentCtx
 import java.io.File
 
 /**
@@ -31,7 +33,14 @@ internal class BuiltinHttpBackend(
         val speedLimiter = SpeedLimiter { context.config.globalSpeedLimitBytesPerSec }
 
         // Probe size + Range support. 同时拿到重定向后的最终 URL。
-        val probe = downloader.probe(request.url, request.headers)
+        // 带超时与重试：探测无界限等待会让任务卡在“看似下载中但字节为 0”，
+        // 且瞬时抖动不应直接退化成单线程整文件下载。
+        val probe = downloader.probeWithRetry(
+            request.url,
+            request.headers,
+            timeoutMs = context.config.probeTimeoutMs,
+            retries = context.config.probeRetries,
+        )
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
         // 关键：后续分片/整文件下载均使用重定向后的最终 URL（如网盘原始链 302→CDN 临时直链）。
@@ -43,13 +52,39 @@ internal class BuiltinHttpBackend(
         if (!supportsRange || total <= 0) {
             val outPart = File(chunkDir, "whole.part")
             var acc = 0L
-            val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
-                context.throttle(d)
-                acc += d
-                if (!context.isActive()) return@downloadWhole
-                context.reportProgress(acc, 1)
+            // 卡死守护：整文件单流路径也需要（否则服务器接受连接但不吐字节时，
+            // 会一路阻塞到 readTimeout 甚至反复重试，表现为“显示下载中但永远不动”）。
+            val progressed = java.util.concurrent.atomic.AtomicLong(0)
+            val stallMs = context.config.stallTimeoutMs
+            val watchdog = if (stallMs > 0) kotlinx.coroutines.CoroutineScope(currentCtx).launch {
+                var lastBytes = -1L
+                var lastChange = System.currentTimeMillis()
+                while (context.isActive()) {
+                    kotlinx.coroutines.delay(2000)
+                    val cur = progressed.get()
+                    val now = System.currentTimeMillis()
+                    if (cur != lastBytes) { lastBytes = cur; lastChange = now; continue }
+                    if (now - lastChange >= stallMs) {
+                        // 主动断开：downloadWhole 会得到 IOException 并返回 false
+                        downloader.cancelCalls(context.taskId)
+                        break
+                    }
+                }
+            } else null
+            val ok = try {
+                downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
+                    context.throttle(d)
+                    acc += d
+                    progressed.set(acc)
+                    if (!context.isActive()) return@downloadWhole
+                    context.reportProgress(acc, 1)
+                }
+            } finally {
+                watchdog?.cancel()
             }
-            if (!ok) throw IllegalStateException("Whole-file download failed (server lacks Range support or bad response)")
+            if (!ok) throw IllegalStateException(
+                "整文件下载失败（服务器不支持 Range、无响应或响应异常）"
+            )
             return BackendResult(listOf(outPart), if (total > 0) total else outPart.length())
         }
 
@@ -60,7 +95,12 @@ internal class BuiltinHttpBackend(
         if (context.config.warmUpConnections) {
             val warmCount = context.config.warmUpConnectionCount.takeIf { it > 0 }
                 ?: minOf(connections, 8)
-            runCatching { downloader.warmUp(effectiveUrl, request.headers, warmCount) }
+            runCatching {
+                downloader.warmUp(
+                    effectiveUrl, request.headers, warmCount,
+                    timeoutMs = context.config.warmUpTimeoutMs,
+                )
+            }
         }
 
         val scheduler = SegmentScheduler(downloader, context.config, speedLimiter)

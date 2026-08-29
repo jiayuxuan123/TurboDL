@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -14,6 +15,7 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 import kotlin.math.min
 
@@ -67,9 +69,14 @@ internal class SegmentDownloader(
      * 后续正式分片下载时可直接复用，无需串行等待解析/握手。
      * 失败沉默忽略（预热仅优化，不影响正确性）。
      */
-    suspend fun warmUp(url: String, headers: Map<String, String>, connections: Int): Unit =
+    suspend fun warmUp(url: String, headers: Map<String, String>, connections: Int, timeoutMs: Long = 8_000): Unit =
         coroutineScope {
             val n = connections.coerceIn(1, 32)
+            // 预热必须有硬止时：否则服务器不响应时会沉在这里（read timeout 默认 60s），
+            // 让任务卡在“看似下载中但什么都没发生”。预热失败不影响正确性。
+            val warmClient = client.newBuilder()
+                .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                .build()
             val jobs = (0 until n).map {
                 async(Dispatchers.IO) {
                     runCatching {
@@ -79,9 +86,13 @@ internal class SegmentDownloader(
                             .apply { headers.forEach { (k, v) -> header(k, v) } }
                             .header("Accept-Encoding", "identity")
                             .get().build()
-                        val call = client.newCall(req)
+                        val call = warmClient.newCall(req)
                         // 读取并丢弃响应体，使连接完成并回到连接池复用（而非被弃置）。
-                        call.execute().use { resp -> resp.body?.byteStream()?.use { it.readBytes() } }
+                        try {
+                            call.execute().use { resp -> resp.body?.byteStream()?.use { it.readBytes() } }
+                        } finally {
+                            if (!call.isCanceled()) runCatching { call.cancel() }
+                        }
                     }
                 }
             }
@@ -106,7 +117,7 @@ internal class SegmentDownloader(
      * 因此这里用 OkHttp 自动跟随重定向后的 [okhttp3.Response.request] URL 作为最终地址，
      * 交由上层对该稳定地址做多线程分片。
      */
-    suspend fun probe(url: String, headers: Map<String, String>): ProbeResult =
+    suspend fun probe(url: String, headers: Map<String, String>, timeoutMs: Long = 0): ProbeResult =
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(url)
@@ -116,7 +127,13 @@ internal class SegmentDownloader(
                 // 若 gzip 透明解压，实际写入字节会与 Content-Range 不一致 → 大小校验失败。
                 .header("Accept-Encoding", "identity")
                 .get().build()
-            val call = client.newCall(req)
+            // 关键：用 OkHttp 自己的 callTimeout 做**硬止时**。
+            // 协程的 withTimeout 无法中断阻塞中的 call.execute()（服务器接受连接但不响应时，
+            // connect+read 可叠加到近分钟），callTimeout 覆盖整个请求生命周期，能真正卡住。
+            val effClient = if (timeoutMs > 0)
+                client.newBuilder().callTimeout(timeoutMs, TimeUnit.MILLISECONDS).build()
+            else client
+            val call = effClient.newCall(req)
             val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
             try {
                 call.execute().use { resp ->
@@ -139,12 +156,39 @@ internal class SegmentDownloader(
                         else -> ProbeResult(null, false, finalUrl)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 ProbeResult(null, false, url)
             } finally {
+                runCatching { if (!call.isCanceled()) call.cancel() }
                 handle?.dispose()
             }
         }
+
+    /**
+     * 带超时与重试的探测。
+     *
+     * 为什么需要：探测无界限等待时，connect(15s) + read(60s) 可能叠加到近分钟，
+     * 期间 UI 已经进入 DOWNLOADING 但字节为 0，用户看到的就是“显示在下载但一直不动、
+     * 连解析那一步都没做”。瞬时抖动下也不应直接退化为单线程，所以要重试。
+     */
+    suspend fun probeWithRetry(
+        url: String,
+        headers: Map<String, String>,
+        timeoutMs: Long,
+        retries: Int,
+    ): ProbeResult {
+        var last = ProbeResult(null, false, url)
+        repeat(retries + 1) { attempt ->
+            val r = probe(url, headers, timeoutMs = timeoutMs)
+            last = r
+            // 拿到可用结果（支持 Range 或至少知道大小）即可返回
+            if (r.supportsRange || (r.totalSize ?: -1L) > 0) return r
+            if (attempt < retries) delay(500L * (attempt + 1))  // 递增退避
+        }
+        return last
+    }
 
     /**
      * 下载 [start,end] 区间到 [partFile]（断点续传：已存在字节跳过）。
