@@ -99,13 +99,62 @@ internal class SegmentDownloader(
             jobs.awaitAll()
         }
 
-    /** 探测结果：总大小、是否支持 Range、重定向后的最终 URL。 */
+    /** 探测结果：总大小、是否支持 Range、重定向后的最终 URL，以及服务器元数据（尽力而为，可为空）。 */
     data class ProbeResult(
         val totalSize: Long?,
         val supportsRange: Boolean,
         /** 跟随 3xx 重定向后的最终 URL（网盘原始链接常 302 到带签名的 CDN 临时直链）。 */
         val resolvedUrl: String,
-    )
+        /** 强校验器 ETag（若服务器提供）。用于续传前校验文件是否已变更。 */
+        val etag: String? = null,
+        /** 弱校验器 Last-Modified（若服务器提供）。 */
+        val lastModified: String? = null,
+        /** 服务器建议的文件名（Content-Disposition，其次 URL 末段）。 */
+        val suggestedFileName: String? = null,
+        /** Content-Type（可用于补全扩展名等，纯信息）。 */
+        val contentType: String? = null,
+    ) {
+        /**
+         * 续传校验令牌：把「大小 + ETag + Last-Modified」压成一个字符串。
+         * 只要服务器侧文件发生变化，该令牌就会变化 → 上层据此丢弃过期分片，避免合并出损坏文件。
+         * 三者都拿不到时为空串，表示无法校验（此时按旧行为宽松续传）。
+         */
+        val validator: String
+            get() = listOfNotNull(
+                totalSize?.takeIf { it > 0 }?.let { "len=$it" },
+                etag?.takeIf { it.isNotBlank() }?.let { "etag=$it" },
+                lastModified?.takeIf { it.isNotBlank() }?.let { "lm=$it" },
+            ).joinToString("|")
+    }
+
+    /**
+     * 从 Content-Disposition 解析文件名（优先 RFC 5987 的 filename*，其次 filename），
+     * 解析失败返回 null。会剥除路径分隔符，避免目录穿越。
+     */
+    private fun parseContentDisposition(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        // filename*=UTF-8''%E4%B8%AD%E6%96%87.zip
+        Regex("filename\\*\\s*=\\s*([^']*)'[^']*'([^;]+)", RegexOption.IGNORE_CASE)
+            .find(value)?.let { m ->
+                val charset = m.groupValues[1].trim().ifBlank { "UTF-8" }
+                val raw = m.groupValues[2].trim().trim('"')
+                runCatching { java.net.URLDecoder.decode(raw, charset) }.getOrNull()
+                    ?.let { return sanitizeFileName(it) }
+            }
+        // filename="xxx.zip" 或 filename=xxx.zip
+        Regex("filename\\s*=\\s*\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+            .find(value)?.let { m ->
+                return sanitizeFileName(m.groupValues[1].trim())
+            }
+        return null
+    }
+
+    /** 剥除路径分隔符与非法字符，仅保留安全的文件名。 */
+    private fun sanitizeFileName(name: String): String? {
+        val base = name.substringAfterLast('/').substringAfterLast('\\').trim()
+        if (base.isBlank() || base == "." || base == "..") return null
+        return base.map { if (it in "\\/:*?\"<>|" || it.code < 0x20) '_' else it }.joinToString("")
+    }
 
     /**
      * 探测总大小与 Range 支持，并返回重定向后的最终 URL。
@@ -139,21 +188,34 @@ internal class SegmentDownloader(
                 call.execute().use { resp ->
                     // resp.request.url 是跟随所有 3xx 之后的最终地址（原始链接 302→CDN 临时直链）。
                     val finalUrl = resp.request.url.toString()
+                    // 元数据均为“尽力而为”：拿不到不影响下载，仅用于续传校验与命名。
+                    val etag = resp.header("ETag")?.trim()?.takeIf { it.isNotBlank() }
+                    val lastMod = resp.header("Last-Modified")?.trim()?.takeIf { it.isNotBlank() }
+                    val ctype = resp.header("Content-Type")?.trim()?.takeIf { it.isNotBlank() }
+                    val suggested = parseContentDisposition(resp.header("Content-Disposition"))
+                        ?: sanitizeFileName(
+                            finalUrl.substringBefore('?').substringAfterLast('/')
+                                .let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+                        )
                     if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
-                        return@use ProbeResult(null, false, finalUrl)
+                        return@use ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype)
                     }
                     when (resp.code) {
                         206 -> {
                             val total = resp.header("Content-Range")
                                 ?.substringAfter('/')?.toLongOrNull()
-                            ProbeResult(total, true, finalUrl)
+                            ProbeResult(total, true, finalUrl, etag, lastMod, suggested, ctype)
                         }
                         200 -> {
-                            // 不支持 Range：返回整文件
+                            // 未返回 206：多数为不支持 Range；但若服务器声明 Accept-Ranges: bytes，
+                            // 则仍视为支持分片（部分 CDN 对 bytes=0-0 这种退化区间直接回 200，
+                            // 旧逻辑会误判为不支持而白白退化成单线程）。
                             val total = resp.header("Content-Length")?.toLongOrNull()
-                            ProbeResult(total, false, finalUrl)
+                            val acceptRanges = resp.header("Accept-Ranges")
+                                .orEmpty().contains("bytes", ignoreCase = true)
+                            ProbeResult(total, acceptRanges, finalUrl, etag, lastMod, suggested, ctype)
                         }
-                        else -> ProbeResult(null, false, finalUrl)
+                        else -> ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype)
                     }
                 }
             } catch (e: CancellationException) {

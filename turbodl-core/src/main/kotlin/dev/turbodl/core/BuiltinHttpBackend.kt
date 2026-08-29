@@ -43,10 +43,38 @@ internal class BuiltinHttpBackend(
         )
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
+        // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
+        runCatching {
+            context.reportMetadata(
+                suggestedFileName = probe.suggestedFileName,
+                contentType = probe.contentType,
+                etag = probe.etag,
+                lastModified = probe.lastModified,
+            )
+        }
         // 关键：后续分片/整文件下载均使用重定向后的最终 URL（如网盘原始链 302→CDN 临时直链）。
         // 否则每个分片连接都重走 302，可能命中不同节点或被拒，表现为“显示下载中但字节/线程不动”。
         val effectiveUrl = probe.resolvedUrl.ifBlank { request.url }
         val supportsRange = probe.supportsRange
+
+        // ---------- 续传校验（尽力而为，失败不阻断下载）----------
+        // 思路参考 aria2 的 .aria2 控制文件与 IDM 的续传校验：把「大小+ETag+Last-Modified」
+        // 写入分片目录旁的 .validator。下次续传前对比：不一致说明服务器侧文件已变更，
+        // 旧分片不能再用（否则合并出一个新旧混杂的损坏文件，而且大小校验可能恰好通过）。
+        // 服务器不提供任何校验器时 validator 为空串 → 不做强制，保持旧的宽松续传行为。
+        run {
+            val marker = File(chunkDir, ".validator")
+            val now = probe.validator
+            if (now.isNotEmpty()) {
+                val prev = runCatching { if (marker.isFile) marker.readText().trim() else "" }.getOrDefault("")
+                if (prev.isNotEmpty() && prev != now) {
+                    // 文件已变更：静默丢弃过期分片，从头下（不报错，对用户透明）
+                    chunkDir.listFiles()?.forEach { f -> runCatching { f.delete() } }
+                    chunkDir.mkdirs()
+                }
+                runCatching { marker.writeText(now) }
+            }
+        }
 
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
         if (!supportsRange || total <= 0) {

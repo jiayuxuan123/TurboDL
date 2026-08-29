@@ -70,6 +70,19 @@ interface BackendContext {
     /** Report the authoritative total size once known (-1 if unknown/streaming). */
     fun reportTotalSize(total: Long)
 
+    /**
+     * 上报探测到的服务器元数据（尽力而为：任何字段都可能为 null）。
+     *
+     * 仅供宿主参考（如用服务器建议文件名重命名、记录 MIME），不影响引擎行为。
+     * 默认空实现，第三方 backend 无需实现。
+     */
+    fun reportMetadata(
+        suggestedFileName: String?,
+        contentType: String?,
+        etag: String?,
+        lastModified: String?,
+    ) { /* no-op by default */ }
+
     /** Report cumulative downloaded bytes and current active connection count. */
     suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int)
 }

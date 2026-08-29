@@ -224,6 +224,26 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             override fun isActive(): Boolean = taskJob?.isActive == true
             override suspend fun throttle(bytes: Long) = speedLimiter.awaitAllow(bytes)
             override fun reportTotalSize(total: Long) { totalRef.set(total) }
+            override fun reportMetadata(
+                suggestedFileName: String?,
+                contentType: String?,
+                etag: String?,
+                lastModified: String?,
+            ) {
+                // 静默发一个元数据事件：宿主可选择消费（重命名/补扩展名），不消费也不影响下载。
+                emit(
+                    TurboEvent.Metadata(
+                        taskId = id,
+                        suggestedFileName = suggestedFileName,
+                        contentType = contentType,
+                        etag = etag,
+                        lastModified = lastModified,
+                        totalBytes = totalRef.get(),
+                        supportsRange = totalRef.get() > 0,
+                        resolvedUrl = request.url,
+                    )
+                )
+            }
             override suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int) {
                 downloadedRef.set(absoluteBytes)
                 liveConnsRef.set(activeConnections)

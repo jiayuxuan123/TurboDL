@@ -81,4 +81,23 @@ sealed interface TurboEvent {
     data class Progress(override val taskId: Long, val progress: TaskProgress) : TurboEvent
     data class Completed(override val taskId: Long, val file: java.io.File, val totalBytes: Long) : TurboEvent
     data class Failed(override val taskId: Long, val reason: String) : TurboEvent
+
+    /**
+     * 探测到的服务器元数据（静默事件，尽力而为）。
+     *
+     * 任何字段都可能为 null（服务器未提供）。宿主可选择消费：
+     * 例如用 [suggestedFileName] 修正下载名（URL 末段常是无意义的 UUID）、
+     * 用 [contentType] 补全扩展名、用 [etag]/[lastModified] 做自己的缓存判断。
+     * 不消费也完全不影响下载。
+     */
+    data class Metadata(
+        override val taskId: Long,
+        val suggestedFileName: String?,
+        val contentType: String?,
+        val etag: String?,
+        val lastModified: String?,
+        val totalBytes: Long,
+        val supportsRange: Boolean,
+        val resolvedUrl: String,
+    ) : TurboEvent
 }
