@@ -46,8 +46,17 @@ internal class SegmentScheduler(
     private val speedLimiter: SpeedLimiter,
 ) {
     private companion object {
-        /** 背压恢复阈值：累计成功这么多个分片后，尝试归还一个并发名额。 */
+        /** 背压恢复阈值：累计成功这么多个分片后，尝试归还并发名额。 */
         const val RAMP_UP_SUCCESS_THRESHOLD = 2
+
+        /**
+         * 每次上调的比例（相对当前目标并发）。
+         *
+         * 旧实现每次只 +1，从慢启动初始值 4 爬到 128 需要 124 次上调、约 248 个成功分片——
+         * 慢网或中小文件根本爬不到设定值，用户会看到「线程数始终远低于设定」。
+         * 改为按比例上调（至少 +1），几十个分片内即可到顶，同时仍是渐进的、不冲击服务器。
+         */
+        const val RAMP_UP_FACTOR = 0.5
 
         /** 被 park 的协程轮询间隔（毫秒）。 */
         const val PARK_POLL_MS = 80L
@@ -147,7 +156,9 @@ internal class SegmentScheduler(
         val slowStartInit = when {
             !config.slowStart -> workers
             config.slowStartInitial > 0 -> min(config.slowStartInitial, workers)
-            else -> min(workers, 4)
+            // 默认初始值随设定并发缩放（至少 4）：固定 4 在 128 连接下起点太低，
+            // 配合比例上调可快速到顶，同时避免一上来就全开冲击服务器。
+            else -> min(workers, max(4, workers / 4))
         }
         /** 动态目标并发（慢启动从 slowStartInit 升、背压时降、健康时升；上限 workers）。 */
         val desired = AtomicInteger(slowStartInit)
@@ -155,12 +166,26 @@ internal class SegmentScheduler(
         val activeConns = AtomicInteger(0)
         /** 正在传输中的分片数（判定“队列空但仍可能有重试回投”）。 */
         val inFlight = AtomicInteger(0)
-
         onConnections(slowStartInit)
 
         fun poll(): Segment? = synchronized(pendingLock) { pending.poll() }
         fun offer(seg: Segment) = synchronized(pendingLock) { pending.offer(seg) }
         fun queueEmpty(): Boolean = synchronized(pendingLock) { pending.isEmpty() }
+        fun queueSize(): Int = synchronized(pendingLock) { pending.size }
+
+        /**
+         * 上报给 UI 的并发数。
+         *
+         * 不能直接用“瞬时在飞分片数”：worker 完成一个分片到领取下一个之间有瞬时空档，
+         * 速度越快、分片完成越频繁，这种空档占比越大，采样到的数字反而越小
+         * ——表现为“速度变快但显示的线程数下降”（用户实测反馈的现象）。
+         * 正确语义是“当前有多少连接在干活”：即目标并发，但受剩余工作量限制
+         * （收尾阶段剩不到 N 块时，确实就只有那么多连接）。
+         */
+        fun reportConns() {
+            val work = inFlight.get() + queueSize()
+            onConnections(min(desired.get(), work).coerceAtLeast(if (work > 0) 1 else 0))
+        }
 
         // ---------- 卡死（stall）守护：思路参考 aria2 --lowest-speed-limit / curl --speed-limit ----------
         // OkHttp 的 readTimeout 只能管“单次 read 阻塞多久”；若 CDN 涓涓吐字节（每几十秒几字节），
@@ -207,7 +232,7 @@ internal class SegmentScheduler(
             val target = max(1, cur / 2)
             if (target < cur) {
                 desired.set(target)
-                onConnections(min(activeConns.get(), target))
+                reportConns()
             }
         }
 
@@ -222,8 +247,12 @@ internal class SegmentScheduler(
             if (desired.get() >= workers) return
             if (consecutiveSuccesses.get() < RAMP_UP_SUCCESS_THRESHOLD) return
             consecutiveSuccesses.set(0)
-            val next = min(workers, desired.incrementAndGet())
-            onConnections(next)
+            val cur = desired.get()
+            // 按比例上调（至少 +1）：从 4 爬到 128 只需十余次，而非 124 次。
+            val step = max(1, (cur * RAMP_UP_FACTOR).toInt())
+            val next = min(workers, cur + step)
+            desired.set(next)
+            reportConns()
         }
 
         val ok = try {
@@ -245,8 +274,8 @@ internal class SegmentScheduler(
                         }
                         if (needWholeFallback.get() || !isActive()) { offer(seg); break }
                         inFlight.incrementAndGet()
-                        val live = activeConns.incrementAndGet()
-                        onConnections(min(live, desired.get()))
+                        activeConns.incrementAndGet()
+                        reportConns()
                         try {
                             val res = downloader.downloadSegment(
                                 taskId, url, seg.start, seg.end, seg.file(chunkDir), headers
@@ -295,8 +324,9 @@ internal class SegmentScheduler(
                                 }
                             }
                         } finally {
-                            onConnections(min(activeConns.decrementAndGet(), desired.get()))
+                            activeConns.decrementAndGet()
                             inFlight.decrementAndGet()
+                            reportConns()
                         }
                     }
                 }

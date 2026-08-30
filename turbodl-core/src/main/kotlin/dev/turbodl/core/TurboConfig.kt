@@ -147,6 +147,16 @@ data class TurboConfig(
     val slowStartInitial: Int = 0,
 
     /**
+     * 预热并发度上限（默认 4）。
+     *
+     * 预热本质上是“提前建好 TCP/TLS 连接”，并不需要开很多：
+     * 在 2.4GHz Wi-Fi / 弱网下，一口气并发几十个握手会互相争抢信道与带宽，
+     * 反而拖慢真正的首字节时间，甚至因堆积超时让任务看起来“卡在下载中”。
+     * 故预热并发与下载并发解耦，默认只开少量。
+     */
+    val warmUpMaxParallel: Int = 4,
+
+    /**
      * 探测（probe）总超时（毫秒，默认 20s）。
      *
      * 探测阶段无界限等待会让任务卡在“看似下载中但字节不动”的状态（connect 15s + read 60s 叠加）。
@@ -196,6 +206,7 @@ data class TurboConfig(
         require(stallTimeoutMs >= 0) { "stallTimeoutMs 不能为负" }
         require(maxStallRecoveries >= 0) { "maxStallRecoveries 不能为负" }
         require(warmUpTimeoutMs >= 500) { "warmUpTimeoutMs 至少 500ms" }
+        require(warmUpMaxParallel >= 1) { "warmUpMaxParallel 至少 1" }
     }
 
     /**

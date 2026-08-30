@@ -121,8 +121,13 @@ internal class BuiltinHttpBackend(
         // 连接预热 / DNS 预解析：正式分片前先对解析后的最终 URL 建好若干连接（并解析 DNS），
         // 填充连接池，避免分片启动时串行等待 DNS + TCP/TLS 握手。
         if (context.config.warmUpConnections) {
-            val warmCount = context.config.warmUpConnectionCount.takeIf { it > 0 }
-                ?: minOf(connections, 8)
+            // 预热并发与下载并发解耦：只需少量连接就能把 DNS/TLS 热起来。
+            // 若按下载并发（如 64/128）并发预热，弱网/2.4GHz Wi-Fi 下会互相争抢信道，
+            // 反而拖慢首字节时间，表现为“开头卡住”。
+            val warmCount = minOf(
+                context.config.warmUpConnectionCount.takeIf { it > 0 } ?: connections,
+                context.config.warmUpMaxParallel,
+            ).coerceAtLeast(1)
             runCatching {
                 downloader.warmUp(
                     effectiveUrl, request.headers, warmCount,
