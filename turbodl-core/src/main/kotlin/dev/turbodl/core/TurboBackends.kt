@@ -21,7 +21,7 @@ object TurboBackends {
      */
     fun builtinHttp(clientConfig: TurboConfig = TurboConfig()): DownloadBackend {
         val client = TurboHttpClients.create(clientConfig)
-        val downloader = SegmentDownloader({ client }, { client })
+        val downloader = SegmentDownloader({ client }, { client }, { clientConfig.ioBufferSize })
         return BuiltinHttpBackend(downloader)
     }
 }

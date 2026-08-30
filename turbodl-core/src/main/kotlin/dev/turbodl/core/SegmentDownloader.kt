@@ -49,6 +49,8 @@ internal class SegmentDownloader(
     private val clientProvider: () -> OkHttpClient,
     /** 整文件/探测专用客户端（允许 h2）；null 时回退用 [clientProvider]。 */
     private val streamClientProvider: (() -> OkHttpClient)? = null,
+    /** IO 缓冲区大小（字节）；默认 1MB。过小会在高吞吐时产生大量回调开销。 */
+    private val bufferSizeProvider: () -> Int = { DEFAULT_BUFFER },
 ) {
 
     private val client get() = clientProvider()
@@ -60,7 +62,7 @@ internal class SegmentDownloader(
     }
 
     companion object {
-        private const val BUFFER = 256 * 1024
+        private const val DEFAULT_BUFFER = 1024 * 1024
     }
 
     /**
@@ -264,10 +266,13 @@ internal class SegmentDownloader(
         partFile: File,
         headers: Map<String, String>,
         onBytes: suspend (Long) -> Unit,
-    ): SegmentResult = withContext(Dispatchers.IO) {
+        // 分片下载不再内部 withContext(Dispatchers.IO)：调度器已由调用方（SegmentScheduler）
+        // 用 limitedParallelism 开好专用的阻塞 IO 池。若这里再切回共享的 Dispatchers.IO，
+        // 会直接抵消专用池的作用，并重新受 max(64, cpus) 默认并行度限制。
+    ): SegmentResult {
         val existing = partFile.length()
         val expected = end - start + 1
-        if (existing >= expected) return@withContext SegmentResult.OK
+        if (existing >= expected) return SegmentResult.OK
         val from = start + existing
 
         val req = Request.Builder()
@@ -280,7 +285,7 @@ internal class SegmentDownloader(
         val call = client.newCall(req)
         activeCalls.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(call)
         val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
-        try {
+        return try {
             call.execute().use { resp ->
                 if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
                     return@use SegmentResult.FAILED
@@ -355,7 +360,7 @@ internal class SegmentDownloader(
                 RandomAccessFile(outFile, "rw").use { raf ->
                     raf.seek(0)
                     body.byteStream().use { input ->
-                        val buf = ByteArray(BUFFER)
+                        val buf = ByteArray(bufferSizeProvider().coerceAtLeast(8 * 1024))
                         while (true) {
                             val n = input.read(buf)
                             if (n <= 0) break
@@ -392,7 +397,7 @@ internal class SegmentDownloader(
         var written = 0L
         RandomAccessFile(partFile, "rw").use { raf ->
             raf.seek(seekPos)
-            val buf = ByteArray(BUFFER)
+            val buf = ByteArray(bufferSizeProvider().coerceAtLeast(8 * 1024))
             while (true) {
                 val n = input.read(buf)
                 if (n <= 0) break

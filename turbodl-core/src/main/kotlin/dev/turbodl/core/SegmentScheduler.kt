@@ -44,8 +44,7 @@ internal class SegmentScheduler(
     private val downloader: SegmentDownloader,
     private val config: TurboConfig,
     private val speedLimiter: SpeedLimiter,
-) {
-    private companion object {
+) {    private companion object {
         /** 背压恢复阈值：累计成功这么多个分片后，尝试归还并发名额。 */
         const val RAMP_UP_SUCCESS_THRESHOLD = 2
 
@@ -105,6 +104,15 @@ internal class SegmentScheduler(
         // 表现为“设 64 线程却只跑 16 / 速度骤降”。这里仅当 >0 时限幅。
         val hostCap = config.maxConnectionsPerHost.takeIf { it > 0 } ?: Int.MAX_VALUE
         val workers = connections.coerceIn(1, 256).coerceAtMost(hostCap).coerceAtLeast(1)
+
+        // ---------- 专用阻塞 IO 调度器（关键吞吐修正）----------
+        // Dispatchers.IO 的默认并行度是 max(64, CPU 核数)。分片下载是**阻塞式** socket read，
+        // 一个分片占死一个线程；因此设 128 连接时实际最多只有 ~64 个能同时搜数据，
+        // 其余在调度器队列里干等——这既压低吞吐，也是“线程数卡在 64”的硬天花板。
+        // 另外与其他库共用 Dispatchers.IO 还会互相抢线程。故为本任务开专用调度器，
+        // 并行度 = workers + 少量余量（给守护/回调用）。
+        val ioDispatcher = Dispatchers.IO.limitedParallelism(workers + 4)
+
 
         // ---------- 块大小：按「连接数」反推，保证固定 N 线程全部跑满 ----------
         val targetSegments = workers.toLong() *
@@ -193,7 +201,7 @@ internal class SegmentScheduler(
         // 超过 stallTimeoutMs 零增长 → cancel 所有在飞请求，分片回到重试链路（重建连接、可能换节点）。
         val stallRecoveries = AtomicInteger(0)
         val stallFailure = AtomicReference<String?>(null)
-        val watchdog = if (config.stallTimeoutMs > 0) launch(Dispatchers.IO) {
+        val watchdog = if (config.stallTimeoutMs > 0) launch(ioDispatcher) {
             var lastBytes = -1L
             var lastChange = System.currentTimeMillis()
             while (isActive() && !needWholeFallback.get()) {
@@ -257,7 +265,7 @@ internal class SegmentScheduler(
 
         val ok = try {
             val jobs = List(workers) { idx ->
-                async(Dispatchers.IO) {
+                async(ioDispatcher) {
                     if (idx in 1..8) delay(idx * 20L)  // 错峰建连
                     while (isActive() && !needWholeFallback.get()) {
                         // 索引自闸门：超出当前目标并发的协程 park（不占许可、随时可复活）。

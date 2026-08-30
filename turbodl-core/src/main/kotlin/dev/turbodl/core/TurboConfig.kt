@@ -167,6 +167,25 @@ data class TurboConfig(
     val skipProbeWhenSizeKnown: Boolean = true,
 
     /**
+     * 分片读写缓冲区大小（字节，默认 1MB）。
+     *
+     * 缓冲区越小 → 单位时间内 read/write 与进度回调次数越多，高吞吐时开销显著：
+     * 256KB 缓冲在 50MB/s 下每秒要跑 200 次完整回调链路。取 1MB 在内存与吞吐间平衡。
+     */
+    val ioBufferSize: Int = 1024 * 1024,
+
+    /**
+     * 进度上报最小间隔（毫秒，默认 200ms）0 = 不节流。
+     *
+     * 这是**吞吐量的关键**：每次 reportProgress 会重建进度 Map、发一个事件（启动协程），
+     * 宿主侧还可能写数据库/刷 UI。若每个缓冲块都上报，64 连接 × 高速下载
+     * 会每秒产生上千次 Map 重建与协程调度，把 CPU 耗在上报而不是搜数据上。
+     * 节流后仅按固定频率刷新，对 UI 完全够用（人眼看不出 200ms 差异）。
+     * 完成/失败/状态切换等关键事件不受节流影响。
+     */
+    val progressIntervalMs: Long = 200,
+
+    /**
      * 探测（probe）单次超时（毫秒，默认 6s）。
      *
      * 探测只是为了拿到总大小/Range 支持/重定向地址，它**不传输数据**，
@@ -223,6 +242,8 @@ data class TurboConfig(
         require(maxStallRecoveries >= 0) { "maxStallRecoveries 不能为负" }
         require(warmUpTimeoutMs >= 500) { "warmUpTimeoutMs 至少 500ms" }
         require(warmUpMaxParallel >= 1) { "warmUpMaxParallel 至少 1" }
+        require(ioBufferSize >= 8 * 1024) { "ioBufferSize 至少 8KB" }
+        require(progressIntervalMs >= 0) { "progressIntervalMs 不能为负" }
     }
 
     /**

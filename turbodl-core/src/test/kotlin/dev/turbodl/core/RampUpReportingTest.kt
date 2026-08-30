@@ -77,6 +77,7 @@ class RampUpReportingTest {
                 maxConcurrentTasks = 1,
                 slowStart = true,
                 warmUpConnections = false,
+                progressIntervalMs = 0,   // 关闭节流：本用例专测爬升，需要密集采样
             )
         )
         val maxReported = AtomicInteger(0)
@@ -115,6 +116,7 @@ class RampUpReportingTest {
                 maxConcurrentTasks = 1,
                 slowStart = false,          // 直接全开，专测上报语义
                 warmUpConnections = false,
+                progressIntervalMs = 0,   // 关闭节流：需要密集采样才能统计占比
             )
         )
         // 关键：用户抱怨的是“持续显示的数字下降”，而非峰值达不到。

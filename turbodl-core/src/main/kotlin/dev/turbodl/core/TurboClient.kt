@@ -59,7 +59,12 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     private var streamClient = HttpClientFactory.build(config, HttpClientFactory.ProtocolPreference.ALLOW_H2)
 
     // 分片下载器用 H1 客户端；整文件/探测下载器用允许 h2 的客户端。
-    private val downloader = SegmentDownloader({ segmentClient }, { streamClient })
+    // 缓冲区大小从配置读取（默认 1MB）：过小会在高吞吐时产生大量 read/回调开销。
+    private val downloader = SegmentDownloader(
+        { segmentClient },
+        { streamClient },
+        { config.ioBufferSize },
+    )
     private val speedLimiter = SpeedLimiter { config.globalSpeedLimitBytesPerSec }
 
     /** Built-in HTTP backend; always available so core works standalone. */
@@ -210,6 +215,8 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         val downloadedRef = AtomicLong(0)
         val speedRec = SpeedRecorder()
         val totalRef = AtomicLong(-1)
+        /** 上次进度上报时间（节流用）。 */
+        val lastProgressAt = AtomicLong(0)
         val liveConnsRef = AtomicInteger(request.connectionsOverride ?: config.maxConnectionsPerTask)
         val taskJob = coroutineContext[Job]
 
@@ -247,6 +254,15 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             override suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int) {
                 downloadedRef.set(absoluteBytes)
                 liveConnsRef.set(activeConnections)
+                // 进度上报节流：每次上报都要重建进度 Map + 启协程发事件，宿主侧还可能写库/刷 UI。
+                // 高速多连接下不节流会每秒上千次，把 CPU 耗在上报而非搜数据——直接压低吞吐。
+                val interval = this@TurboClient.config.progressIntervalMs
+                if (interval > 0) {
+                    val now = System.currentTimeMillis()
+                    val last = lastProgressAt.get()
+                    if (now - last < interval) return
+                    if (!lastProgressAt.compareAndSet(last, now)) return
+                }
                 val total = totalRef.get()
                 val speed = speedRec.sample(absoluteBytes)
                 val eta = if (speed != null && speed > 0 && total > 0) (total - absoluteBytes) * 1000 / speed else -1L
@@ -325,16 +341,20 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     }
 
     private fun updateProgress(id: Long, transform: (TaskProgress) -> TaskProgress) {
+        var next: TaskProgress? = null
         _progress.update { map ->
             val cur = map[id] ?: TaskProgress(
                 taskId = id, state = TaskState.QUEUED,
                 downloadedBytes = 0, totalBytes = -1,
                 speedBytesPerSec = 0, activeConnections = 0, etaMillis = -1,
             )
-            val next = transform(cur)
-            emit(TurboEvent.Progress(id, next))
-            map + (id to next)
+            val n = transform(cur)
+            next = n
+            map + (id to n)
         }
+        // 事件在 update 外发：StateFlow.update 的 lambda 在竞争时会被**重复执行**，
+        // 旧实现在 lambda 内 emit 会在多连接高频上报时发出重复/乱序事件，并白白多启协程。
+        next?.let { emit(TurboEvent.Progress(id, it)) }
     }
 
     /**
