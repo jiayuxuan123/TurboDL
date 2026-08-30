@@ -32,15 +32,23 @@ internal class BuiltinHttpBackend(
         val chunkDir = context.workDir
         val speedLimiter = SpeedLimiter { context.config.globalSpeedLimitBytesPerSec }
 
-        // Probe size + Range support. 同时拿到重定向后的最终 URL。
-        // 带超时与重试：探测无界限等待会让任务卡在“看似下载中但字节为 0”，
-        // 且瞬时抖动不应直接退化成单线程整文件下载。
-        val probe = downloader.probeWithRetry(
-            request.url,
-            request.headers,
-            timeoutMs = context.config.probeTimeoutMs,
-            retries = context.config.probeRetries,
-        )
+        // ---------- 探测：必须快，且不能阻塞下载开始 ----------
+        // 设计取舍：探测只为拿到大小/Range/重定向地址，它**不传输数据**。
+        // 旧实现 20s × 3 次 + 退避 ≈ 最坏 61s 全程阻塞，用户看到的就是“解析卡一分钟”。
+        // 现在：调用方已知大小时直接跳过探测；否则单次 6s、最多 1 次重试。
+        val knownSize = request.knownSize.takeIf { it > 0 } ?: -1L
+        val probe = if (context.config.skipProbeWhenSizeKnown && knownSize > 0) {
+            // 已知大小：乐观假设支持 Range 直接开工。若实际不支持，
+            // 首个分片会拿到 200 整文件并走已有的 RANGE_IGNORED 回退链路，正确性不受影响。
+            SegmentDownloader.ProbeResult(knownSize, true, request.url)
+        } else {
+            downloader.probeWithRetry(
+                request.url,
+                request.headers,
+                timeoutMs = context.config.probeTimeoutMs,
+                retries = context.config.probeRetries,
+            )
+        }
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
         // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
@@ -128,11 +136,16 @@ internal class BuiltinHttpBackend(
                 context.config.warmUpConnectionCount.takeIf { it > 0 } ?: connections,
                 context.config.warmUpMaxParallel,
             ).coerceAtLeast(1)
-            runCatching {
-                downloader.warmUp(
-                    effectiveUrl, request.headers, warmCount,
-                    timeoutMs = context.config.warmUpTimeoutMs,
-                )
+            // 关键：预热**不得阻塞下载开始**。旧实现会等到预热全部完成（最坏 8s）才开工，
+            // 叠加在探测之后就是用户感知到的“解析很慢”。现在后台异步跑：
+            // 分片立即开始，预热建好的连接会自然进连接池被后续分片复用。
+            kotlinx.coroutines.CoroutineScope(currentCtx).launch {
+                runCatching {
+                    downloader.warmUp(
+                        effectiveUrl, request.headers, warmCount,
+                        timeoutMs = context.config.warmUpTimeoutMs,
+                    )
+                }
             }
         }
 

@@ -157,15 +157,31 @@ data class TurboConfig(
     val warmUpMaxParallel: Int = 4,
 
     /**
-     * 探测（probe）总超时（毫秒，默认 20s）。
+     * 已知文件大小时跳过探测（默认 true）。
      *
-     * 探测阶段无界限等待会让任务卡在“看似下载中但字节不动”的状态（connect 15s + read 60s 叠加）。
-     * 超时后按 [probeRetries] 重试，全部失败才回退到整文件单流。
+     * 调用方（如网盘解析）已经知道准确大小时，再花数秒去探测一次是纯浪费。
+     * 此时乐观假设支持 Range 直接开始分片；若服务器实际不支持，
+     * 首个分片会收到 200 整文件并触发已有的 RANGE_IGNORED 回退链路，正确性不受影响。
+     * 代价仅是得不到重定向后的最终 URL——故仅在调用方未要求强制探测时生效。
      */
-    val probeTimeoutMs: Long = 20_000,
+    val skipProbeWhenSizeKnown: Boolean = true,
 
-    /** 探测失败/超时的重试次数（默认 2）。避免瞬时网络抖动直接退化为单线程。 */
-    val probeRetries: Int = 2,
+    /**
+     * 探测（probe）单次超时（毫秒，默认 6s）。
+     *
+     * 探测只是为了拿到总大小/Range 支持/重定向地址，它**不传输数据**，
+     * 因此必须快：健康服务器百毫秒级就会回头，拖到几十秒的只能是异常路径。
+     * 超时值过大会直接体现为“点了下载但一直在解析”。
+     */
+    val probeTimeoutMs: Long = 6_000,
+
+    /**
+     * 探测失败/超时的重试次数（默认 1）。
+     *
+     * 注意：探测失败并不致命（大不了整文件单流），所以不值得为它多等。
+     * 总阻塞上限 ≈ probeTimeoutMs × (probeRetries+1) + 退避，请匀控制在数秒内。
+     */
+    val probeRetries: Int = 1,
 
     /**
      * 卡死（stall）检测阈值（毫秒，默认 45s）0 = 关闭。
