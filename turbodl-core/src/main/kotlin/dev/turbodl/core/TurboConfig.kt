@@ -12,8 +12,35 @@ package dev.turbodl.core
  * 全部字段可在运行时读取（部分需在任务启动前设定，见注释）。
  */
 data class TurboConfig(
-    /** 每个任务的最大连接数（分片并发上限）。范围 1..256。 */
-    val maxConnectionsPerTask: Int = 8,
+    /**
+     * 每个任务的最大连接数（分片并发上限）。范围 1..256。
+     *
+     * ## 【2026-09-14 实测】8 → 16
+     *
+     * `Phase1ABTest` 场景 1（本地服务器**每连接限速 2MB/s**，24MB 文件）：
+     *
+     * | 连接数 | 吞吐 |
+     * |---|---|
+     * | 8（旧默认） | 7.3 MB/s |
+     * | 16 | 8.9 MB/s |
+     * | **64** | **12.1 MB/s** |
+     *
+     * **+65%，且单调**。机制很直接：服务器按**每条连接**限速时，
+     * 总吞吐 = 单连接上限 × 连接数 —— 此时**连接数就是唯一的倍率**，
+     * 任何分片粒度调参都无法替代它。
+     *
+     * 这与"分片粒度"是两个独立维度：粒度管的是**请求开销**（同速链路下越粗越好），
+     * 连接数管的是**带宽倍率**（按连接限速时越多越好）。
+     *
+     * 取 16 而不是 64，是保守折中：
+     *  - aria2 `--max-connection-per-server` **默认 1、硬上限 16**；
+     *  - Motrix `balanced` 档用 16，只有 `maximum` 才用 64；
+     *  - 对同一 host 开太多连接会被部分服务器**主动限流甚至封禁**，
+     *    而 429/503 的降级是**事后**的（靠背压与退避兜底），代价比一开始就克制更高。
+     *
+     * 需要更激进时，宿主可显式提高（如 64）；配合 [maxConnectionsPerHost] 控制单 host 压力。
+     */
+    val maxConnectionsPerTask: Int = 16,
 
     /** 同时下载的最大任务数（队列并发）。范围 1..64。 */
     val maxConcurrentTasks: Int = 3,
@@ -64,8 +91,36 @@ data class TurboConfig(
     /**
      * 每个连接分配的块数（工作窃取粒度）。
      *
-     * 块数 = 连接数 × 本值，使快连接能不断领新块、慢连接不拖累整体（等效 IDM/XDM 动态分段的消除长尾）。
-     * 调大更均衢但请求次数增加；范围 1..64。
+     * `块数 = 连接数 × 本值`。它同时服务两个**互相拉扯**的目标：
+     *
+     * - **调大** → 快连接能在自己那份干完后**抢走慢连接剩余的块**（消除长尾）；
+     *   代价是请求数变多，而每块一次请求要付一次首字节往返。
+     * - **调小** → 请求数少、往返开销小；代价是长尾无人接手。
+     *
+     * ## 【2026-09-14 两组实测】结论：保持 4
+     *
+     * **实验一（连接速度完全相同）** `Phase1ABTest` / `RealNetworkABTest`：
+     * 8 连接 32 块 26.8 MB/s → 8 连接 8 块 55.6 MB/s（模拟网络 ×2.1）；
+     * 真实网络（GitHub Release）1.75 → 2.11 MB/s。
+     * → 看起来「块越少越快」。
+     *
+     * **实验二（1/8 连接限速 200KB/s）** `WorkStealingValueTest`：
+     * | 块数 | 耗时 | 吞吐 |
+     * |---|---|---|
+     * | 8 块 | 10457 ms | 1.53 MB/s |
+     * | 16 块 | 5503 ms | 2.91 MB/s |
+     * | **32 块** | **2922 ms** | **5.48 MB/s** |
+     * → 慢连接存在时，**32 块比 8 块快 3.6 倍**。
+     *
+     * **为什么两组结论相反**：实验一里所有连接速度相同，
+     * **工作窃取没有任何可窃取的东西** —— 它结构性地把"多块"的收益归零，
+     * 只留下"请求数变多"的代价。真实网络的连接速度是不均的，
+     * 所以实验二才是有代表性的那个。
+     *
+     * **为什么仍取 4**：两个方向的损失不对称 ——
+     * 选小了（8 块）在有慢连接时损失 **3.6 倍**；
+     * 选大了（32 块）在理想均速链路下损失约 **2.1 倍**（且该组数据在多次运行间抖动较大）。
+     * 4 是对"未知链路质量"更稳的折中：等价于给每个连接留 4 轮窃取余量。
      */
     val segmentsPerConnection: Int = 4,
 
@@ -265,7 +320,11 @@ data class TurboConfig(
         require(globalSpeedLimitBytesPerSec >= 0) { "globalSpeedLimitBytesPerSec 不能为负" }
         require(maxRetries in 0..50) { "maxRetries 必须在 0..50" }
         require(minSegmentSize >= 4096) { "minSegmentSize 至少 4KB" }
-        require(blockSize >= minSegmentSize) { "blockSize 不能小于 minSegmentSize" }
+        // 【放开】原先要求 `blockSize >= minSegmentSize`，本意是"上限不能小于下限"，
+        // 但这条约束让"对齐 aria2/Motrix 的 20MB 分片"这类配置**根本无法表达**。
+        // 二者语义其实不同：minSegmentSize 是"别切太碎"的下限，
+        // blockSize 是"单块别太大"的上限；当上限小于下限时，上限胜出即可，无需报错。
+        // 实际生效值由 SegmentScheduler 的 effBlock 计算决定（见那里的注释）。
         require(segmentsPerConnection in 1..64) { "segmentsPerConnection 必须在 1..64" }
         require(maxConnectionsPerHost >= 0) { "maxConnectionsPerHost 不能为负" }
         require(warmUpConnectionCount >= 0) { "warmUpConnectionCount 不能为负" }

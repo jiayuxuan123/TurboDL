@@ -118,9 +118,14 @@ internal class SegmentScheduler(
         val targetSegments = workers.toLong() *
             config.segmentsPerConnection.coerceIn(1, 64).toLong()
         val effBlock = run {
+            // blockSize 是**硬上限**，永远优先；minSegmentSize 是**软下限**，被上限压制。
+            // 二者取"上限优先"是为了让 `minSegmentSize > blockSize` 这种组合仍能表达
+            // （对齐 aria2/Motrix 的 20MB 分片需要它），而不会让下限压倒上限。
+            val hardCap = max(1L, config.blockSize)
+            val softFloor = min(config.minSegmentSize, max(1L, total / workers))
+                .coerceAtMost(hardCap)
             val byConnections = if (targetSegments > 0) total / targetSegments else total
-            byConnections.coerceIn(1L, config.blockSize)
-                .coerceAtLeast(min(config.minSegmentSize, max(1L, total / workers)))
+            byConnections.coerceIn(1L, hardCap).coerceAtLeast(softFloor)
         }
 
         // ---------- 预分块：整文件切成 [effBlock] 大小的连续区间 ----------
