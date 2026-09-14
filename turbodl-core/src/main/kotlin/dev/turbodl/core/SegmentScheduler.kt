@@ -233,6 +233,17 @@ internal class SegmentScheduler(
         } else null
 
 
+        /**
+         * 显式退避时长（对齐 aria2 `retry-wait` 语义）。
+         *
+         * 指数退避 + 上限：1s, 2s, 4s, 8s, 16s, 32s…（封顶 60s）。
+         * 旧实现在 429/503 后**立即回投**同一分片，属于"越挫越勇"式重投，
+         * 反而加剧限流乃至封禁；aria2 对此的注释是
+         * "Hammering 'busy' server is not a good idea."
+         */
+        fun backoffMsFor(attempt: Int): Long =
+            (1_000L shl attempt.coerceIn(0, 10)).coerceAtMost(60_000L)
+
         /** 背压下调：乘性减半（不低于 1）。仅调整目标整数，被 park 的协程自然让出。 */
         fun throttleDown() {
             if (config.backpressureConsecutiveFailures <= 0) return
@@ -295,7 +306,13 @@ internal class SegmentScheduler(
                             }
                             when (res) {
                                 SegmentResult.OK -> {
-                                    consecutiveFailures.set(0)
+                                    // 【S4 修复】不再"每次成功都清零"。
+                                    // 旧实现 OK 时 consecutiveFailures.set(0)，导致"间歇 429"
+                                    // （如每 8 次出 1 次）永远凑不满连续 4 次失败 → 降级永不触发
+                                    // → 引擎持续以高并发冲击服务器 → 被封禁。
+                                    // 改为**衰减**：每次成功只减 1，让间歇失败能累积到阈值，
+                                    // 同时持续健康时又能自然回落到 0。
+                                    consecutiveFailures.updateAndGet { if (it > 0) it - 1 else 0 }
                                     consecutiveSuccesses.incrementAndGet()
                                     rampUpIfHealthy()
                                 }
@@ -309,7 +326,19 @@ internal class SegmentScheduler(
                                 SegmentResult.THROTTLED -> {
                                     consecutiveSuccesses.set(0)
                                     val n = consecutiveFailures.incrementAndGet()
-                                    offer(Segment(seg.start, seg.end, seg.attempts))
+                                    seg.attempts++
+                                    if (seg.attempts > config.maxRetries) {
+                                        failReason.compareAndSet(
+                                            null,
+                                            "分片 ${seg.start}-${seg.end} 持续被限流（429/503），重试 ${seg.attempts} 次后放弃"
+                                        )
+                                    } else {
+                                        // 【P1-3 修复】显式退避后再回投。
+                                        // 旧实现 429 后立即 offer(seg) → 同一分片立刻重投 →
+                                        // "Hammering 'busy' server is not a good idea"（aria2 原话）。
+                                        delay(backoffMsFor(seg.attempts - 1))
+                                        offer(seg)
+                                    }
                                     if (config.backpressureConsecutiveFailures in 1..n) {
                                         throttleDown(); consecutiveFailures.set(0)
                                     }
@@ -324,6 +353,8 @@ internal class SegmentScheduler(
                                             "分片 ${seg.start}-${seg.end} 重试 ${seg.attempts} 次仍失败"
                                         )
                                     } else {
+                                        // 网络类失败也做轻度退避，避免瞬时故障下的密集重投。
+                                        delay(backoffMsFor((seg.attempts - 1).coerceAtMost(3)))
                                         offer(seg)  // 仅重试该分片
                                     }
                                     if (config.backpressureConsecutiveFailures in 1..n) {

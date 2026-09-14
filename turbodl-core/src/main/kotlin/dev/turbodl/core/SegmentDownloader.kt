@@ -63,6 +63,12 @@ internal class SegmentDownloader(
 
     companion object {
         private const val DEFAULT_BUFFER = 1024 * 1024
+
+        /** 最小探测区间：代价最低，但部分 CDN 对「零长度区间」直接回 200（见 [probeWithRetry]）。 */
+        private const val RANGE_MIN = "bytes=0-0"
+
+        /** 非退化区间（从 0 到结尾）：用于复探服务器是否**真的**支持 Range。 */
+        private const val RANGE_FROM_START = "bytes=0-"
     }
 
     /**
@@ -119,14 +125,30 @@ internal class SegmentDownloader(
         /**
          * 续传校验令牌：把「大小 + ETag + Last-Modified」压成一个字符串。
          * 只要服务器侧文件发生变化，该令牌就会变化 → 上层据此丢弃过期分片，避免合并出损坏文件。
-         * 三者都拿不到时为空串，表示无法校验（此时按旧行为宽松续传）。
+         * 三者都拿不到时为空串，表示无法校验。
+         *
+         * 注意末尾的 `weak` 标记：见 [isWeak]。
          */
         val validator: String
             get() = listOfNotNull(
                 totalSize?.takeIf { it > 0 }?.let { "len=$it" },
                 etag?.takeIf { it.isNotBlank() }?.let { "etag=$it" },
                 lastModified?.takeIf { it.isNotBlank() }?.let { "lm=$it" },
+                "weak".takeIf { isWeak },
             ).joinToString("|")
+
+        /**
+         * 是否为**弱校验器**：只拿到大小，没有 ETag / Last-Modified。
+         *
+         * 大量 CDN 只回 `Content-Length`。此时 `validator` 退化为 `len=N`，
+         * 而「服务器换了一个**同样大小**的新文件」这个场景下令牌**不会变化**，
+         * 旧分片会被误判为「当前版本」而复用 → 合并出新旧混杂的损坏文件，
+         * 且最终的长度校验会恰好通过（大小一致）。
+         *
+         * 因此弱校验器**不足以支撑安全续传**：上层应据此丢弃旧分片（或做内容指纹校验）。
+         */
+        val isWeak: Boolean
+            get() = etag.isNullOrBlank() && lastModified.isNullOrBlank()
     }
 
     /**
@@ -168,11 +190,17 @@ internal class SegmentDownloader(
      * 因此这里用 OkHttp 自动跟随重定向后的 [okhttp3.Response.request] URL 作为最终地址，
      * 交由上层对该稳定地址做多线程分片。
      */
-    suspend fun probe(url: String, headers: Map<String, String>, timeoutMs: Long = 0): ProbeResult =
+    suspend fun probe(
+        url: String,
+        headers: Map<String, String>,
+        timeoutMs: Long = 0,
+        /** Range 头的值。默认 `bytes=0-0`（最小探测）；复探时用 `bytes=0-`。 */
+        rangeSpec: String = RANGE_MIN,
+    ): ProbeResult =
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(url)
-                .header("Range", "bytes=0-0")
+                .header("Range", rangeSpec)
                 .apply { headers.forEach { (k, v) -> header(k, v) } }
                 // identity 在自定义头之后设置，确保总是生效（防止调用方传入 Accept-Encoding: gzip 覆盖）：
                 // 若 gzip 透明解压，实际写入字节会与 Content-Range 不一致 → 大小校验失败。
@@ -245,11 +273,28 @@ internal class SegmentDownloader(
     ): ProbeResult {
         var last = ProbeResult(null, false, url)
         repeat(retries + 1) { attempt ->
-            val r = probe(url, headers, timeoutMs = timeoutMs)
+            // ① 最小探测（bytes=0-0）：代价最低，健康服务器回 206 即可确认支持分片。
+            val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN)
             last = r
-            // 拿到可用结果（支持 Range 或至少知道大小）即可返回
-            if (r.supportsRange || (r.totalSize ?: -1L) > 0) return r
-            if (attempt < retries) delay(500L * (attempt + 1))  // 递增退避
+            if (r.supportsRange) return r
+
+            // ② 没拿到 Range 支持、但拿到了大小 → 用「非退化区间」复探一次。
+            //
+            // 【为什么必须有这一步】部分 CDN 对 `bytes=0-0` 这种零长度区间特殊处理，
+            // 直接回 200 + Content-Length，且**不带** Accept-Ranges。
+            // 旧判据 `supportsRange || totalSize > 0` 会因为 totalSize>0 而**直接返回**，
+            // 带着 supportsRange=false 交给上层 → 退化为整文件单流 → 多线程彻底失效。
+            // 换成 `bytes=0-`（从 0 到结尾）往往就能拿到正确的 206 + Content-Range。
+            // aria2 的探测正是用 `bytes=0-` 而非 `bytes=0-0`。
+            if ((r.totalSize ?: -1L) > 0) {
+                val r2 = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_FROM_START)
+                if (r2.supportsRange) return r2
+                // 复探仍不支持：保留两次探测中信息更全的一份（大小/元数据），并继续重试。
+                last = r2.copy(totalSize = r2.totalSize ?: r.totalSize)
+            }
+
+            // 指数退避而非线性：给服务器喘息时间，也避免弱网下密集重探。
+            if (attempt < retries) delay(500L * (1L shl attempt))
         }
         return last
     }
@@ -293,22 +338,28 @@ internal class SegmentDownloader(
                 when (val code = resp.code) {
                     429, 503 -> SegmentResult.THROTTLED
                     206 -> {
+                        // 【P0-2 配套】强校验 Content-Range：服务器返回的区间必须正好是我们请求的起点。
+                        // 若不符（代理/网关篡改、命中其它对象、CDN 返回了别的区间），
+                        // 按 expected 长度写入会在分片内造成**数据错位**——宁可回投重试也不写入。
+                        val crStart = parseContentRangeStart(resp.header("Content-Range"))
+                        if (crStart != null && crStart != from) {
+                            return@use SegmentResult.RANGE_IGNORED
+                        }
                         val body = resp.body ?: return@use SegmentResult.FAILED
                         val written = writeSlice(body.byteStream(), partFile, existing, expected - existing, onBytes)
                         if (existing + written != expected) SegmentResult.FAILED else SegmentResult.OK
                     }
                     200 -> {
-                        // 服务器忽略 Range：校验 Content-Length 是否 >= 整个区间（判定为整文件）
-                        val cl = resp.header("Content-Length")?.toLongOrNull()
-                        val isWholeFile = cl == null || cl >= expected + start
-                        if (isWholeFile) {
-                            SegmentResult.RANGE_IGNORED
-                        } else {
-                            // 少数情况 200 但只返回区间：按 206 处理，严格截断
-                            val body = resp.body ?: return@use SegmentResult.FAILED
-                            val written = writeSlice(body.byteStream(), partFile, existing, expected - existing, onBytes)
-                            if (existing + written != expected) SegmentResult.FAILED else SegmentResult.OK
-                        }
+                        // 【P0-2 修复】200 = 服务器忽略/拒绝 Range，body 语义上是「整个资源」。
+                        //
+                        // 绝不按 206 处理：body 几乎必然从**文件第 0 字节**开始，
+                        // 而 writeSlice 的 seekPos = existing（分片内偏移，可能与 0 相差很大），
+                        // 于是「文件开头」被写进分片中部 → 数据错位 + 空洞，
+                        // 而 existing + written == expected 的长度校验**仍会通过** → 损坏文件静默落地。
+                        //
+                        // 一律交上层回投重试；累计超过 RANGE_IGNORED_TOLERANCE 后触发整文件单流回退。
+                        // （若服务器真回了小于请求区间的 200，那多半是代理篡改/错误页，重试比猜测语义更安全。）
+                        SegmentResult.RANGE_IGNORED
                     }
                     416 -> SegmentResult.OK  // Range 越界：通常该分片已完成
                     else -> {
@@ -385,6 +436,16 @@ internal class SegmentDownloader(
             activeCalls[taskId]?.remove(call)
             handle?.dispose()
         }
+    }
+
+    /**
+     * 解析 `Content-Range: bytes <from>-<to>/<total>` 的起点 `<from>`。
+     * 无法解析（缺头、格式异常、`*`）返回 null —— 此时不做强校验，以免误杀正常响应。
+     */
+    private fun parseContentRangeStart(value: String?): Long? {
+        if (value.isNullOrBlank()) return null
+        val spec = value.substringBefore('/').trim().removePrefix("bytes").trim()
+        return spec.substringBefore('-').trim().toLongOrNull()
     }
 
     private suspend fun writeSlice(

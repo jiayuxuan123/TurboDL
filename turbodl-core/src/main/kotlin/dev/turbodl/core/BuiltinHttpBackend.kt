@@ -22,6 +22,11 @@ internal class BuiltinHttpBackend(
 
     override val name: String = "builtin-http"
 
+    private companion object {
+        /** 续传校验标记文件名。 */
+        const val VALIDATOR_FILE = ".validator"
+    }
+
     override fun supports(request: DownloadRequest): Boolean {
         val u = request.url.lowercase()
         return u.startsWith("http://") || u.startsWith("https://")
@@ -65,22 +70,49 @@ internal class BuiltinHttpBackend(
         val effectiveUrl = probe.resolvedUrl.ifBlank { request.url }
         val supportsRange = probe.supportsRange
 
-        // ---------- 续传校验（尽力而为，失败不阻断下载）----------
+        // ---------- 续传校验（P0-1 修复）----------
         // 思路参考 aria2 的 .aria2 控制文件与 IDM 的续传校验：把「大小+ETag+Last-Modified」
         // 写入分片目录旁的 .validator。下次续传前对比：不一致说明服务器侧文件已变更，
         // 旧分片不能再用（否则合并出一个新旧混杂的损坏文件，而且大小校验可能恰好通过）。
-        // 服务器不提供任何校验器时 validator 为空串 → 不做强制，保持旧的宽松续传行为。
+        //
+        // 旧实现有三个问题：
+        //  1) 删除循环 listFiles() 会把 .validator 自身一起删掉（侥幸随后重写，但语义混乱）；
+        //  2) now 为空时**什么都不做** → 上一轮的旧 .validator 残留在目录里，
+        //     下次续传拿它当"当前版本"比对，判定失真；
+        //  3) 最致命：服务器只回 Content-Length（无 ETag / Last-Modified）时
+        //     validator 退化为 `len=N`。此时服务器换了一个**同样大小**的新文件，
+        //     令牌不变 → 旧分片被判为"当前版本"复用 → 合并出损坏文件，
+        //     且最终长度校验恰好通过（大小一致）→ **静默损坏**。
+        //
+        // 现在的策略：
+        //  - validator 带 `weak` 标记（见 ProbeResult.isWeak），弱校验器可被识别；
+        //  - 弱校验器不足以支撑安全续传：目录里已有旧分片时丢弃重下
+        //    （由 config.trustWeakValidator 显式放开；默认 false = 正确性优先）；
+        //  - 强校验器变化 → 丢弃旧分片（原行为）；
+        //  - validator 必须在**任何分片写入之前**落盘；now 为空时清掉旧文件而非留着。
         run {
-            val marker = File(chunkDir, ".validator")
+            val marker = File(chunkDir, VALIDATOR_FILE)
             val now = probe.validator
-            if (now.isNotEmpty()) {
-                val prev = runCatching { if (marker.isFile) marker.readText().trim() else "" }.getOrDefault("")
-                if (prev.isNotEmpty() && prev != now) {
-                    // 文件已变更：静默丢弃过期分片，从头下（不报错，对用户透明）
-                    chunkDir.listFiles()?.forEach { f -> runCatching { f.delete() } }
-                    chunkDir.mkdirs()
+            val prev = runCatching { if (marker.isFile) marker.readText().trim() else "" }.getOrDefault("")
+
+            val changed = prev.isNotEmpty() && prev != now
+            val weakButResuming = probe.isWeak && !context.config.trustWeakValidator
+            val hasOldParts = chunkDir.listFiles()?.any { f ->
+                f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
+            } == true
+
+            if (changed || (weakButResuming && hasOldParts)) {
+                // 丢弃过期/无法安全校验的分片，从头下（不报错，对用户透明）。
+                // 排除 .validator 自身，避免"删了又写"的脆弱时序。
+                chunkDir.listFiles()?.forEach { f ->
+                    if (f.name != VALIDATOR_FILE) runCatching { f.delete() }
                 }
-                runCatching { marker.writeText(now) }
+                chunkDir.mkdirs()
+            }
+
+            // 时序：validator 必须先于任何分片写入落盘。now 为空时删除旧文件，不留残留。
+            runCatching {
+                if (now.isEmpty()) marker.delete() else marker.writeText(now)
             }
         }
 
@@ -198,7 +230,15 @@ internal class BuiltinHttpBackend(
                     }
                     // 仍不行：清空重新整文件下（兼容真不支持 Range 的服务器）。
                 }
+                // 【P0-3 修复】deleteRecursively 会连 .validator 一起删掉，
+                // 导致整文件回退后目录里没有任何「这一版文件是谁」的标记 ——
+                // 下次进入本函数时 prev 为空，校验全部退化为「无信息」，续传逻辑被永久绕过。
+                // 故先快照，重建目录后补写回去。
+                val validatorSnapshot = probe.validator
                 chunkDir.deleteRecursively(); chunkDir.mkdirs()
+                if (validatorSnapshot.isNotEmpty()) {
+                    runCatching { File(chunkDir, VALIDATOR_FILE).writeText(validatorSnapshot) }
+                }
                 val outPart = File(chunkDir, "whole.part")
                 var acc = 0L
                 val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
