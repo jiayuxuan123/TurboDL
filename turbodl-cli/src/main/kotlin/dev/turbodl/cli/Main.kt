@@ -29,8 +29,11 @@ import kotlin.system.exitProcess
  *   turbodl https://example.com/big.bin -o big.bin -c 64 --json
  *   turbodl <url> --proxy http://127.0.0.1:7890 --doh https://dns.alidns.com/dns-query
  *   turbodl --batch tasks.txt -c 128
+ *
+ * 版本号来自构建注入的 [BUILD_VERSION]（见 turbodl-cli/build.gradle.kts 的 generateBuildInfo），
+ * **不要在这里硬编码** —— 曾经硬编码过，结果从 rc11 起就一直没跟上。
  */
-private const val VERSION = "0.2.0-rc11"
+// 版本号由构建注入，见 turbodl-cli/build.gradle.kts 的 generateBuildInfo 任务。
 
 /** 一条待下载任务（批量模式逐条构造）。 */
 private class Task(val url: String, val output: File)
@@ -82,7 +85,7 @@ fun main(args: Array<String>) {
         }
         when (flag) {
             "-h", "--help" -> { printHelp(); return }
-            "-V", "--version" -> { println("turbodl $VERSION"); return }
+            "-V", "--version" -> { println("turbodl $BUILD_VERSION"); return }
             "-o", "--output" -> opts.output = File(take())
             "-d", "--dir" -> opts.dir = File(take())
             "-c", "--connections", "--threads" ->
@@ -157,7 +160,7 @@ fun main(args: Array<String>) {
     }
 
     if (!opts.json && !opts.quiet) {
-        println("TurboDL $VERSION ｜ ${resolved.size} 个任务 ｜ ${opts.connections} 连接/任务")
+        println("TurboDL $BUILD_VERSION ｜ ${resolved.size} 个任务 ｜ ${opts.connections} 连接/任务")
     }
 
     // Ctrl+C：保留分片，提示可续传（正常完成时 downloading=false，不误报）
@@ -308,7 +311,7 @@ private fun usageError(msg: String): Nothing {
 private fun printHelp(out: java.io.PrintStream = System.out) {
     out.print(
         """
-        TurboDL $VERSION —— 多线程下载器（Agent / 脚本友好）
+        TurboDL $BUILD_VERSION —— 多线程下载器（Agent / 脚本友好）
 
         用法:
           turbodl [选项] <URL>
