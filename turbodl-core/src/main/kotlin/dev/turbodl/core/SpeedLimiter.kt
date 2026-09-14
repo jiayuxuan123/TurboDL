@@ -47,19 +47,23 @@ internal class SpeedLimiter(private val limitProvider: () -> Long) {
         private const val MAX_WAIT_MS = 5_000L
     }
 
-    private fun refill(limit: Long) {
+    private fun refill(limit: Long, need: Long) {
         val now = System.nanoTime()
+        // 桶容量 = max(1 秒额度, 本次要消费的量)。
+        // 【必须取 max】若单次要消费的字节数 > 1 秒额度（例如限速 200KB/s 而一次要写 1MB 缓冲），
+        // 桶永远攒不够 → `bytes <= tokens` 永不成立 → 调用方陷入无限等待（活锁）。
+        val capacity = maxOf(limit.toDouble(), need.toDouble())
         if (lastRefillNanos == 0L) {
             // 惰性初始化：首次调用即把桶填满（允许一个突发），
             // 否则首块数据会因为 tokens=0 而白等一整个周期。
             lastRefillNanos = now
-            tokens = limit.toDouble()
+            tokens = capacity
             return
         }
         val elapsedSec = (now - lastRefillNanos).coerceAtLeast(0) / 1_000_000_000.0
         lastRefillNanos = now
-        // 桶容量 = 1 秒的额度（经典令牌桶：允许最多 1 秒的突发）
-        tokens = minOf(limit.toDouble(), tokens + elapsedSec * limit)
+        // 桶容量 = max(1 秒额度, 本次要消费的量)：允许最多 1 秒的突发。
+        tokens = minOf(capacity, tokens + elapsedSec * limit)
     }
 
     /** 消费 [bytes] 字节额度；额度不足时挂起等待。 */
@@ -69,7 +73,7 @@ internal class SpeedLimiter(private val limitProvider: () -> Long) {
         if (limit <= 0) return   // 不限速：立即返回，不碰锁
         while (true) {
             val waitMs = synchronized(lock) {
-                refill(limit)
+                refill(limit, bytes)
                 if (bytes <= tokens) {
                     tokens -= bytes
                     return
@@ -95,7 +99,7 @@ internal class SpeedLimiter(private val limitProvider: () -> Long) {
             val limit = limitProvider().coerceAtLeast(0)
             if (limit <= 0) return
             val waitMs = synchronized(lock) {
-                refill(limit)
+                refill(limit, bytes)
                 if (bytes <= tokens) {
                     tokens -= bytes
                     return
