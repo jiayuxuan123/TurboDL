@@ -240,6 +240,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 etag: String?,
                 lastModified: String?,
                 probeMs: Long,
+                resumeNote: String,
             ) {
                 // 静默发一个元数据事件：宿主可选择消费（重命名/补扩展名），不消费也不影响下载。
                 emit(
@@ -253,6 +254,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                         supportsRange = totalRef.get() > 0,
                         resolvedUrl = request.url,
                         probeMs = probeMs,
+                        resumeNote = resumeNote,
                     )
                 )
             }

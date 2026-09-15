@@ -40,6 +40,11 @@ class ResumeProbeTest {
         /** 强校验器：给了就应能安全续传；不给则应丢弃旧分片。 */
         private val etag: String? = null,
         private val lastModified: String? = "Wed, 21 Oct 2026 07:28:00 GMT",
+        /**
+         * 模拟「CDN 拒绝**小**区间请求」：长度在 2..64KB+1 的请求回 403
+         * （探测用的 1 字节区间仍然放行）。用于验证「指纹取不到 → 应该保留旧分片」。
+         */
+        private val rejectSmallRanges: Boolean = false,
     ) {
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
@@ -65,6 +70,10 @@ class ResumeProbeTest {
                 if (s >= size) { ex.sendResponseHeaders(416, -1); ex.close(); return@createContext }
                 val end = minOf(e, size - 1)
                 val len = end - s + 1
+                // 拒绝"小但非退化"的区间（模拟 CDN 对指纹请求的拒绝）；探测的 bytes=0-0 仍放行。
+                if (rejectSmallRanges && len in 2..(64 * 1024 + 1)) {
+                    ex.sendResponseHeaders(403, -1); ex.close(); return@createContext
+                }
                 ex.responseHeaders.add("Content-Range", "bytes $s-$end/$size")
                 bodyBytes.addAndGet(len.toLong())
                 ex.sendResponseHeaders(206, len.toLong())
@@ -157,6 +166,36 @@ class ResumeProbeTest {
                 served <= SIZE - BLOCK + (128 * 1024),
                 "服务器吐了 $served 字节：弱校验器场景仍然丢弃了旧分片（应为指纹一致 → 复用）。" +
                     "这正是『暂停就重新下载』的根因。"
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `weak validator resume keeps parts when fingerprint is unavailable`() = runBlocking {
+        // 场景：服务器不给强校验器，且**指纹请求取不到**（区间被拒/异常）。
+        // 【必须保留】拿不到指纹只是"无法取证"，不是"内容变了"的证据 ——
+        // 旧实现把两者混为一谈，于是"一次指纹请求没成功"就把用户已下载的 GB 级数据全删掉，
+        // 表现为"暂停后仍然从头下载"。
+        val payload = ByteArray(SIZE) { ((it * 53 + 6) % 256).toByte() }
+        val srv = RangeServer(payload, etag = null, lastModified = null, rejectSmallRanges = true)
+        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak")
+        val client = TurboClient(cfg(workDir))
+        val out = File.createTempFile("resume-out4", ".bin").apply { deleteOnExit() }
+        try {
+            val id = client.submit(
+                DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(payload))
+
+            val served = srv.bodyBytes.get()
+            println("[RESUME] 弱校验器 + 指纹不可用：服务器共吐字节=$served（完整=$SIZE，已存分片=$BLOCK）")
+            assertTrue(
+                served <= SIZE - BLOCK + (128 * 1024),
+                "服务器吐了 $served 字节：指纹**取不到**时旧分片被丢弃了。" +
+                    "无法取证 ≠ 内容已变 —— 这种情形必须保留，否则用户一暂停就白下整个文件。"
             )
         } finally {
             client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()

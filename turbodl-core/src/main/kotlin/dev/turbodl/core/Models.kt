@@ -109,5 +109,16 @@ sealed interface TurboEvent {
          * 调用方已知大小且跳过探测时为 0；旧事件流可能为 -1。
          */
         val probeMs: Long = -1,
+        /**
+         * 续传判定摘要（诊断用）。
+         *
+         * 形如 `parts=true weak=true changed=false print=MATCH discard=false`：
+         * - `parts`     是否找到可续的旧分片（false ⇒ 真的是从零开始，不是引擎删的）
+         * - `weak`      是否只拿到弱校验器（无 ETag/Last-Modified）
+         * - `changed`   强校验器是否变化（true ⇒ 判定文件已换版，丢弃旧分片）
+         * - `print`     内容指纹结果：MATCH / MISMATCH / UNVERIFIABLE / NOT_ATTEMPTED
+         * - `discard`   最终是否丢弃了旧分片
+         */
+        val resumeNote: String = "",
     ) : TurboEvent
 }

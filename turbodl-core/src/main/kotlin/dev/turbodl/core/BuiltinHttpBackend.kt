@@ -65,18 +65,9 @@ internal class BuiltinHttpBackend(
         }
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
-        // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
-        // probeMs 供宿主诊断「解析慢」：大=探测慢；≈0（跳过探测）而首字节迟迟不来=慢在首连接。
         val probeMs = System.currentTimeMillis() - probeStartAt
-        runCatching {
-            context.reportMetadata(
-                suggestedFileName = probe.suggestedFileName,
-                contentType = probe.contentType,
-                etag = probe.etag,
-                lastModified = probe.lastModified,
-                probeMs = probeMs,
-            )
-        }
+        // 续传判定结果（在下面的续传校验里填写，随后随 Metadata 一起上报给宿主）。
+        var resumeNote = ""
         // 关键：后续分片/整文件下载均使用重定向后的最终 URL（如网盘原始链 302→CDN 临时直链）。
         // 否则每个分片连接都重走 302，可能命中不同节点或被拒，表现为“显示下载中但字节/线程不动”。
         val effectiveUrl = probe.resolvedUrl.ifBlank { request.url }
@@ -114,13 +105,20 @@ internal class BuiltinHttpBackend(
             val hasOldParts = hasResumableParts
 
             // 内容指纹：仅在「弱校验器 + 有旧分片 + 令牌本身没变」时才需要（其余分支已定性）。
-            val fingerprintOk = if (weakButResuming && hasOldParts && !changed) {
+            // 【三值判定，关键】把"取不到指纹"与"内容确实不同"**分开**：
+            //   MATCH        → 保留旧分片（续传可用）
+            //   MISMATCH     → 确证内容不同 → 丢弃（安全底线）
+            //   UNVERIFIABLE → 取不到（状态码异常/请求失败/无可读分片）→ **保留**
+            // 旧写法把后两者混为一谈，于是"一次指纹请求没成功"就丢掉用户已下载的 GB 级数据 ——
+            // 用户实报的"暂停还是从头下"极可能就是这一支。
+            val decision = if (weakButResuming && hasOldParts && !changed) {
                 verifyResumeFingerprint(chunkDir, effectiveUrl, request.headers)
             } else {
-                false
+                ResumeDecision.NOT_ATTEMPTED
             }
 
-            if (changed || (weakButResuming && hasOldParts && !fingerprintOk)) {
+            val discard = changed || (weakButResuming && hasOldParts && decision == ResumeDecision.MISMATCH)
+            if (discard) {
                 // 丢弃过期/无法安全校验的分片，从头下（不报错，对用户透明）。
                 // 排除 .validator 自身，避免"删了又写"的脆弱时序。
                 chunkDir.listFiles()?.forEach { f ->
@@ -128,11 +126,27 @@ internal class BuiltinHttpBackend(
                 }
                 chunkDir.mkdirs()
             }
+            resumeNote = "parts=$hasOldParts weak=$weakButResuming changed=$changed " +
+                "print=$decision discard=$discard"
 
             // 时序：validator 必须先于任何分片写入落盘。now 为空时删除旧文件，不留残留。
             runCatching {
                 if (now.isEmpty()) marker.delete() else marker.writeText(now)
             }
+        }
+
+        // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
+        // - probeMs   ：探测耗时（大=探测慢；≈0 跳过探测而首字节慢=慢在首连接）
+        // - resumeNote：续传判定结果（parts/weak/changed/print/discard），用于定位"断点续传为什么不生效"
+        runCatching {
+            context.reportMetadata(
+                suggestedFileName = probe.suggestedFileName,
+                contentType = probe.contentType,
+                etag = probe.etag,
+                lastModified = probe.lastModified,
+                probeMs = probeMs,
+                resumeNote = resumeNote,
+            )
         }
 
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
@@ -279,50 +293,64 @@ internal class BuiltinHttpBackend(
     }
 
     /**
-     * 弱校验器续传的**内容指纹校验**。
+     * 弱校验器续传的**内容指纹校验**（三值返回）。
      *
      * 取「起始位置最小且非空的 `seg_*.part`」的前 [FINGERPRINT_BYTES] 字节，
      * 向服务器请求**同一区间**并逐字节比对：
-     *  - 一致 → 旧分片确实属于当前版本 → 保留（续传可用）；
-     *  - 不一致 / 请求失败 / 不支持 Range → 返回 false，调用方仍按旧的保守策略丢弃（安全优先）。
+     *  - [ResumeDecision.MATCH]        → 旧分片确实属于当前版本 → 保留（续传可用）
+     *  - [ResumeDecision.MISMATCH]     → 拿到了字节但内容不同 → 丢弃（安全底线）
+     *  - [ResumeDecision.UNVERIFIABLE] → 没拿到字节（状态码异常/请求失败/无可读分片）→ **保留**
      *
-     * 为什么这样够安全：弱校验器唯一防不住的场景是「服务器换了一个**同样大小**的文件」。
-     * "同大小 + 前 64KB 内容也逐字节相同"的概率可忽略；即便真发生，影响也只是复用旧分片这一处。
+     * 【为什么必须区分后两者】旧实现把"没拿到"当成"不一致"，于是**一次指纹请求没成功，
+     * 就把用户已下载的 GB 级数据全删了** —— 这正是"断点续传还是不生效"最可能的来源。
+     * 拿不到指纹只是"无法取证"，并不是"内容变了"的证据。
      *
-     * 成本：**一次 64KB 的 Range 请求**。相比"每次续传都从 0 重下整个文件"（1.3GB @1.5MB/s ≈ 15 分钟），
-     * 这个代价可以忽略。
+     * 成本：一次 64KB 的 Range 请求（相比整包重下可忽略）。
      */
     private suspend fun verifyResumeFingerprint(
         chunkDir: File,
         url: String,
         headers: Map<String, String>,
-    ): Boolean {
+    ): ResumeDecision {
         val parts = chunkDir.listFiles { f ->
             f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
-        } ?: return false
-        val part = parts.minByOrNull { parseSegStart(it.name) ?: Long.MAX_VALUE } ?: return false
-        val start = parseSegStart(part.name) ?: return false
-        val len = minOf(FINGERPRINT_BYTES.toLong(), part.length()).toInt()
-        if (len <= 0) return false
+        } ?: return ResumeDecision.UNVERIFIABLE
+        // 依次尝试最多 2 个候选分片（一个 CDN 节点偶发异常不该否掉整个续传）。
+        val candidates = parts
+            .sortedBy { parseSegStart(it.name) ?: Long.MAX_VALUE }
+            .take(2)
+        if (candidates.isEmpty()) return ResumeDecision.UNVERIFIABLE
 
-        val local = runCatching {
-            val buf = ByteArray(len)
-            part.inputStream().use { ins ->
-                var off = 0
-                while (off < len) {
-                    val n = ins.read(buf, off, len - off)
-                    if (n <= 0) break
-                    off += n
+        var gotBytes = false
+        for (part in candidates) {
+            val start = parseSegStart(part.name) ?: continue
+            val len = minOf(FINGERPRINT_BYTES.toLong(), part.length()).toInt()
+            if (len <= 0) continue
+            val local = runCatching {
+                val buf = ByteArray(len)
+                part.inputStream().use { ins ->
+                    var off = 0
+                    while (off < len) {
+                        val n = ins.read(buf, off, len - off)
+                        if (n <= 0) break
+                        off += n
+                    }
+                    if (off < len) return@runCatching null
                 }
-                if (off < len) return@runCatching null
-            }
-            buf
-        }.getOrNull() ?: return false
+                buf
+            }.getOrNull() ?: continue
 
-        val remote = downloader.fetchPrefix(url, headers, start, len, timeoutMs = 10_000) ?: return false
-        if (remote.size < len) return false
-        return remote.copyOf(len).contentEquals(local)
+            val remote = downloader.fetchPrefix(url, headers, start, len, timeoutMs = 10_000) ?: continue
+            if (remote.size < len) continue
+            gotBytes = true
+            if (remote.copyOf(len).contentEquals(local)) return ResumeDecision.MATCH
+        }
+        // 拿到过字节但都不一致 → 确证不匹配；一次都没拿到 → 无法取证。
+        return if (gotBytes) ResumeDecision.MISMATCH else ResumeDecision.UNVERIFIABLE
     }
+
+    /** 续传指纹校验的判定结果（见 [verifyResumeFingerprint]）。 */
+    private enum class ResumeDecision { MATCH, MISMATCH, UNVERIFIABLE, NOT_ATTEMPTED }
 
     /** 从 `seg_{start}_{end}.part` 解析 start。 */
     private fun parseSegStart(name: String): Long? =

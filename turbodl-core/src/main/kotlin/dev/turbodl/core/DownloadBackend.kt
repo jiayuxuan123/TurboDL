@@ -78,6 +78,9 @@ interface BackendContext {
      *
      * @param probeMs 探测阶段耗时（毫秒）。调用方已知大小且跳过探测时为 0；
      *                宿主可据此区分「解析慢」到底是探测慢还是首连接慢。
+     * @param resumeNote 续传判定摘要（如 `parts=true weak=true changed=false print=MATCH discard=false`）。
+     *                   宿主可据此定位「断点续传为什么不生效」：是没找到旧分片、还是校验器变了、
+     *                   还是指纹比对不通过。
      */
     fun reportMetadata(
         suggestedFileName: String?,
@@ -85,6 +88,7 @@ interface BackendContext {
         etag: String?,
         lastModified: String?,
         probeMs: Long = -1,
+        resumeNote: String = "",
     ) { /* no-op by default */ }
 
     /** Report cumulative downloaded bytes and current active connection count. */
