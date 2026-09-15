@@ -42,7 +42,19 @@ internal class BuiltinHttpBackend(
         // 旧实现 20s × 3 次 + 退避 ≈ 最坏 61s 全程阻塞，用户看到的就是“解析卡一分钟”。
         // 现在：调用方已知大小时直接跳过探测；否则单次 6s、最多 1 次重试。
         val knownSize = request.knownSize.takeIf { it > 0 } ?: -1L
-        val probe = if (context.config.skipProbeWhenSizeKnown && knownSize > 0) {
+        // 目录里是否已有**可续传**的分片（非空 seg_*.part）。
+        val hasResumableParts = chunkDir.listFiles()?.any { f ->
+            f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
+        } == true
+        // 【续传场景不得跳过探测】跳过探测就拿不到 ETag / Last-Modified，
+        // `ProbeResult` 的 validator 会退化成 `len=N|weak`（[SegmentDownloader.ProbeResult.isWeak]），
+        // 而下面的续传校验规定"弱校验器不足以支撑安全续传"→ **无条件下丢弃全部旧分片**。
+        // 结果：网盘类链接（调用方已知大小、跳过探测）的断点续传**静默失效**，每次都从 0 重下。
+        // 代价对比很直白：多一次探测请求 vs 重下整个文件（1.3GB @1.5MB/s 就是十几分钟）。
+        // 故：**只要有旧分片要续，就老老实实探测一次**，把强校验器拿回来。
+        val canSkipProbe = context.config.skipProbeWhenSizeKnown &&
+            knownSize > 0 && !hasResumableParts
+        val probe = if (canSkipProbe) {
             // 已知大小：乐观假设支持 Range 直接开工。若实际不支持，
             // 首个分片会拿到 200 整文件并走已有的 RANGE_IGNORED 回退链路，正确性不受影响。
             SegmentDownloader.ProbeResult(knownSize, true, request.url)
@@ -97,9 +109,7 @@ internal class BuiltinHttpBackend(
 
             val changed = prev.isNotEmpty() && prev != now
             val weakButResuming = probe.isWeak && !context.config.trustWeakValidator
-            val hasOldParts = chunkDir.listFiles()?.any { f ->
-                f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
-            } == true
+            val hasOldParts = hasResumableParts
 
             if (changed || (weakButResuming && hasOldParts)) {
                 // 丢弃过期/无法安全校验的分片，从头下（不报错，对用户透明）。
@@ -176,6 +186,7 @@ internal class BuiltinHttpBackend(
                     downloader.warmUp(
                         effectiveUrl, request.headers, warmCount,
                         timeoutMs = context.config.warmUpTimeoutMs,
+                        taskId = context.taskId,
                     )
                 }
             }

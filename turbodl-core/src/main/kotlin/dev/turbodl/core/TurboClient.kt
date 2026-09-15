@@ -118,6 +118,9 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                     runTask(id, request)
                 } finally {
                     activeCount.decrementAndGet()
+                    // 释放任务级的下载器状态（在飞 Call 登记 + 已学到的重定向终址）。
+                    // 不释放的话每完成一个任务就留两条永不回收的条目 → 长跑进程无界增长。
+                    downloader.releaseTask(id)
                 }
             } catch (e: CancellationException) {
                 completions[id]?.complete(Result.failure(e))
@@ -162,7 +165,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 awaitSlot(id)
                 if (coroutineContext[Job]?.isActive != true) return@launch
                 activeCount.incrementAndGet()
-                try { runTask(id, req) } finally { activeCount.decrementAndGet() }
+                try { runTask(id, req) } finally { activeCount.decrementAndGet(); downloader.releaseTask(id) }
             } catch (e: CancellationException) {
                 setState(id, req, TaskState.PAUSED)
             } catch (e: Exception) {

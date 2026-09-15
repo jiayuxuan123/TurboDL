@@ -89,7 +89,14 @@ class ProbeMetadataTest {
             TurboConfig(maxConnectionsPerTask = 4, maxConcurrentTasks = 1, warmUpConnections = false)
         )
         val meta = AtomicReference<TurboEvent.Metadata?>(null)
-        val collector = launch { client.events.collect { if (it is TurboEvent.Metadata) meta.set(it) } }
+        // 【必须 UNDISPATCHED】`events` 是 replay=0 的 SharedFlow：**订阅之前发出的事件会直接丢弃**。
+        // 普通 `launch` 只是把协程排进队列，`submit()` 之后、收集器真正订阅之前事件就可能已经发出
+        // —— 表现为本用例**偶发**断言失败（单独跑必过、混在全量套件里偶红），与被测逻辑无关。
+        // UNDISPATCHED 会**在当前线程同步执行到第一个挂起点**，而 SharedFlow.collect 的订阅
+        // 正是发生在挂起之前，因此 launch 返回时订阅一定已生效，竞态窗口被彻底关掉。
+        val collector = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            client.events.collect { if (it is TurboEvent.Metadata) meta.set(it) }
+        }
         val out = File.createTempFile("meta", ".bin").apply { deleteOnExit() }
         try {
             val id = client.submit(DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out))

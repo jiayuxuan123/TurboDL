@@ -57,8 +57,50 @@ internal class SegmentDownloader(
     private val streamClient get() = (streamClientProvider ?: clientProvider)()
     private val activeCalls = ConcurrentHashMap<Long, MutableSet<okhttp3.Call>>()
 
+    /**
+     * 各任务**已学习到的重定向终址**（原始链 → CDN 临时直链）。
+     *
+     * 【为什么需要】走「已知大小 → 跳过探测」这条快路径时，探测没有发生，
+     * `effectiveUrl` 就等于**原始 URL** —— 于是**每个分片都要自己跟一次 302**。
+     * 网盘直链配 128 连接就是 128 次多余的重定向往返，而且各分片可能落到不同 CDN 节点。
+     * 相当于用「省掉 2 次探测请求」换来了「N 次重定向」。
+     *
+     * 【学习方式】任何一次分片响应都带回了**跟随重定向之后的最终地址**
+     * （OkHttp 的 `resp.request.url`），把它记住即可，**不额外发任何请求**。
+     *
+     * 【自愈】失败时立即遗忘（见 [forgetResolvedUrl]）：若记住的是带签名、有时效的
+     * CDN 直链且已过期，下一次尝试会自动回到原始 URL 重新解析，而不是抱着失效地址反复撞。
+     */
+    private val resolvedUrlByTask = ConcurrentHashMap<Long, String>()
+
+    /** 取本次分片实际应请求的地址：优先用已学习到的终址，否则回落到原始 URL。 */
+    private fun urlFor(taskId: Long, original: String): String =
+        resolvedUrlByTask[taskId] ?: original
+
+    /** 失败时遗忘已学习的终址，让下次尝试重新走原始 URL 解析（应对签名过期）。 */
+    private fun forgetResolvedUrl(taskId: Long) {
+        resolvedUrlByTask.remove(taskId)
+    }
+
     fun cancelCalls(taskId: Long) {
+        resolvedUrlByTask.remove(taskId)
         activeCalls.remove(taskId)?.forEach { runCatching { it.cancel() } }
+    }
+
+    /**
+     * 任务结束（正常完成/失败/暂停）时释放任务级状态。
+     *
+     * [activeCalls] 与 [resolvedUrlByTask] 都是按 taskId 的映射，而旧实现只在
+     * [cancelCalls]（暂停 / 卡死恢复）里清理 —— **正常完成的任务会永久残留一条空集合**，
+     * 加上本次新增的终址记录，就是每个任务两条永不回收的条目。下载器 App 一开就是几百个任务，
+     * 属于**无界增长**。故在任务终点统一清理。
+     *
+     * 只清记录、**不 cancel 在飞请求**：取消是 [cancelCalls] 的职责；此刻任务已结束，
+     * 残留的请求也已随协程作用域一同取消。
+     */
+    fun releaseTask(taskId: Long) {
+        resolvedUrlByTask.remove(taskId)
+        activeCalls.remove(taskId)
     }
 
     companion object {
@@ -76,8 +118,19 @@ internal class SegmentDownloader(
      * 触发 DNS 解析 + TCP/TLS 握手并把连接留在连接池里（OkHttp keep-alive）。
      * 后续正式分片下载时可直接复用，无需串行等待解析/握手。
      * 失败沉默忽略（预热仅优化，不影响正确性）。
+     *
+     * 【为什么第 1 个请求要单独先发】跳过探测时传进来的 `url` 是**原始链接**
+     * （网盘原始链 → 302 → CDN 直链）。若 n 个预热请求并发发出，**每一个都要各自跟一次 302**，
+     * 而且每个都多建一条到前端主机的连接。先单发一个把终址学到，剩下的就能直接打 CDN。
+     * 预热本身是异步、不阻塞下载开始的，所以这里多一个阶段**不影响启动延迟**。
      */
-    suspend fun warmUp(url: String, headers: Map<String, String>, connections: Int, timeoutMs: Long = 8_000): Unit =
+    suspend fun warmUp(
+        url: String,
+        headers: Map<String, String>,
+        connections: Int,
+        timeoutMs: Long = 8_000,
+        taskId: Long? = null,
+    ): Unit =
         coroutineScope {
             val n = connections.coerceIn(1, 32)
             // 预热必须有硬止时：否则服务器不响应时会沉在这里（read timeout 默认 60s），
@@ -85,24 +138,34 @@ internal class SegmentDownloader(
             val warmClient = client.newBuilder()
                 .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 .build()
-            val jobs = (0 until n).map {
-                async(Dispatchers.IO) {
-                    runCatching {
-                        val req = Request.Builder()
-                            .url(url)
-                            .header("Range", "bytes=0-0")
-                            .apply { headers.forEach { (k, v) -> header(k, v) } }
-                            .header("Accept-Encoding", "identity")
-                            .get().build()
-                        val call = warmClient.newCall(req)
-                        // 读取并丢弃响应体，使连接完成并回到连接池复用（而非被弃置）。
-                        try {
-                            call.execute().use { resp -> resp.body?.byteStream()?.use { it.readBytes() } }
-                        } finally {
-                            if (!call.isCanceled()) runCatching { call.cancel() }
+            suspend fun warmOnce(target: String) = withContext(Dispatchers.IO) {
+                runCatching {
+                    val req = Request.Builder()
+                        .url(target)
+                        .header("Range", "bytes=0-0")
+                        .apply { headers.forEach { (k, v) -> header(k, v) } }
+                        .header("Accept-Encoding", "identity")
+                        .get().build()
+                    val call = warmClient.newCall(req)
+                    // 读取并丢弃响应体，使连接完成并回到连接池复用（而非被弃置）。
+                    try {
+                        call.execute().use { resp ->
+                            // 顺便学习重定向终址，供后续预热请求与所有分片复用。
+                            if (taskId != null && (resp.isSuccessful || resp.code == 416)) {
+                                val finalUrl = resp.request.url.toString()
+                                if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
+                            }
+                            resp.body?.byteStream()?.use { it.readBytes() }
                         }
+                    } finally {
+                        if (!call.isCanceled()) runCatching { call.cancel() }
                     }
                 }
+            }
+            warmOnce(url)
+            val learned = taskId?.let { resolvedUrlByTask[it] } ?: url
+            val jobs = (1 until n).map {
+                async(Dispatchers.IO) { warmOnce(learned) }
             }
             jobs.awaitAll()
         }
@@ -272,13 +335,20 @@ internal class SegmentDownloader(
         retries: Int,
     ): ProbeResult {
         var last = ProbeResult(null, false, url)
+        // `bytes=0-` 复探**全局只做一次** —— 对同一个服务器，它不会改变结论，
+        // 每轮重试都复探一次纯属浪费（旧实现在这里白发了一倍请求）。
+        var reprobed = false
         repeat(retries + 1) { attempt ->
             // ① 最小探测（bytes=0-0）：代价最低，健康服务器回 206 即可确认支持分片。
             val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN)
             last = r
             if (r.supportsRange) return r
 
-            // ② 没拿到 Range 支持、但拿到了大小 → 用「非退化区间」复探一次。
+            // ② 【快速失败】服务器回的是网页（HTML）→ 这不是"瞬时失败"，是**地址本身不可下载**。
+            // 重试再多次也还是网页，只会让用户多等好几秒。直接返回，让上层给出准确原因。
+            if (r.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r
+
+            // ③ 没拿到 Range 支持、但拿到了大小 → 用「非退化区间」复探一次。
             //
             // 【为什么必须有这一步】部分 CDN 对 `bytes=0-0` 这种零长度区间特殊处理，
             // 直接回 200 + Content-Length，且**不带** Accept-Ranges。
@@ -286,14 +356,26 @@ internal class SegmentDownloader(
             // 带着 supportsRange=false 交给上层 → 退化为整文件单流 → 多线程彻底失效。
             // 换成 `bytes=0-`（从 0 到结尾）往往就能拿到正确的 206 + Content-Range。
             // aria2 的探测正是用 `bytes=0-` 而非 `bytes=0-0`。
-            if ((r.totalSize ?: -1L) > 0) {
+            if (!reprobed && (r.totalSize ?: -1L) > 0) {
+                reprobed = true
                 val r2 = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_FROM_START)
                 if (r2.supportsRange) return r2
-                // 复探仍不支持：保留两次探测中信息更全的一份（大小/元数据），并继续重试。
+                if (r2.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r2
+                // 复探仍不支持：保留两次探测中信息更全的一份（大小/元数据）。
                 last = r2.copy(totalSize = r2.totalSize ?: r.totalSize)
+
+                // ④ 【快速失败，本修复的核心】两次探测都得到「200 + 已知大小 + 不支持 Range」
+                // → 这是**确定性结论**：该服务器就是不支持分片。
+                //
+                // 重试不会改变它，只会让"解析"白白多花一整轮（2 次请求 + 500ms 退避）。
+                // 旧实现会把这个 repeat 跑满 —— 这正是「10MB/6MB 小文件解析也慢」的根因：
+                // 普通直链多走 2~4 次无效请求，而网盘因为调用方已知大小被
+                // `skipProbeWhenSizeKnown` 跳过探测，反而更快。
+                if ((last.totalSize ?: -1L) > 0) return last
             }
 
-            // 指数退避而非线性：给服务器喘息时间，也避免弱网下密集重探。
+            // 到这里只剩**真正的瞬时失败**（超时 / 连接错误 / 5xx / 拿不到大小）
+            // —— 这类才值得退避重试。指数退避而非线性：给服务器喘息时间，也避免弱网下密集重探。
             if (attempt < retries) delay(500L * (1L shl attempt))
         }
         return last
@@ -320,8 +402,10 @@ internal class SegmentDownloader(
         if (existing >= expected) return SegmentResult.OK
         val from = start + existing
 
+        // 优先用已学习到的重定向终址；没有就先用原始 URL（这一次会跟 302，并把终址记下来）。
+        val target = urlFor(taskId, url)
         val req = Request.Builder()
-            .url(url)
+            .url(target)
             .header("Range", "bytes=$from-$end")
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             // identity 在自定义头之后，确保不被覆盖：避免 gzip 透明解压破坏分片字节计数。
@@ -332,7 +416,16 @@ internal class SegmentDownloader(
         val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
         return try {
             call.execute().use { resp ->
+                // 学习重定向终址：`resp.request.url` 是**跟随所有 3xx 之后**的最终地址。
+                // 只在响应可用时记（成功或 416），避免把错误页/拦截页的地址当成终址。
+                if (resp.isSuccessful || resp.code == 416) {
+                    val finalUrl = resp.request.url.toString()
+                    if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
+                }
                 if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
+                    // 网页错误页常见于「签名直链已过期/被拦截」→ 遗忘终址，
+                    // 让下一次尝试回到原始 URL 重新解析，而不是抱着失效地址反复撞。
+                    forgetResolvedUrl(taskId)
                     return@use SegmentResult.FAILED
                 }
                 when (val code = resp.code) {
@@ -363,6 +456,9 @@ internal class SegmentDownloader(
                     }
                     416 -> SegmentResult.OK  // Range 越界：通常该分片已完成
                     else -> {
+                        // 401/403/410 是「授权/时效」类信号：记住的 CDN 直链很可能已过期，
+                        // 遗忘它 → 下次重新走原始 URL 解析（自愈），而不是一直撞同一个失效地址。
+                        if (code == 401 || code == 403 || code == 410) forgetResolvedUrl(taskId)
                         if (code in 500..599) SegmentResult.THROTTLED else SegmentResult.FAILED
                     }
                 }
@@ -402,7 +498,23 @@ internal class SegmentDownloader(
         try {
             call.execute().use { resp ->
                 if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
-                    throw IllegalStateException("下载失败：返回 HTML（链接失效/需要 Referer）")
+                    // 【文案修正】旧文案「链接失效/需要 Referer」会把**地理封锁 / 反爬拦截**误导成
+                    // "链接坏了或需要 Referer"。实测（OVH 从中国访问）：服务器返回的是 HTML 拦截页，
+                    // 既没有失效也不需要 Referer，真正原因是按来源地区/频率做了拦截。
+                    //
+                    // 带上 HTTP 状态码与 Content-Type：这是**唯一能区分**下面几种情况的线索 ——
+                    //   · 403/503 + HTML → 反爬/区域/频率拦截（换 IP、降并发、加 Referer 才可能通）
+                    //   · 200 + HTML → 地址指向的是网页本身，不是文件
+                    //   · 404/410 + HTML → 链接（很可能）真的失效了
+                    val code = resp.code
+                    val hint = when {
+                        code == 403 || code == 503 || code == 429 ->
+                            "服务器返回拦截页（常见于按地区/频率/来源的封锁）——不是链接失效，也不一定需要 Referer"
+                        code == 404 || code == 410 -> "链接很可能已失效"
+                        code == 200 -> "该地址返回的是网页而非文件：可能是分享页/播放页，或需要登录态"
+                        else -> "服务器返回了网页而不是文件"
+                    }
+                    throw IllegalStateException("下载失败：服务器返回 HTML（HTTP $code）。$hint")
                 }
                 if (!resp.isSuccessful) throw IllegalStateException("下载失败 HTTP ${resp.code}")
                 val body = resp.body ?: return@use false
