@@ -135,9 +135,9 @@ class ResumeProbeTest {
     }
 
     @Test
-    fun `known size resume still discards parts when server has no strong validator`() = runBlocking {
+    fun `weak validator resume reuses parts when content fingerprint matches`() = runBlocking {
         val payload = ByteArray(SIZE) { ((it * 23 + 4) % 256).toByte() }
-        // 对照组：服务器**不给** ETag / Last-Modified → 只能拿到弱校验器。
+        // 服务器**不给** ETag / Last-Modified → 只能拿到弱校验器（夸克等网盘 CDN 的典型行为）。
         val srv = RangeServer(payload, etag = null, lastModified = null)
         val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak")
         val client = TurboClient(cfg(workDir))
@@ -147,16 +147,47 @@ class ResumeProbeTest {
                 DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
             )
             assertTrue(client.await(id).isSuccess)
-            assertTrue(out.readBytes().contentEquals(payload))
+            assertTrue(out.readBytes().contentEquals(payload), "复用旧分片后内容必须仍逐字节一致")
 
             val served = srv.bodyBytes.get()
-            println("[RESUME] 无强校验器（对照组）：服务器共吐字节=$served（完整文件=$SIZE）")
-            // 安全底线：弱校验器不足以证明旧分片属于当前版本 → 必须丢弃重下。
+            println("[RESUME] 弱校验器 + 指纹一致：服务器共吐字节=$served（完整=$SIZE，已存分片=$BLOCK）")
+            // 【本次修复】旧行为是"弱校验器 → 一律丢弃 → 从 0 重下"，用户实报：
+            // 夸克链接一暂停就整包重下。现在改用内容指纹（前 64KB 比对），一致就该复用。
+            assertTrue(
+                served <= SIZE - BLOCK + (128 * 1024),
+                "服务器吐了 $served 字节：弱校验器场景仍然丢弃了旧分片（应为指纹一致 → 复用）。" +
+                    "这正是『暂停就重新下载』的根因。"
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `weak validator resume still discards parts when fingerprint mismatches`() = runBlocking {
+        // 安全底线：服务器换了一个**同样大小、但内容不同**的文件（弱校验器唯一防不住的场景）。
+        // 指纹比对必须发现它 → 丢弃旧分片重下，绝不能合并出新旧混杂的损坏文件。
+        val stale = ByteArray(SIZE) { ((it * 23 + 4) % 256).toByte() }      // 旧文件内容
+        val fresh = ByteArray(SIZE) { ((it * 91 + 77) % 256).toByte() }     // 新文件：同大小、不同内容
+        val srv = RangeServer(fresh, etag = null, lastModified = null)
+        // 目录里放的是**旧文件**的分片
+        val (workDir, _) = stageOldPart(stale, "len=$SIZE|weak")
+        val client = TurboClient(cfg(workDir))
+        val out = File.createTempFile("resume-out3", ".bin").apply { deleteOnExit() }
+        try {
+            val id = client.submit(
+                DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
+            )
+            assertTrue(client.await(id).isSuccess)
+            val bytes = out.readBytes()
+            assertTrue(bytes.contentEquals(fresh), "同大小换文件时必须整体重下，不能复用旧分片")
+
+            val served = srv.bodyBytes.get()
+            println("[RESUME] 弱校验器 + 指纹不一致：服务器共吐字节=$served（完整=$SIZE）")
             assertTrue(
                 served >= SIZE,
-                "弱校验器场景下服务器只吐了 $served 字节（完整=$SIZE）：" +
-                    "旧分片被复用了——这会让「同大小不同内容」的新文件合并出损坏结果。" +
-                    "本次修复**不得**削弱这条安全性。"
+                "服务器只吐了 $served 字节（完整=$SIZE）：旧分片被复用了 —— " +
+                    "这会让「同大小不同内容」的新文件合并出损坏结果。指纹校验必须拦住它。"
             )
         } finally {
             client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()

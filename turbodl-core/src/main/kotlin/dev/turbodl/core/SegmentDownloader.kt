@@ -322,6 +322,57 @@ internal class SegmentDownloader(
         }
 
     /**
+     * 取 [start, start+len) 区间的字节，用于**续传内容指纹校验**（失败/不支持 Range 返回 null）。
+     *
+     * 为什么不复用 [probe]：probe 只读响应头，这里要读**字节**。
+     * 用途见 `BuiltinHttpBackend` 的续传校验：服务器只给弱校验器（无 ETag）时，
+     * 用「已存分片的前若干字节」与服务器同区间逐字节比对，来代替"一律丢弃旧分片"。
+     */
+    suspend fun fetchPrefix(
+        url: String,
+        headers: Map<String, String>,
+        start: Long,
+        len: Int,
+        timeoutMs: Long,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        if (len <= 0) return@withContext null
+        val end = start + len - 1
+        val req = Request.Builder()
+            .url(url)
+            .header("Range", "bytes=$start-$end")
+            .apply { headers.forEach { (k, v) -> header(k, v) } }
+            // 与分片请求一致：禁止透明解压，否则比对的是压缩后的字节。
+            .header("Accept-Encoding", "identity")
+            .get().build()
+        val effClient = if (timeoutMs > 0)
+            client.newBuilder().callTimeout(timeoutMs, TimeUnit.MILLISECONDS).build() else client
+        val call = effClient.newCall(req)
+        try {
+            call.execute().use { resp ->
+                // 只认 206（精确区间）；start==0 时允许 200（部分服务器对 bytes=0- 回整文件）。
+                if (resp.code != 206 && !(resp.code == 200 && start == 0L)) return@use null
+                val body = resp.body ?: return@use null
+                val buf = ByteArray(len)
+                var off = 0
+                body.byteStream().use { ins ->
+                    while (off < len) {
+                        val n = ins.read(buf, off, len - off)
+                        if (n <= 0) break
+                        off += n
+                    }
+                }
+                if (off <= 0) null else buf.copyOf(off)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        } finally {
+            runCatching { if (!call.isCanceled()) call.cancel() }
+        }
+    }
+
+    /**
      * 带超时与重试的探测。
      *
      * 为什么需要：探测无界限等待时，connect(15s) + read(60s) 可能叠加到近分钟，

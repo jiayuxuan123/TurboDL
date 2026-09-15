@@ -444,10 +444,12 @@ internal class SegmentScheduler(
                                         if (config.backpressureConsecutiveFailures in 1..n) {
                                             throttleDown(); consecutiveFailures.set(0)
                                         }
-                                        // 退避上限压到 8s：真正的解药是**降并发**（上面那步），
-                                        // 而不是让用户干等几分钟。指数段用 throttleAttempts 而不是总 attempts，
-                                        // 保证"偶尔被限流"不会被历史失败次数放大成超长等待。
-                                        delay(backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(3)))
+                                        // 【退避长度看宿主意图】宿主关掉背压（backpressureConsecutiveFailures=0）
+                                        // 表示"**不要降并发，只重试**"。那就没有"等并发降下来"这回事了 ——
+                                        // 长退避只会让 worker 干等，表现为"速度上不去、线程数也上不去"
+                                        // （用户实报）。故此时退避压到 1s/2s，快速重投。
+                                        val maxShift = if (config.backpressureConsecutiveFailures <= 0) 1 else 3
+                                        delay(backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(maxShift)))
                                         offer(seg)
                                     }
                                 }

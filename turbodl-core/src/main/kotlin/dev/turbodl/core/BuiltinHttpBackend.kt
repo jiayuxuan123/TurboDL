@@ -22,11 +22,6 @@ internal class BuiltinHttpBackend(
 
     override val name: String = "builtin-http"
 
-    private companion object {
-        /** 续传校验标记文件名。 */
-        const val VALIDATOR_FILE = ".validator"
-    }
-
     override fun supports(request: DownloadRequest): Boolean {
         val u = request.url.lowercase()
         return u.startsWith("http://") || u.startsWith("https://")
@@ -103,8 +98,10 @@ internal class BuiltinHttpBackend(
         //
         // 现在的策略：
         //  - validator 带 `weak` 标记（见 ProbeResult.isWeak），弱校验器可被识别；
-        //  - 弱校验器不足以支撑安全续传：目录里已有旧分片时丢弃重下
-        //    （由 config.trustWeakValidator 显式放开；默认 false = 正确性优先）；
+        //  - 弱校验器**不再一律丢弃**（旧行为会把"暂停→续传"整个废掉，用户实报：
+        //    夸克链接暂停后从 0 重下）：改为**内容指纹校验** —— 用已存分片的前若干字节
+        //    与服务器同区间逐字节比对；一致则保留旧分片（续传可用），不一致/取不到才丢弃。
+        //    这样既保住"防同大小不同内容静默损坏"的安全底线，又让续传真正可用。
         //  - 强校验器变化 → 丢弃旧分片（原行为）；
         //  - validator 必须在**任何分片写入之前**落盘；now 为空时清掉旧文件而非留着。
         run {
@@ -116,7 +113,14 @@ internal class BuiltinHttpBackend(
             val weakButResuming = probe.isWeak && !context.config.trustWeakValidator
             val hasOldParts = hasResumableParts
 
-            if (changed || (weakButResuming && hasOldParts)) {
+            // 内容指纹：仅在「弱校验器 + 有旧分片 + 令牌本身没变」时才需要（其余分支已定性）。
+            val fingerprintOk = if (weakButResuming && hasOldParts && !changed) {
+                verifyResumeFingerprint(chunkDir, effectiveUrl, request.headers)
+            } else {
+                false
+            }
+
+            if (changed || (weakButResuming && hasOldParts && !fingerprintOk)) {
                 // 丢弃过期/无法安全校验的分片，从头下（不报错，对用户透明）。
                 // 排除 .validator 自身，避免"删了又写"的脆弱时序。
                 chunkDir.listFiles()?.forEach { f ->
@@ -272,5 +276,63 @@ internal class BuiltinHttpBackend(
                 throw IllegalStateException(outcome.reason)
             }
         }
+    }
+
+    /**
+     * 弱校验器续传的**内容指纹校验**。
+     *
+     * 取「起始位置最小且非空的 `seg_*.part`」的前 [FINGERPRINT_BYTES] 字节，
+     * 向服务器请求**同一区间**并逐字节比对：
+     *  - 一致 → 旧分片确实属于当前版本 → 保留（续传可用）；
+     *  - 不一致 / 请求失败 / 不支持 Range → 返回 false，调用方仍按旧的保守策略丢弃（安全优先）。
+     *
+     * 为什么这样够安全：弱校验器唯一防不住的场景是「服务器换了一个**同样大小**的文件」。
+     * "同大小 + 前 64KB 内容也逐字节相同"的概率可忽略；即便真发生，影响也只是复用旧分片这一处。
+     *
+     * 成本：**一次 64KB 的 Range 请求**。相比"每次续传都从 0 重下整个文件"（1.3GB @1.5MB/s ≈ 15 分钟），
+     * 这个代价可以忽略。
+     */
+    private suspend fun verifyResumeFingerprint(
+        chunkDir: File,
+        url: String,
+        headers: Map<String, String>,
+    ): Boolean {
+        val parts = chunkDir.listFiles { f ->
+            f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
+        } ?: return false
+        val part = parts.minByOrNull { parseSegStart(it.name) ?: Long.MAX_VALUE } ?: return false
+        val start = parseSegStart(part.name) ?: return false
+        val len = minOf(FINGERPRINT_BYTES.toLong(), part.length()).toInt()
+        if (len <= 0) return false
+
+        val local = runCatching {
+            val buf = ByteArray(len)
+            part.inputStream().use { ins ->
+                var off = 0
+                while (off < len) {
+                    val n = ins.read(buf, off, len - off)
+                    if (n <= 0) break
+                    off += n
+                }
+                if (off < len) return@runCatching null
+            }
+            buf
+        }.getOrNull() ?: return false
+
+        val remote = downloader.fetchPrefix(url, headers, start, len, timeoutMs = 10_000) ?: return false
+        if (remote.size < len) return false
+        return remote.copyOf(len).contentEquals(local)
+    }
+
+    /** 从 `seg_{start}_{end}.part` 解析 start。 */
+    private fun parseSegStart(name: String): Long? =
+        name.removePrefix("seg_").substringBefore('_').toLongOrNull()
+
+    private companion object {
+        /** 续传校验标记文件名。 */
+        const val VALIDATOR_FILE = ".validator"
+
+        /** 续传内容指纹长度：64KB 足以区分不同文件，又不至于成为负担。 */
+        const val FINGERPRINT_BYTES = 64 * 1024
     }
 }
