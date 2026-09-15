@@ -178,9 +178,17 @@ internal object HttpClientFactory {
      */
     private class DohDns(dohUrl: String) : Dns {
         private val base = dohUrl
+        /**
+         * DoH 客户端。
+         *
+         * 【超时压到 3s 而不是 10s】实测（用户反馈：国内网开 Cloudflare DoH）：DoH 在国内**普遍很慢甚至不通**。
+         * 而 DoH 只是"更好用的 DNS"，**失败后本来就会回退系统 DNS** —— 所以超时越长，纯粹是白等：
+         * 10s 超时意味着「每个新域名的首次解析都白等 10 秒」；3s 让回退早 7 秒发生，
+         * 配合下面的缓存，首次连接的开销从"20s 级"降到"3s 级"。
+         */
         private val client = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
             .build()
 
         /**

@@ -89,6 +89,15 @@ class ConnectionSweepTest {
         val count503 = AtomicInteger(0)
         val countOther = AtomicInteger(0)
 
+        /**
+         * 最后一次响应体写毕的时刻。
+         *
+         * 用来把任务总耗时切成「传输阶段」与「收尾(合并分片)阶段」：
+         * `结束 - 本值 ≈ 合并耗时`。分片数越多（= 连接数×spc），这个值越可能变成大头 ——
+         * 这正是判断「N=128 变慢」该修传输还是该修合并的关键数据。
+         */
+        val lastWriteDoneAt = java.util.concurrent.atomic.AtomicLong(0)
+
         /** 聚合限速器：整个服务器共用一个（就是"按 IP 聚合"的语义）。 */
         private val aggregate = RateLimiter(2_000_000)
         private val connRate = 100_000L
@@ -156,6 +165,7 @@ class ConnectionSweepTest {
                 out.write(payload, off + written, n)
                 written += n
             }
+            lastWriteDoneAt.set(System.currentTimeMillis())
         }
 
         fun stop() = server.stop(0)
@@ -206,9 +216,12 @@ class ConnectionSweepTest {
         }
         val ms = System.currentTimeMillis() - t0
         val mbs = payload.size.toDouble() / 1048576.0 / (ms / 1000.0)
-        val line = "%-24s N=%-4d %8dms %8.1f MB/s  峰值并发=%-4d 206=%-5d 503=%-5d %s".format(
+        // 传输阶段 = 首个响应开始到最后一个响应写毕；收尾阶段 = 写毕到任务结束（合并分片 + 落盘）。
+        val writeDoneAt = srv.lastWriteDoneAt.get().takeIf { it > 0 }
+        val tailMs = writeDoneAt?.let { it - t0 } ?: -1L
+        val line = "%-24s N=%-4d %8dms %8.1f MB/s  峰值并发=%-4d 206=%-5d 503=%-5d 收尾=%5dms %s".format(
             model.label, conns, ms, mbs, srv.peakConcurrent.get(), srv.count206.get(),
-            srv.count503.get(), failure?.let { "❌ $it" } ?: "✅"
+            srv.count503.get(), tailMs, failure?.let { "❌ $it" } ?: "✅"
         )
         return line to failure
     }

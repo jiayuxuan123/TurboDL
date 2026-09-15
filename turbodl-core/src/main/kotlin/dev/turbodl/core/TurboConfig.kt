@@ -125,6 +125,23 @@ data class TurboConfig(
     val segmentsPerConnection: Int = 4,
 
     /**
+     * 单任务**总切块数上限**（默认 128；**0 表示不限**）。
+     *
+     * 块数本来 = `连接数 × segmentsPerConnection`，是个**没有上限的乘法**：
+     * 128 连接 → 512 块（被 minSegmentSize 压到 256 块，每块仅 64KB）。
+     * 每个块 = 一次 HTTP 请求 + 一个临时文件 + 合并时的一次读写，高连接数下开销可观。
+     *
+     * 取 128 的效果：**连接数 ≤ 32 的配置完全不受影响**（32×4=128），
+     * 只在 64/128 连接这类高并发下收敛块数。
+     *
+     * ⚠️ **该上限的收益尚未被可靠量化**，且 `FanoutCostTest` 的交错实验反而显示
+     * 「分片数相同时，128 连接比 64 连接慢约 1.8 倍」——即**连接数本身**才是 128 档的主要代价。
+     * 因此本上限目前只是一个"防止乘法失控"的保守护栏，**不是**已证实的性能优化。
+     * 调大/调小或改成连接数限制前，请先在**真实链路**上复测（`RealLinkSweepTest`）。
+     */
+    val maxSegmentsPerTask: Int = 128,
+
+    /**
      * 自适应并发下调策略（**不照搬 AIMD 抖动判断**）：
      * 仅当收到 429/503 或出现「连续连接失败」达到阈值时才乘性下调并发；
      * 普通网速波动绝不主动减少连接数。设为 0 关闭该保护。
@@ -326,6 +343,7 @@ data class TurboConfig(
         // blockSize 是"单块别太大"的上限；当上限小于下限时，上限胜出即可，无需报错。
         // 实际生效值由 SegmentScheduler 的 effBlock 计算决定（见那里的注释）。
         require(segmentsPerConnection in 1..64) { "segmentsPerConnection 必须在 1..64" }
+        require(maxSegmentsPerTask >= 0) { "maxSegmentsPerTask 不能为负（0 = 不限）" }
         require(maxConnectionsPerHost >= 0) { "maxConnectionsPerHost 不能为负" }
         require(warmUpConnectionCount >= 0) { "warmUpConnectionCount 不能为负" }
         require(slowStartInitial >= 0) { "slowStartInitial 不能为负" }

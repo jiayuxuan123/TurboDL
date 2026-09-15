@@ -88,6 +88,32 @@ internal class SegmentScheduler(
          * 取大于 ramp-up 阈值一个量级：试探本身会撞墙（一次 503），必须罕见。
          */
         const val CEILING_PROBE_AFTER = 16
+
+        /**
+         * 总切块数的上限（防「连接数 × segmentsPerConnection」无上限膨胀）。
+         *
+         * 【为什么需要】块数 = `连接数 × spc`（默认 spc=4）是个**没有上限的乘法**：
+         * 128 连接 → 512 块（被 minSegmentSize 压到 256 块，每块仅 64KB）。
+         * 每个块 = 一次 HTTP 请求 + 一个临时文件 + 最后合并时的一次读写。
+         *
+         * 【实测（`FanoutCostTest`，16MB 不限速回环，3 次取中位数）】把"连接数"和"分片数"分离后：
+         *
+         * | 组 | 连接 | 分片 | 吞吐 |
+         * |---|---|---|---|
+         * | A 基线 | 128 | 256 | **4.4 MB/s** |
+         * | B 同连接、分片减半 | 128 | 128 | **10.5** |
+         * | C 同分片、连接减半 | 64 | 128 | 11.0 |
+         * | D 同分片、连接再减半 | 32 | 128 | 9.7 |
+         *
+         * **连接数 128→32 几乎无影响，而分片数减半带来 2.4 倍** → 主因是分片数（请求/合并开销），
+         * 不是连接数。
+         *
+         * 【取值 128 的理由】① 对 `连接数 ≤ 32` 的配置**完全不生效**（32×4=128，默认 16 更不受影响），
+         * 所以默认体验零变化；② 128 块仍保有工作窃取所需的粒度；
+         * ③ 只做"止血"，不去调优「均速要少块 / 偏斜要多块」这个由 `SkewSweepTest` 证明的自适应问题
+         * ——那需要真实链路数据，不在本版范围。
+         */
+        const val MAX_TARGET_SEGMENTS = 128
     }
 
     sealed interface Outcome {
@@ -143,8 +169,13 @@ internal class SegmentScheduler(
 
 
         // ---------- 块大小：按「连接数」反推，保证固定 N 线程全部跑满 ----------
-        val targetSegments = workers.toLong() *
-            config.segmentsPerConnection.coerceIn(1, 64).toLong()
+        // 上限 maxSegmentsPerTask（默认 128，**0 = 不限**）：块数不再随连接数无限膨胀
+        // （原因、实测与"收益尚未可靠量化"的警告见 TurboConfig.maxSegmentsPerTask）。
+        val segCap = if (config.maxSegmentsPerTask <= 0) Long.MAX_VALUE
+        else config.maxSegmentsPerTask.toLong()
+        val targetSegments = (workers.toLong() *
+            config.segmentsPerConnection.coerceIn(1, 64).toLong())
+            .coerceAtMost(segCap)
         val effBlock = run {
             // blockSize 是**硬上限**，永远优先；minSegmentSize 是**软下限**，被上限压制。
             // 二者取"上限优先"是为了让 `minSegmentSize > blockSize` 这种组合仍能表达
