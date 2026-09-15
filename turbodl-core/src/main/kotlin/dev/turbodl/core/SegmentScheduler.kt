@@ -68,6 +68,20 @@ internal class SegmentScheduler(
          * 网盘 CDN 偶发 200 不应立刻清空所有已下分片；只有反复出现才判定服务器确实不支持 Range。
          */
         const val RANGE_IGNORED_TOLERANCE = 3
+
+        /**
+         * 限流（429/503）的重试预算，与 `maxRetries` **分开**。
+         *
+         * 为什么要更大：429/503 表示「并发太高」，正确响应是**降低并发后重试**——
+         * 这需要时间（背压逐级减半 + 退避等待）。若与普通失败共用一个小预算，
+         * 分片会在并发降到服务器能接受的档位**之前**就被丢掉 → 整个任务失败。
+         * 实测（服务器并发上限 16）：N=32 时旧实现整个任务失败
+         * （「分片持续被限流（429/503），重试 4 次后放弃」）。
+         *
+         * 取 `max(8, maxRetries × 2)`：默认 maxRetries=5 → 10 次；配合退避上限 8s，
+         * 最坏多等约半分钟 —— 远好于把整个任务判死。
+         */
+        fun throttleBudget(maxRetries: Int): Int = max(8, maxRetries * 2)
     }
 
     sealed interface Outcome {
@@ -81,6 +95,14 @@ internal class SegmentScheduler(
         val start: Long,
         val end: Long,
         var attempts: Int = 0,
+        /**
+         * **限流（429/503）单独的计数**，不与 [attempts] 混用。
+         *
+         * 二者语义不同：429/503 是「并发太高，请慢一点」的**信号**（正确响应是降并发 + 重试），
+         * [attempts] 是「这次没拿到」的**失败**（有限次重试后放弃）。
+         * 旧实现混用，导致一个在并发降下来之前被拒几次的分片就被丢掉 → 整个任务失败。
+         */
+        var throttleAttempts: Int = 0,
     ) {
         val length get() = end - start + 1
         fun file(dir: File) = File(dir, "seg_${start}_${end}.part")
@@ -175,6 +197,9 @@ internal class SegmentScheduler(
         }
         /** 动态目标并发（慢启动从 slowStartInit 升、背压时降、健康时升；上限 workers）。 */
         val desired = AtomicInteger(slowStartInit)
+
+        /** 限流（429/503）重试预算：比 maxRetries 宽（原因见 companion 里 `throttleBudget` 的注释）。 */
+        val throttleRetryBudget = throttleBudget(config.maxRetries)
         /** 当前真实在传输的连接数（供 UI 展示实际并发）。 */
         val activeConns = AtomicInteger(0)
         /** 正在传输中的分片数（判定“队列空但仍可能有重试回投”）。 */
@@ -331,21 +356,37 @@ internal class SegmentScheduler(
                                 SegmentResult.THROTTLED -> {
                                     consecutiveSuccesses.set(0)
                                     val n = consecutiveFailures.incrementAndGet()
-                                    seg.attempts++
-                                    if (seg.attempts > config.maxRetries) {
+                                    // 【关键修复】429/503 **不占用** maxRetries 预算，用独立且更宽松的预算。
+                                    //
+                                    // 旧实现与普通失败共用 `seg.attempts`/`maxRetries`，后果是：
+                                    // 一个在 t=0 就被拒的分片，退避 1s→2s→4s 之后即耗尽预算被**丢弃**，
+                                    // 而此时背压才刚把并发降下来（甚至还没降）—— 于是整个任务失败。
+                                    //
+                                    // 实测（`ConnectionSweepTest`，服务器并发上限 16）：N=32 时任务直接失败
+                                    // 「分片 131072-262143 持续被限流（429/503），重试 4 次后放弃」，
+                                    // 而 N=128 反而"成功"（撞了 299 次 503 后并发终于降到位）。
+                                    //
+                                    // 语义上二者本来就不同：429/503 =「你慢一点」，是**关于并发**的信号；
+                                    // 而 FAILED =「这次没拿到」。把前者当后者处理，就等于拒绝执行服务器的要求。
+                                    seg.throttleAttempts++
+                                    if (seg.throttleAttempts > throttleRetryBudget) {
                                         failReason.compareAndSet(
                                             null,
-                                            "分片 ${seg.start}-${seg.end} 持续被限流（429/503），重试 ${seg.attempts} 次后放弃"
+                                            "分片 ${seg.start}-${seg.end} 持续被限流（429/503），" +
+                                                "并发已降至 ${desired.get()} 仍失败 ${seg.throttleAttempts} 次"
                                         )
                                     } else {
-                                        // 【P1-3 修复】显式退避后再回投。
-                                        // 旧实现 429 后立即 offer(seg) → 同一分片立刻重投 →
-                                        // "Hammering 'busy' server is not a good idea"（aria2 原话）。
-                                        delay(backoffMsFor(seg.attempts - 1))
+                                        // 【顺序修正】先降并发、再退避重投。
+                                        // 旧实现是先 delay 再 throttleDown：等睡醒才降并发，
+                                        // 于是重投时并发还没降下来 → 又被拒 → 白烧一次重试预算。
+                                        if (config.backpressureConsecutiveFailures in 1..n) {
+                                            throttleDown(); consecutiveFailures.set(0)
+                                        }
+                                        // 退避上限压到 8s：真正的解药是**降并发**（上面那步），
+                                        // 而不是让用户干等几分钟。指数段用 throttleAttempts 而不是总 attempts，
+                                        // 保证"偶尔被限流"不会被历史失败次数放大成超长等待。
+                                        delay(backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(3)))
                                         offer(seg)
-                                    }
-                                    if (config.backpressureConsecutiveFailures in 1..n) {
-                                        throttleDown(); consecutiveFailures.set(0)
                                     }
                                 }
                                 SegmentResult.FAILED -> {
