@@ -99,5 +99,15 @@ sealed interface TurboEvent {
         val totalBytes: Long,
         val supportsRange: Boolean,
         val resolvedUrl: String,
+        /**
+         * 探测阶段耗时（毫秒）。
+         *
+         * 【诊断用】区分「解析慢」的两种完全不同的病因：
+         * - `probeMs` 大 → 探测/服务器响应慢（网络或服务器问题）；
+         * - `probeMs` ≈ 0（已知大小跳过探测）而首字节仍迟迟不来 → **慢在首连接**
+         *   （DNS / IPv6 路由不通 / TLS 握手），与探测无关。
+         * 调用方已知大小且跳过探测时为 0；旧事件流可能为 -1。
+         */
+        val probeMs: Long = -1,
     ) : TurboEvent
 }

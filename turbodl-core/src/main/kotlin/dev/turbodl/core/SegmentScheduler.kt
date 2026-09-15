@@ -82,6 +82,12 @@ internal class SegmentScheduler(
          * 最坏多等约半分钟 —— 远好于把整个任务判死。
          */
         fun throttleBudget(maxRetries: Int): Int = max(8, maxRetries * 2)
+
+        /**
+         * 已稳定在天花板多少个成功分片后，才允许把天花板 +1 重新试探。
+         * 取大于 ramp-up 阈值一个量级：试探本身会撞墙（一次 503），必须罕见。
+         */
+        const val CEILING_PROBE_AFTER = 16
     }
 
     sealed interface Outcome {
@@ -198,6 +204,19 @@ internal class SegmentScheduler(
         /** 动态目标并发（慢启动从 slowStartInit 升、背压时降、健康时升；上限 workers）。 */
         val desired = AtomicInteger(slowStartInit)
 
+        /**
+         * 学到的「服务器能接受的并发天花板」。
+         *
+         * 没有它，背压降下去之后 ramp-up 仍会按比例爬回 [workers] —— 然后再撞墙、再降、再爬，
+         * 形成 AIMD 震荡：实测（服务器并发上限 16，N=128）撞了 **323 次 503**。
+         * 背压下调时**同步收紧天花板**，恢复期最多爬到这里；长时间稳定后才 +1 缓步试探
+         * （试探本身会撞墙，所以步长必须是 +1 而不是按比例，让失败的代价最小）。
+         */
+        val ceiling = AtomicInteger(workers)
+
+        /** 在天花板处稳定成功的分片计数（用于缓步试探）。 */
+        val ceilingStableCount = AtomicInteger(0)
+
         /** 限流（429/503）重试预算：比 maxRetries 宽（原因见 companion 里 `throttleBudget` 的注释）。 */
         val throttleRetryBudget = throttleBudget(config.maxRetries)
         /** 当前真实在传输的连接数（供 UI 展示实际并发）。 */
@@ -281,6 +300,8 @@ internal class SegmentScheduler(
             val target = max(1, cur / 2)
             if (target < cur) {
                 desired.set(target)
+                // 天花板同步收紧：这次限流证明「上一个天花板」也太高了。
+                ceiling.updateAndGet { min(it, target) }
                 reportConns()
             }
         }
@@ -297,9 +318,19 @@ internal class SegmentScheduler(
             if (consecutiveSuccesses.get() < RAMP_UP_SUCCESS_THRESHOLD) return
             consecutiveSuccesses.set(0)
             val cur = desired.get()
+            val cap = ceiling.get()
+            if (cur >= cap) {
+                // 已稳定在学到的天花板：缓步试探能否再高一点（+1）。
+                // 撞墙 → throttleDown 会把天花板重新压回来，代价只有一次 503。
+                if (cap < workers && ceilingStableCount.incrementAndGet() >= CEILING_PROBE_AFTER) {
+                    ceilingStableCount.set(0)
+                    ceiling.incrementAndGet()
+                }
+                return
+            }
             // 按比例上调（至少 +1）：从 4 爬到 128 只需十余次，而非 124 次。
             val step = max(1, (cur * RAMP_UP_FACTOR).toInt())
-            val next = min(workers, cur + step)
+            val next = min(min(workers, cap), cur + step)
             desired.set(next)
             reportConns()
         }

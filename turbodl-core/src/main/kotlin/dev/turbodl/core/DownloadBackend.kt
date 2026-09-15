@@ -75,12 +75,16 @@ interface BackendContext {
      *
      * 仅供宿主参考（如用服务器建议文件名重命名、记录 MIME），不影响引擎行为。
      * 默认空实现，第三方 backend 无需实现。
+     *
+     * @param probeMs 探测阶段耗时（毫秒）。调用方已知大小且跳过探测时为 0；
+     *                宿主可据此区分「解析慢」到底是探测慢还是首连接慢。
      */
     fun reportMetadata(
         suggestedFileName: String?,
         contentType: String?,
         etag: String?,
         lastModified: String?,
+        probeMs: Long = -1,
     ) { /* no-op by default */ }
 
     /** Report cumulative downloaded bytes and current active connection count. */

@@ -141,11 +141,25 @@ internal object HttpClientFactory {
 
     private fun applyDns(builder: OkHttpClient.Builder, mode: DnsMode) {
         when (mode) {
-            is DnsMode.System -> { /* OkHttp 默认使用系统 DNS */ }
+            // IPv4 优先：OkHttp 按 DNS 返回顺序逐个地址尝试连接，**每个地址吃满 connectTimeout**
+            // （默认 15s）才轮到下一个。若解析同时给出 AAAA/A 而设备 IPv6 路由不通
+            // （手机蜂窝网常见），首连接 = AAAA 超时 15s + A 成功 ≈ 15~30s，表现恰好是
+            // “任何链接解析都要卡半分钟”。v4 优先让第一个地址就是可用地址；仅调序，不丢地址。
+            is DnsMode.System -> builder.dns(FamilyOrderedDns(Dns.SYSTEM))
             is DnsMode.StaticHosts -> builder.dns(StaticHostsDns(mode.hosts))
-            is DnsMode.DoH -> builder.dns(DohDns(mode.dohUrl))
+            is DnsMode.DoH -> builder.dns(FamilyOrderedDns(DohDns(mode.dohUrl)))
         }
     }
+
+    /** IPv4 优先的 DNS 包装（只调序，不丢地址、不改内容）。 */
+    private class FamilyOrderedDns(private val delegate: Dns) : Dns {
+        override fun lookup(hostname: String): List<InetAddress> =
+            preferIpv4(delegate.lookup(hostname))
+    }
+
+    /** 把 IPv4 排到前面（稳定排序，族内相对顺序不变）。 */
+    private fun preferIpv4(addrs: List<InetAddress>): List<InetAddress> =
+        if (addrs.size < 2) addrs else addrs.sortedByDescending { it is java.net.Inet4Address }
 
     /** 静态 hosts 覆盖 DNS：命中返回配置 IP，未命中回退系统解析。 */
     private class StaticHostsDns(private val hosts: Map<String, List<String>>) : Dns {
@@ -169,11 +183,31 @@ internal object HttpClientFactory {
             .readTimeout(10, TimeUnit.SECONDS)
             .build()
 
+        /**
+         * DoH 查询缓存。
+         *
+         * 【为什么必须有】一次 DoH 查询是**完整的 HTTPS 往返**（本实现超时 10s 连接 + 10s 读），
+         * 而旧实现**每个新连接都要重新查一次**。DoH 服务器慢/不通时，
+         * 「每个链接的解析都要先撞一次超时」→ 表现成**任何链接解析都卡 10~30 秒**
+         * ——且越新的版本探测请求越少，撞 DoH 的相对占比反而越显眼。
+         * 成功缓存 5 分钟；失败（空结果）也缓存 30 秒——失败缓存让后续连接**快速失败**，
+         * 而不是每个都再等一轮超时。
+         */
+        private val cache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
+        private class CacheEntry(val addrs: List<InetAddress>, val expireAt: Long)
+
         override fun lookup(hostname: String): List<InetAddress> {
-            return runCatching { queryDoH(hostname) }
+            val now = System.currentTimeMillis()
+            cache[hostname]?.let { e ->
+                if (e.expireAt > now) return e.addrs
+                cache.remove(hostname, e)
+            }
+            val result = runCatching { queryDoH(hostname) }
                 .getOrNull()
                 ?.takeIf { it.isNotEmpty() }
-                ?: Dns.SYSTEM.lookup(hostname)
+                ?: preferIpv4(Dns.SYSTEM.lookup(hostname))
+            cache[hostname] = CacheEntry(result, now + if (result.isEmpty()) 30_000L else 300_000L)
+            return result
         }
 
         private fun queryDoH(hostname: String): List<InetAddress> {

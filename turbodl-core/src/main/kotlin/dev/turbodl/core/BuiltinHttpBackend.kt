@@ -54,6 +54,8 @@ internal class BuiltinHttpBackend(
         // 故：**只要有旧分片要续，就老老实实探测一次**，把强校验器拿回来。
         val canSkipProbe = context.config.skipProbeWhenSizeKnown &&
             knownSize > 0 && !hasResumableParts
+        // 【阶段计时】探测耗时：宿主可用它区分「解析慢」是探测慢（此值大）还是首连接慢（此值≈0）。
+        val probeStartAt = System.currentTimeMillis()
         val probe = if (canSkipProbe) {
             // 已知大小：乐观假设支持 Range 直接开工。若实际不支持，
             // 首个分片会拿到 200 整文件并走已有的 RANGE_IGNORED 回退链路，正确性不受影响。
@@ -69,12 +71,15 @@ internal class BuiltinHttpBackend(
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
         // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
+        // probeMs 供宿主诊断「解析慢」：大=探测慢；≈0（跳过探测）而首字节迟迟不来=慢在首连接。
+        val probeMs = System.currentTimeMillis() - probeStartAt
         runCatching {
             context.reportMetadata(
                 suggestedFileName = probe.suggestedFileName,
                 contentType = probe.contentType,
                 etag = probe.etag,
                 lastModified = probe.lastModified,
+                probeMs = probeMs,
             )
         }
         // 关键：后续分片/整文件下载均使用重定向后的最终 URL（如网盘原始链 302→CDN 临时直链）。
