@@ -72,85 +72,31 @@ class RealLinkSweepTest {
         println("单格时长   : ${secs}s   连接数档位: ${conns.joinToString("/")}")
         println("自定义请求头: ${if (headers.isEmpty()) "（无）" else headers.keys.joinToString("/")}")
         println("")
-        println("%-8s %14s %12s %10s %12s".format("连接数", "窗口吞吐", "峰值速度", "峰值并发", "不增长时长"))
+        println("%-8s %14s %12s %10s".format("连接数", "窗口吞吐", "峰值速度", "峰值并发"))
 
-        val results = mutableListOf<Pair<Int, Double>>()
-        for (n in conns) {
-            val out = File.createTempFile("sweepreal", ".bin").apply { deleteOnExit() }
-            val client = TurboClient(
-                TurboConfig(
-                    maxConnectionsPerTask = n,
-                    maxConcurrentTasks = 1,
-                    warmUpConnections = false,
-                    slowStart = false,   // 固定并发，才能干净对比"连接数"这一个变量
+        // 【单一实现】直接复用发布出去的 TurboDiagnostics —— 测试与产品同一份代码，不会漂移。
+        val results = TurboDiagnostics.sweepConnections(
+            url = url,
+            headers = headers,
+            knownSize = knownSize,
+            tiers = conns,
+            windowMs = secs * 1000,
+            gapMs = 1000,
+            workDir = File(System.getProperty("java.io.tmpdir"), "turbodl-sweep"),
+        )
+        for (r in results) {
+            println(
+                "%-8d %11.2f MB/s %9s %10d".format(
+                    r.connections, r.mbPerSec,
+                    if (r.error != null) "—" else "—", r.peakConnections
                 )
             )
-            val lastBytes = AtomicLong(0)
-            val lastGrowthAt = AtomicLong(System.currentTimeMillis())
-            val maxSpeed = AtomicLong(0)
-            val peakConns = AtomicInteger(0)
-            var collector: Job? = null
-            try {
-                val id = client.submit(
-                    DownloadRequest(url = url, destination = out, headers = headers, knownSize = knownSize)
-                )
-                collector = launch {
-                    client.events.collect { ev ->
-                        if (ev is TurboEvent.Progress) {
-                            val p = ev.progress
-                            if (p.downloadedBytes > lastBytes.get()) {
-                                lastBytes.set(p.downloadedBytes)
-                                lastGrowthAt.set(System.currentTimeMillis())
-                            }
-                            if (p.speedBytesPerSec > maxSpeed.get()) maxSpeed.set(p.speedBytesPerSec)
-                            if (p.activeConnections > peakConns.get()) peakConns.set(p.activeConnections)
-                        }
-                    }
-                }
-                val t0 = System.currentTimeMillis()
-                while (System.currentTimeMillis() - t0 < secs * 1000) delay(200)
-                val elapsed = System.currentTimeMillis() - t0
-                val bytes = lastBytes.get()
-                client.cancel(id)
-                val stallMs = System.currentTimeMillis() - lastGrowthAt.get()
-                val mbs = bytes.toDouble() / 1048576.0 / (elapsed / 1000.0)
-                println(
-                    "%-8d %11.2f MB/s %9.2f MB/s %10d %9d ms".format(
-                        n, mbs, maxSpeed.get() / 1048576.0, peakConns.get(), stallMs
-                    )
-                )
-                if (bytes > 0) results += n to mbs
-            } catch (e: Exception) {
-                println("%-8d ❌ %s".format(n, e.message))
-            } finally {
-                collector?.cancel()
-                client.shutdown()
-                out.delete()
-            }
-            delay(1000)   // 档位之间留间隔，避免上一档的连接/限流状态影响下一档
+            println("         ${r}")
         }
 
         println("")
-        if (results.size >= 2) {
-            val first = results.first().second
-            val best = results.maxByOrNull { it.second }!!
-            println("=== 判读 ===")
-            println("最低档 ${results.first().first} 连接 = %.2f MB/s；最优 ${best.first} 连接 = %.2f MB/s".format(first, best.second))
-            val gain = if (first > 0) best.second / first else 0.0
-            println("相对最低档增益 = %.2f 倍".format(gain))
-            println(
-                when {
-                    best.first == results.first().first && gain <= 1.15 ->
-                        "→ 加连接**无收益**：服务端很可能是**按 IP/账户聚合限速**。该降连接数（省请求与握手），而不是加。"
-                    best.first > results.first().first && gain > 1.15 ->
-                        "→ 加连接**有收益**且最优档在中间/最高档：结合上面的『峰值并发』看是否真跑满，再决定上限。"
-                    else ->
-                        "→ 出现**先升后降**：服务端对并发有惩罚。必须自适应降到拐点（这正是 aria2 --max-connection-per-server=16 的理由）。"
-                }
-            )
-        } else {
-            println("（样本不足，无法判读——请检查 URL / 请求头 / 网络可达性）")
-        }
+        println("=== 判读 ===")
+        println(TurboDiagnostics.interpret(results))
         assertTrue(true, "测量台：不做断言，结果由人判读")
     }
 }
