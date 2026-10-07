@@ -220,15 +220,22 @@ object TurboDiagnostics {
             }
         }
         val out = mutableListOf<ConnectionTierResult>()
-        for (n in tiers) {
-            val r = runCatching { measureTier(url, headers, knownSize, n, windowMs, workDir) }
-                .getOrElse { e ->
-                    if (e is CancellationException) throw e
-                    ConnectionTierResult(n, 0, 0, 0, e.message ?: e.toString())
-                }
-            out += r
-            onTier?.invoke(r)
-            if (gapMs > 0) delay(gapMs)
+        // 【整段切 IO，而不只是探活】下面每一档都会：建/删临时目录与文件（磁盘 I/O）、
+        // 构造 TurboClient（建 OkHttpClient）、到点 `client.cancel(id)`（关闭在飞 socket）、
+        // 收尾 `client.shutdown()`（清连接池 = 关 socket，TLS 要写 close_notify）。
+        // 宿主是在主线程调本函数的（设置页 `rememberCoroutineScope` + `scope.launch`），
+        // 只把探活切走的话，这里仍会**在主线程上跑满一分钟**并做上述 socket 操作。
+        withContext(Dispatchers.IO) {
+            for (n in tiers) {
+                val r = runCatching { measureTier(url, headers, knownSize, n, windowMs, workDir) }
+                    .getOrElse { e ->
+                        if (e is CancellationException) throw e
+                        ConnectionTierResult(n, 0, 0, 0, e.message ?: e.toString())
+                    }
+                out += r
+                onTier?.invoke(r)
+                if (gapMs > 0) delay(gapMs)
+            }
         }
         out
     }
@@ -403,16 +410,20 @@ object TurboDiagnostics {
             }
         }
         val out = mutableListOf<ConnectionTierResult>()
-        for (k in taskCounts) {
-            val r = runCatching {
-                measureConcurrent(url, headers, knownSize, k, connectionsPerTask, windowMs, workDir)
-            }.getOrElse { e ->
-                if (e is CancellationException) throw e
-                ConnectionTierResult(k, 0, 0, 0, e.message ?: e.toString())
+        // 【整段切 IO】理由同 [sweepConnections]：测量循环本身含磁盘 I/O、socket 关闭
+        // 与 client 生命周期操作，宿主在主线程调用时不能让它跑在调用者调度器上。
+        withContext(Dispatchers.IO) {
+            for (k in taskCounts) {
+                val r = runCatching {
+                    measureConcurrent(url, headers, knownSize, k, connectionsPerTask, windowMs, workDir)
+                }.getOrElse { e ->
+                    if (e is CancellationException) throw e
+                    ConnectionTierResult(k, 0, 0, 0, e.message ?: e.toString())
+                }
+                out += r
+                onTier?.invoke(r)
+                if (gapMs > 0) delay(gapMs)
             }
-            out += r
-            onTier?.invoke(r)
-            if (gapMs > 0) delay(gapMs)
         }
         out
     }

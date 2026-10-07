@@ -218,16 +218,32 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         }
     }
 
-    /** 关闭引擎，取消所有任务并释放资源。 */
+    /**
+     * 关闭引擎，取消所有任务并释放资源。
+     *
+     * ## 为什么每个释放动作各自 `runCatching`
+     *
+     * 这里原先是一条裸顺序链，**第一个抛出的异常会截断后面全部清理**：
+     * `connectionPool.evictAll()` 不是"清空列表"这么无害 —— 它真的 close 每条空闲连接的 socket，
+     * 而关闭 TLS 连接要写 `close_notify`（一次网络写）。OkHttp 的 `Util.closeQuietly` 只吞
+     * `IOException`，**`NetworkOnMainThreadException` 会原样穿透**（Android 宿主在
+     * `ViewModel.onCleared()` 这类主线程回调里调本方法时就会遇到）。
+     * 结果：不仅崩到调用方，`segmentClient` 的 Dispatcher 线程池也**永远不会被关** ——
+     * 一次崩溃换来一份永久泄漏。
+     *
+     * 现在：先关两个线程池（纯内存操作，不会失败），再各自兜底地清连接池，
+     * 任何一个失败都不影响其余步骤。Android 宿主仍应在后台线程调用本方法（关 socket 是网络 I/O），
+     * 但即便误在主线程调用，也不会再截断清理链。
+     */
     fun shutdown() {
         scope.coroutineContext[Job]?.cancel()
         // 惰性客户端可能从未创建：没创建过就没什么可关的，别在这里把它唤醒。
         streamClientRef?.let { sc ->
-            sc.dispatcher.executorService.shutdown()
-            sc.connectionPool.evictAll()
+            runCatching { sc.dispatcher.executorService.shutdown() }
+            runCatching { sc.connectionPool.evictAll() }
         }
-        segmentClient.dispatcher.executorService.shutdown()
-        segmentClient.connectionPool.evictAll()
+        runCatching { segmentClient.dispatcher.executorService.shutdown() }
+        runCatching { segmentClient.connectionPool.evictAll() }
     }
 
     // ---------- 内部 ----------

@@ -64,10 +64,11 @@ internal class TransportClientHolder(initial: TurboConfig) {
         config = latest
         if (newSig == sig) return
         // 旧连接的执行器/连接池需要显式释放，否则每次改设置都泄漏一套线程与连接。
-        runCatching {
-            clientRef.dispatcher.executorService.shutdown()
-            clientRef.connectionPool.evictAll()
-        }
+        // 【逐句兜底】`evictAll()` 会真的 close socket（TLS 要写 close_notify），
+        // 在主线程上是网络 I/O 且异常会穿透（OkHttp 的 closeQuietly 只吞 IOException）——
+        // 一句失败不该让另一句被跳过。
+        runCatching { clientRef.dispatcher.executorService.shutdown() }
+        runCatching { clientRef.connectionPool.evictAll() }
         clientRef = HttpClientFactory.build(latest, HttpClientFactory.ProtocolPreference.H1_ONLY)
         sig = newSig
     }
