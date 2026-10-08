@@ -28,7 +28,16 @@
 </div>
 </header>
 <main id="main">
-<section><h1>Changelog</h1><p class="lead">Generated from the release notes themselves — each entry links to its own release page, where the full text and the files live.</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.0.5</span></h3><p class="small">2026-10-07</p><p class="muted">TurboDL 0.2.0.5：释放链逐句兜底，避免一次异常截断后续清理
+<section><h1>Changelog</h1><p class="lead">Generated from the release notes themselves — each entry links to its own release page, where the full text and the files live.</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.0.6</span></h3><p class="small">2026-10-08</p><p class="muted">TurboDL 0.2.0.6：新增 JavaScript 插件加载器（turbo-plugin-js）
+---
+新增：用 JavaScript 写 TurboDL 插件
+新模块 `turbo-plugin-js`（`dev.turbodl:turbo-plugin-js:0.2.0.6`）。它是一个
+`PluginLoaderProvider` 实现 —— 内核不认识 JS，Kotlin 加载器也不认识，只有你主动引入这个模块时
+QuickJS 才会进入 classpath。
+脚本拿到的是 `host`/`plugin` 两套 ABI，仅此而已：算 URL、拼请求头、生成签名、读写自己的
+沙箱目录、写日志。它**不经手下载数据流**，也不能注册 `DownloadBackend` 或发布宿主服务 ——
+这条边界是刻意的，它保证脚本不会变成带宽瓶颈。
+每个脚本一个 QuickJS runt…</p><p class="small">17 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.6">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.5</span></h3><p class="small">2026-10-07</p><p class="muted">TurboDL 0.2.0.5：释放链逐句兜底，避免一次异常截断后续清理
 ---
 修复：一次异常会截断整条资源释放链
 **根因**：`connectionPool.evictAll()` 不是&quot;清空一个列表&quot;这么无害 ——
@@ -128,20 +137,11 @@ JitPack 支持
    无死锁；持续成功后主动把并发恢复到设定值。
 2. **mid-flight 回退清空已下分片**：收到「服务器返回整文件」立即删光所有分片，网盘 CDN 偶发 200
    会瞬间丢失几百 MB。改为单分片先回投重试，累计超过容忍阈值才判定不支持 Range；真回退时保留已完成分片。
-3. **per-host 并发上限**…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc3">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc23</span> <span class="chip">prerelease</span></h3><p class="small">2026-09-28</p><p class="muted">数据安全修复：探测失败不再删除旧分片；诊断工具修正；启动段优化
----
-⛔ 最重要：探测失败不再删旧分片
-**真实事故**：用户一个夸克任务暂停时留下 32 个分片 / **14.75 MB**，约 24 小时后恢复下载 ——
-夸克直链早已过期（`__puus` 约 3 小时），于是：
-1. 探测拿到 403 → `totalSize` / `etag` / `lastModified` 全为 null
-2. `probe.validator` 退化为 `&quot;weak&quot;`（连 `len=` 都没有）
-3. 旧逻辑 `changed = prev.isNotEmpty() &amp;&amp; prev != now` → `&quot;len=…|weak&quot; != &quot;weak&quot;` → **true**
-4. `discard = changed` → **删光全部分片**
-**根因**：把「探测没拿到信息（**无法取…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc23">release page</a></p></div></div></section><section><h2>Full history</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">All releases</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">Tags</a></div></section></main>
+3. **per-host 并发上限**…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc3">release page</a></p></div></div></section><section><h2>Full history</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">All releases</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">Tags</a></div></section></main>
 <footer class="site-foot">
 <div class="wrap">
 <div class="foot-cols"><div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">Download</a></li><li><a href="../plugins/index.html">Plugins</a></li><li><a href="index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></div><div class="foot-col"><h4>Documentation</h4><ul><li><a href="../docs/readme/index.html">README</a></li><li><a href="../docs/plugins/index.html">Plugin guide</a></li><li><a href="../docs/convention/index.html">Convention</a></li><li><a href="../docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="../docs/js-loader/index.html">JS loader architecture</a></li><li><a href="../docs/manifest/index.html">Manifest reference</a></li></ul></div><div class="foot-col"><h4>Terms &amp; policies</h4><ul><li><a href="../legal/license/index.html">License (MIT)</a></li><li><a href="../legal/third-party/index.html">Third-party components</a></li><li><a href="../legal/privacy/index.html">Privacy</a></li><li><a href="../legal/terms/index.html">Terms of use</a></li><li><a href="../community/index.html">Community</a></li></ul></div><div class="foot-col"><h4>Docs in other languages</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
-<div class="foot-note"><p>TurboDL v0.2.0.5 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div>
+<div class="foot-note"><p>TurboDL v0.2.0.6 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div>
 </div>
 </footer>
 <script src="../assets/site.js" defer></script>
