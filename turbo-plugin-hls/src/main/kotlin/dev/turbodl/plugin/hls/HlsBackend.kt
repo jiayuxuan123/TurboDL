@@ -341,6 +341,9 @@ class HlsBackend : DownloadBackend {
     }
 
     private fun decryptAes128(input: File, output: File, key: ByteArray, iv: ByteArray) {
+        // AES-128-CBC 不是这里能挑的算法，是 HLS 规范定的（RFC 8216 §4.3.2.4：AES-128 加密段
+        // 一律 CBC + PKCS#7）。CBC 自身不提供完整性保护，这一点是真实的；但换成 GCM 就解不开
+        // 任何实际存在的加密流了 —— 互通性在这里压过"用更现代的算法"。
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         val plain = cipher.doFinal(input.readBytes())

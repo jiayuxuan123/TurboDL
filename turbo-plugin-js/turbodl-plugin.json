@@ -1,0 +1,31 @@
+{
+  "manifestVersion": "1.0",
+  "id": "loader.js",
+  "name": "JavaScript Plugin Loader",
+  "description": "System plugin that loads TurboDL plugins written in JavaScript. Embeds QuickJS (one runtime + context per script), exposes a stable `host`/`plugin` ABI with coarse-grained capabilities (http, crypto, log, storage, env, time, timers), bridges link parsers and task hooks into the ordinary extension points, and enforces an ACTIVE → STOPPING → DRAINING → DISPOSED unload sequence that never closes a runtime while its JavaScript is executing. Implements no concrete cloud or protocol plugin itself.",
+  "version": "1.0.0",
+  "author": "TurboDL",
+  "homepage": "https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-js",
+  "license": "MIT",
+
+  "category": "turbodl-loader",
+  "capabilities": ["turbodl-js", "turbodl-quickjs"],
+
+  "turbodl": {
+    "apiMajor": 1,
+    "requiredApiVersion": "1.0.0"
+  },
+
+  "entry": {
+    "language": "js",
+    "pluginClass": "dev.turbodl.plugin.js.JsPluginLoaderPlugin"
+  },
+
+  "artifact": {
+    "type": "maven",
+    "coordinates": "dev.turbodl:turbo-plugin-js:0.2.0.6"
+  },
+
+  "extensionPoints": ["turbo.pluginLoaderProvider"],
+  "services": ["loader.js"]
+}

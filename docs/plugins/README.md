@@ -174,8 +174,24 @@ A "shim" wraps an external downloader/SDK and exposes it to TurboDL through `Lin
 
 ---
 
-## A note on JS
+## Writing plugins in JavaScript
 
-A JavaScript runtime is a **reserved, future** capability. It would ship as a separate plugin
-implementing `PluginLoaderProvider`; the core and the Kotlin loader stay unaware of JS, and no JS
-engine is pulled into the kernel. The manifest reserves `entry.language: "js"` for that day.
+JavaScript is a **delivered** option, not a reserved one. It ships as a separate plugin —
+`turbo-plugin-js` — that implements `PluginLoaderProvider`, so the core and the Kotlin loader stay
+unaware of JS and no JS engine is pulled into the kernel unless you add that module on purpose.
+
+```kotlin
+val boot = TurboBootstrap.create(
+    config = TurboConfig(maxConnectionsPerTask = 16),
+    extraPlugins = listOf(HlsPlugin(), JsPluginLoaderPlugin()),
+)
+
+// Anything the JS loader owns is routed by source kind:
+boot.host.loadSource(PluginSource(kind = "js", uri = "/opt/turbodl-plugins/acme-parser.js"))
+```
+
+A script gets a `host`/`plugin` ABI and no more: it computes URLs, headers and signatures, reads
+and writes its own sandbox directory, and logs. It never touches the download data stream and
+cannot register a `DownloadBackend` — that boundary is deliberate, and it is what keeps a script
+from becoming a bandwidth bottleneck. The full ABI, the lifecycle, and the exact list of what is
+refused are in [`turbo-plugin-js/README.md`](../../turbo-plugin-js/README.md).

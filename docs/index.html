@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TurboDL</title>
+<meta name="description" content="Multi-threaded download engine for the JVM — segmented parallel HTTP, resumable, plugin framework.">
+<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TurboDL">
+<meta property="og:title" content="TurboDL">
+<meta property="og:description" content="Multi-threaded download engine for the JVM — segmented parallel HTTP, resumable, plugin framework.">
+<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/index.html">
+<meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body class="brand-turbodl">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-head">
+<div class="wrap">
+<a class="brand" href="index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
+<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+<nav id="site-nav" class="site-nav"><a href="index.html" class="active" aria-current="page">Overview</a><a href="download/index.html">Download</a><a href="plugins/index.html">Plugins</a><a href="docs/index.html">Docs</a><a href="changelog/index.html">Changelog</a><a href="community/index.html">Community</a><a href="legal/index.html">Terms</a></nav>
+<div class="langs"><span class="lang-cur">English</span><a href="zh/index.html">中文</a></div>
+</div>
+</header>
+<main id="main">
+<section class="hero"><div class="hero-grid"><div><h1>A multi-threaded download engine for the JVM</h1><p class="lead">TurboDL is a download core written from scratch in pure Kotlin: HTTP Range segments in parallel, resumable, with a plugin framework for everything that is not HTTP. No Android dependency — it runs in any JVM application, servers included.</p><div class="btn-row"><a class="btn" href="download/index.html">Download v0.2.0.5</a><a class="btn" href="docs/index.html">Read the docs</a></div></div><div class="hero-side"><div class="version-bar"><span class="tag">v0.2.0.5 · MIT · JVM 17+</span><span>258 tests, 0 skipped, 0 failed</span></div></div></div></section><section><h2>What it does</h2><p class="lead">Six things that matter for a download engine — the rest is in the README.</p><div class="cards cols-3"><div class="card"><h3>Segmented parallel download</h3><div class="card-body"><p>HTTP Range segments downloaded in parallel, with connection reuse (HTTP/2 multiplexing + keep-alive).</p></div></div><div class="card"><h3>Dynamic segmentation + work stealing</h3><div class="card-body"><p>Fine-grained pre-splitting plus work stealing, so one slow connection cannot drag the whole transfer down — and the "last segment on a single thread" long tail disappears.</p></div></div><div class="card"><h3>Restrained adaptivity</h3><div class="card-body"><p>Concurrency drops **only** on 429/503 or after consecutive failures. Ordinary jitter never touches the thread count — no AIMD oscillation.</p></div></div><div class="card"><h3>Resume from real progress</h3><div class="card-body"><p>Segments are persisted on disk; pause/resume continues from what actually landed, not from a remembered number.</p></div></div><div class="card"><h3>Range tampering rejected</h3><div class="card-body"><p>The bytes actually returned are checked against the Range that was requested — a server that ignores Range and sends the whole file is caught, not written as misplaced data.</p></div></div><div class="card"><h3>Byte-level integrity check</h3><div class="card-body"><p>Total size is verified after the merge step; a short or oversized result is rejected.</p></div></div></div></section><section><h2>Nine engine capabilities</h2><p class="lead">Every knob is a public config field — no hidden magic.</p><div class="table-wrap"><table><thead><tr><th>Capability</th><th>Config field</th><th>Notes</th></tr></thead><tbody><tr><td>Global speed limit</td><td><span class="mono">globalSpeedLimitBytesPerSec</span></td><td>0 = unlimited</td></tr><tr><td>Thread count</td><td><span class="mono">maxConnectionsPerTask</span></td><td>1..256</td></tr><tr><td>Concurrent tasks</td><td><span class="mono">maxConcurrentTasks</span></td><td>1..64</td></tr><tr><td>Max retries</td><td><span class="mono">maxRetries</span></td><td>0..50</td></tr><tr><td>Dynamic segmentation</td><td><span class="mono">dynamicSegmentation</span></td><td>true / false</td></tr><tr><td>Proxy</td><td><span class="mono">proxy</span></td><td>Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)</td></tr><tr><td>DNS</td><td><span class="mono">dns</span></td><td>System / StaticHosts / DoH(url)</td></tr><tr><td>Ignore SSL</td><td><span class="mono">trustAllCerts</span></td><td>packet-capture debugging</td></tr><tr><td>Theming</td><td><span class="mono">—</span></td><td>upper-layer app's job; the SDK renders no UI</td></tr></tbody></table></div></section><section><h2>Modules</h2><p class="lead">Only <span class="mono">turbodl-core</span> is required. Everything else is a plugin you add on purpose.</p><div class="table-wrap"><table><thead><tr><th>Artifact</th><th>Role</th><th>Required?</th></tr></thead><tbody><tr><td><span class="mono">turbodl-core</span></td><td><strong>Download engine SDK</strong><br><span class="muted">Segmented parallel download, resume, retry, speed limit, DNS/proxy. Publishes fine on its own and has **no** plugin-framework dependency.</span></td><td>required</td></tr><tr><td><span class="mono">turbo-plugin-runtime</span></td><td><strong>Plugin runtime kernel</strong><br><span class="muted">Lifecycle, cleanup (disposer), event bus, service registry, extension points, version handshake, diagnostics. Knows nothing about any specific protocol.</span></td><td>optional</td></tr><tr><td><span class="mono">turbo-plugin-bootstrap</span></td><td><strong>Bootstrap wiring</strong><br><span class="muted">One-call wiring of the base plugins (Kotlin loader + HTTP backend) and the bridge from the engine's event stream.</span></td><td>optional</td></tr><tr><td><span class="mono">turbo-plugin-hls</span></td><td><strong>HLS VOD adapter</strong><br><span class="muted">Resolves M3U8 playlists, downloads segments concurrently (with per-segment retry), decrypts AES-128, honors EXT-X-BYTERANGE. Live/DRM/fMP4 playlists are refused explicitly instead of producing corrupt output.</span></td><td>optional</td></tr><tr><td><span class="mono">turbo-plugin-js</span></td><td><strong>JavaScript plugin loader</strong><br><span class="muted">Loads TurboDL plugins written in JavaScript. Embeds QuickJS — one runtime and one context per script — and exposes a stable `host`/`plugin` ABI with coarse-grained capabilities.</span></td><td>optional</td></tr><tr><td><span class="mono">turbodl-cli</span></td><td><strong>Command-line tool</strong><br><span class="muted">A complete CLI built on the SDK: multi-threaded, resumable, batch mode, NDJSON output for scripts and agents. Shipped as a fat JAR.</span></td><td>optional</td></tr></tbody></table></div></section><section><h2>Quick start</h2><p>Add one dependency, submit a request, collect events. The full API — pause / resume / cancel / batch / diagnostics — is in the docs.</p><div class="code"><div class="code-cap">Kotlin</div><pre><code>val client = TurboClient(
+    TurboConfig(
+        maxConnectionsPerTask = 16,      // up to 256 / 最高 256
+        globalSpeedLimitBytesPerSec = 0, // 0 = unlimited / 不限速
+        dynamicSegmentation = true,
+    )
+)
+
+val id = client.submit(
+    DownloadRequest(url = &quot;https://example.com/big.zip&quot;, destination = File(&quot;big.zip&quot;))
+)
+
+client.events.collect { event -&gt;
+    when (event) {
+        is TurboEvent.Progress  -&gt; println(&quot;${event.progress.percent}%&quot;)
+        is TurboEvent.Completed -&gt; println(&quot;done: ${event.file}&quot;)
+        is TurboEvent.Failed    -&gt; println(&quot;failed: ${event.reason}&quot;)
+        else -&gt; {}
+    }
+}
+
+val result = client.await(id)   // Result&lt;File&gt;
+client.shutdown()</code></pre></div><div class="btn-row"><a class="btn" href="download/index.html">Download v0.2.0.5</a><a class="btn" href="plugins/index.html">Plugin guide</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></div></section><section><h2>Plugin framework</h2><p class="lead">TurboDL is a standalone engine <em>and</em> an optional plugin platform. The kernel knows no protocols: lifecycle, cleanup, event bus, service registry, extension points, a version handshake and diagnostics — that is the whole of it.</p><div class="code"><div class="code-cap">Kotlin · bootstrap</div><pre><code>val boot = TurboBootstrap.create(
+    config = TurboConfig(maxConnectionsPerTask = 16),
+    extraPlugins = listOf(HlsPlugin()),
+)
+
+boot.host.loadSource(
+    PluginSource(kind = &quot;js&quot;, uri = &quot;/opt/turbodl-plugins/acme-parser.js&quot;)
+)</code></pre></div><div class="btn-row"><a class="btn" href="plugins/index.html">See the official plugins</a></div></section><section><h2>Written down, in one place</h2><p class="lead">Everything a reader might want — how to write a plugin, what the manifest requires, which libraries ship along, what leaves your machine, and what the license actually says — is a page here <em>and</em> a file in the repository. Both are rendered from the same source, so they cannot drift apart.</p><div class="btn-row"><a class="btn" href="docs/plugins/index.html">Plugin guide</a><a class="btn" href="docs/convention/index.html">Convention</a><a class="btn" href="docs/js-plugins/index.html">JS plugins</a><a class="btn" href="docs/manifest/index.html">Manifest</a><a class="btn" href="legal/privacy/index.html">Privacy</a><a class="btn" href="legal/license/index.html">License</a></div></section></main>
+<footer class="site-foot">
+<div class="wrap">
+<div class="foot-cols"><div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="download/index.html">Download</a></li><li><a href="plugins/index.html">Plugins</a></li><li><a href="changelog/index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></div><div class="foot-col"><h4>Documentation</h4><ul><li><a href="docs/readme/index.html">README</a></li><li><a href="docs/plugins/index.html">Plugin guide</a></li><li><a href="docs/convention/index.html">Convention</a></li><li><a href="docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="docs/js-loader/index.html">JS loader architecture</a></li><li><a href="docs/manifest/index.html">Manifest reference</a></li></ul></div><div class="foot-col"><h4>Terms &amp; policies</h4><ul><li><a href="legal/license/index.html">License (MIT)</a></li><li><a href="legal/third-party/index.html">Third-party components</a></li><li><a href="legal/privacy/index.html">Privacy</a></li><li><a href="legal/terms/index.html">Terms of use</a></li><li><a href="community/index.html">Community</a></li></ul></div><div class="foot-col"><h4>Docs in other languages</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-note"><p>TurboDL v0.2.0.5 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div>
+</div>
+</footer>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

@@ -10,8 +10,9 @@ import java.util.concurrent.ConcurrentHashMap
  * — just a concurrent id→instance map plus a "who is waiting for what" bookkeeping used by the
  * host to gate plugin loading.
  *
- * NOTE: reserved — a future JS provider may read this registry to expose services to scripts;
- * the accessor surface is intentionally simple and serialization-friendly at the boundary.
+ * NOTE: the accessor surface is intentionally simple and serialization-friendly at the boundary.
+ * The external JS provider reads nothing here and may not publish services from a script: a service
+ * is a Kotlin object graph, so `loader.js` refuses that registration with `unsupported` by design.
  */
 class ServiceRegistry {
     private val services = ConcurrentHashMap<String, Any>()

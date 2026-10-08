@@ -26,12 +26,24 @@ class ExtensionRegistry {
         return Registration { list.remove(reg) }
     }
 
-    /** All implementations for [key], highest priority first. */
+    /**
+     * All registrations for [key], highest priority first, with the owning plugin id and
+     * priority visible.
+     *
+     * Where [all] hands back bare instances, this exposes *who* provided them. Consumers that
+     * take ownership of what a provider produces (see [dev.turbodl.plugin.runtime.PluginHost.loadSource])
+     * attribute it to the owning plugin rather than to a loader-chosen id, so lifetime cascades
+     * follow the plugin graph instead of a naming convention.
+     */
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> all(key: ExtensionPointKey<T>): List<T> {
+    fun <T : Any> registrations(key: ExtensionPointKey<T>): List<ExtensionRegistration<T>> {
         val list = byKey[key] ?: return emptyList()
-        return list.sortedByDescending { it.priority }.map { it.instance as T }
+        return list.sortedByDescending { it.priority } as List<ExtensionRegistration<T>>
     }
+
+    /** All implementations for [key], highest priority first. */
+    fun <T : Any> all(key: ExtensionPointKey<T>): List<T> =
+        registrations(key).map { it.instance }
 
     /** Highest-priority implementation for [key], or null. */
     fun <T : Any> highest(key: ExtensionPointKey<T>): T? = all(key).firstOrNull()

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>清单字段参考 · TurboDL</title>
+<meta name="description" content="turbodl-plugin.json 的每一个字段 —— 由校验它的那份 JSON Schema 生成。">
+<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/zh/docs/manifest/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TurboDL">
+<meta property="og:title" content="清单字段参考 · TurboDL">
+<meta property="og:description" content="turbodl-plugin.json 的每一个字段 —— 由校验它的那份 JSON Schema 生成。">
+<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/zh/docs/manifest/index.html">
+<meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../../../assets/apple-touch-icon.png">
+<link rel="stylesheet" href="../../../assets/site.css">
+</head>
+<body class="brand-turbodl">
+<a class="skip" href="#main">跳到正文</a>
+<header class="site-head">
+<div class="wrap">
+<a class="brand" href="../../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
+<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">菜单</button>
+<nav id="site-nav" class="site-nav"><a href="../../index.html">概览</a><a href="../../download/index.html">下载</a><a href="../../plugins/index.html">插件</a><a href="../index.html">文档</a><a href="../../changelog/index.html">更新日志</a><a href="../../community/index.html">社区</a><a href="../../legal/index.html">协议</a></nav>
+<div class="langs"><a href="../../../docs/manifest/index.html">English</a><span class="lang-cur">中文</span></div>
+</div>
+</header>
+<main id="main">
+<nav class="crumbs"><a href="../index.html">文档</a><span class="sep">/</span><span aria-current="page">清单字段参考</span></nav><section class="doc-head"><h1>清单字段参考</h1><p class="lead">turbodl-plugin.json 的每一个字段 —— 由校验它的那份 JSON Schema 生成。</p></section><div class="note info">这一篇还没有中文版，下面是仓库里的原文，照原样显示。欢迎帮忙翻译。</div><div class="doc-meta"><span class="mono small">docs/plugins/turbodl-plugin.schema.json</span><a class="mono small" href="https://github.com/jiayuxuan123/TurboDL/blob/main/None">在 GitHub 上查看</a><a class="mono small" href="https://github.com/jiayuxuan123/TurboDL/raw/main/None">原文下载</a></div><div class="doc-grid"><aside class="doc-aside"><nav class="toc doc-nav"><div class="toc-title">全部页面</div><ul><li><a href="../readme/index.html">项目说明</a></li><li><a href="../plugins/index.html">插件开发指南</a></li><li><a href="../convention/index.html">开发规范</a></li><li><a href="../publishing/index.html">发布与发现</a></li><li><a href="../js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../js-loader/index.html">JS 加载器架构</a></li><li class="cur"><span>清单字段参考</span></li><li><a href="../../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../../legal/third-party/index.html">第三方组件与致谢</a></li><li><a href="../../legal/privacy/index.html">隐私说明</a></li><li><a href="../../legal/terms/index.html">使用条款</a></li></ul></nav></aside><article class="doc-body"><p>Machine-readable descriptor placed at the root of a TurboDL plugin repository.</p><div class="table-wrap"><table><thead><tr><th>字段</th><th>类型</th><th> </th><th>说明</th></tr></thead><tbody><tr><td><span class="mono">manifestVersion</span></td><td><span class="mono small">string</span></td><td><span class="req">必填</span></td><td>Manifest schema version.<br><span class="chip">1.0</span></td></tr><tr><td><span class="mono">id</span></td><td><span class="mono small">string</span></td><td><span class="req">必填</span></td><td>Must equal the plugin&#x27;s Plugin.id. Lowercase, dot-separated &lt;category&gt;.&lt;name&gt;.<br><span class="mono small">pattern: ^[a-z0-9]+(\.[a-z0-9][a-z0-9-]*)+$</span></td></tr><tr><td><span class="mono">name</span></td><td><span class="mono small">string</span></td><td><span class="req">必填</span></td><td></td></tr><tr><td><span class="mono">description</span></td><td><span class="mono small">string</span></td><td></td><td></td></tr><tr><td><span class="mono">version</span></td><td><span class="mono small">string</span></td><td><span class="req">必填</span></td><td>Plugin release version (semantic).<br><span class="mono small">pattern: ^\d+\.\d+\.\d+([-+].*)?$</span></td></tr><tr><td><span class="mono">author</span></td><td><span class="mono small">string</span></td><td></td><td></td></tr><tr><td><span class="mono">homepage</span></td><td><span class="mono small">string</span></td><td></td><td></td></tr><tr><td><span class="mono">license</span></td><td><span class="mono small">string</span></td><td></td><td></td></tr><tr><td><span class="mono">category</span></td><td><span class="mono small">string</span></td><td><span class="req">必填</span></td><td><br><span class="chip">turbodl-backend</span><span class="chip">turbodl-adapter</span><span class="chip">turbodl-parser</span><span class="chip">turbodl-hook</span><span class="chip">turbodl-loader</span></td></tr><tr><td><span class="mono">capabilities</span></td><td><span class="mono small">array</span></td><td></td><td></td></tr><tr><td><span class="mono">turbodl</span></td><td><span class="mono small">object</span></td><td><span class="req">必填</span></td><td></td></tr><tr><td><span class="mono">entry</span></td><td><span class="mono small">object</span></td><td><span class="req">必填</span></td><td></td></tr><tr><td><span class="mono">artifact</span></td><td><span class="mono small">object</span></td><td></td><td></td></tr><tr><td><span class="mono">extensionPoints</span></td><td><span class="mono small">array</span></td><td></td><td>Extension-point ids this plugin registers, e.g. turbo.downloadBackend.</td></tr><tr><td><span class="mono">services</span></td><td><span class="mono small">array</span></td><td></td><td>Service ids this plugin publishes.</td></tr></tbody></table></div><h2>一份最小清单</h2><div class="code"><div class="code-cap">turbodl-plugin.json</div><pre><code>{
+  &quot;manifestVersion&quot;: &quot;1&quot;,
+  &quot;id&quot;: &quot;parser.example&quot;,
+  &quot;name&quot;: &quot;Example parser&quot;,
+  &quot;description&quot;: &quot;Turns example:// links into download requests.&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;author&quot;: &quot;you&quot;,
+  &quot;homepage&quot;: &quot;https://github.com/you/turbodl-plugin-example&quot;,
+  &quot;license&quot;: &quot;MIT&quot;,
+  &quot;category&quot;: &quot;turbodl-parser&quot;,
+  &quot;capabilities&quot;: [
+    &quot;turbodl-parser&quot;
+  ],
+  &quot;turbodl&quot;: {
+    &quot;apiVersion&quot;: &quot;1.0.0&quot;
+  },
+  &quot;entry&quot;: {
+    &quot;kind&quot;: &quot;kotlin&quot;,
+    &quot;class&quot;: &quot;com.example.ExamplePlugin&quot;
+  }
+}</code></pre></div><p class="small">Schema 原文下载：<a href="https://turbodl.dev/schemas/turbodl-plugin.schema.json" class="mono">https://turbodl.dev/schemas/turbodl-plugin.schema.json</a></p></article></div><p class="small"><a href="../index.html">← 全部文档</a></p></main>
+<footer class="site-foot">
+<div class="wrap">
+<div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../../download/index.html">下载</a></li><li><a href="../../plugins/index.html">插件</a></li><li><a href="../../changelog/index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../readme/index.html">项目说明</a></li><li><a href="../plugins/index.html">插件开发指南</a></li><li><a href="../convention/index.html">开发规范</a></li><li><a href="../js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../js-loader/index.html">JS 加载器架构</a></li><li><a href="index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../../legal/third-party/index.html">第三方组件</a></li><li><a href="../../legal/privacy/index.html">隐私说明</a></li><li><a href="../../legal/terms/index.html">使用条款</a></li><li><a href="../../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-note"><p>TurboDL v0.2.0.5 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
+</div>
+</footer>
+<script src="../../../assets/site.js" defer></script>
+</body>
+</html>

@@ -147,6 +147,7 @@ Unit tests use an embedded HTTP(Range) server and cover: multi-threaded byte-lev
 - `turbo-plugin-runtime`: **optional** plugin runtime kernel (lifecycle / disposer / event bus / service registry / extension points / version handshake / diagnostics). core does not depend on it; when not included, core works as usual.
 - `turbo-plugin-bootstrap`: **optional** bootstrap module for one-click wiring of base plugins (Kotlin loader + HTTP backend); not a mandatory dependency.
 - `turbo-plugin-hls`: **optional** HLS VOD protocol adapter plugin — resolves master/media M3U8 playlists, downloads segments concurrently (with per-segment retry), decrypts AES-128, honors EXT-X-BYTERANGE, and returns ordered parts for the engine to merge. Registers itself as a routed `DownloadBackend`; unsupported constructs (live streams, DRM/SAMPLE-AES, fMP4 EXT-X-MAP, discontinuities) fail explicitly instead of producing corrupt output.
+- `turbo-plugin-js`: **optional** JavaScript plugin loader — loads TurboDL plugins written in JavaScript. Embeds QuickJS (one runtime and one context per script) and exposes a stable `host`/`plugin` ABI with coarse-grained capabilities (http, crypto, log, storage, env, time, timers). Bridges JS link parsers and task hooks into the ordinary extension points, and unloads through an `ACTIVE → STOPPING → DRAINING → DISPOSED` sequence that never closes a runtime while its script is still executing. Only this module pulls in a JS engine; leave it out and nothing about QuickJS reaches your classpath.
 - `demo`: three runnable examples — Kotlin-native plugin, bootstrap usage, and a shim-adapter template. Run with `./gradlew :demo:run --args="1"` (or `2`, `3`, `all`).
 
 ## Plugin framework (optional)
@@ -163,6 +164,31 @@ Plugin documentation:
 - [Plugin authoring guide](docs/plugins/README.md) — how to build and integrate a plugin.
 - [Development Convention](docs/plugins/CONVENTION.md) — the official compatibility rulebook (stable API, versioning, naming, safety).
 - [Plugin Market](docs/plugins/MARKET.md) — publish/discover plugins via GitHub topics + a `turbodl-plugin.json` manifest.
+- [Manifest schema](docs/plugins/turbodl-plugin.schema.json) — JSON Schema for `turbodl-plugin.json`.
+
+### Plugins written in JavaScript
+
+Adding `turbo-plugin-js` lets a plugin be a script instead of a JVM class:
+
+```kotlin
+val boot = TurboBootstrap.create(
+    config = TurboConfig(maxConnectionsPerTask = 16),
+    extraPlugins = listOf(HlsPlugin(), JsPluginLoaderPlugin()),
+)
+
+boot.host.loadSource(PluginSource(kind = "js", uri = "/opt/turbodl-plugins/acme-parser.js"))
+```
+
+A script gets a `host`/`plugin` ABI and nothing more: it computes URLs, headers and signatures,
+reads and writes its own sandbox directory, and logs. It never touches the download data stream and
+cannot register a `DownloadBackend` or publish a host service — that boundary is what keeps a script
+from becoming a bandwidth bottleneck. Scripts are local files (or `inline:` / `data:` sources);
+`require`, npm and remote `fetch` are not part of the ABI.
+
+The loader owns one QuickJS runtime and one context per script, and unloads in four stages so a
+runtime is never closed while its JavaScript is still running. See
+[`turbo-plugin-js/README.md`](turbo-plugin-js/README.md) for the ABI reference and
+[`turbo-plugin-js/ARCHITECTURE.md`](turbo-plugin-js/ARCHITECTURE.md) for why it is shaped that way.
 
 ## Design notes & acknowledgements
 

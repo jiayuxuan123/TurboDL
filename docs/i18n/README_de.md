@@ -104,6 +104,7 @@ Unit-Tests verwenden einen eingebetteten HTTP(Range)-Server und decken ab: Byte-
 - `turbo-plugin-runtime`: **optionaler** Plugin-Runtime-Kernel (Lifecycle / Disposer / Event-Bus / Service-Registry / Erweiterungspunkte / Versions-Handshake / Diagnose). core hängt nicht davon ab; wenn es nicht eingebunden ist, funktioniert core wie gewohnt.
 - `turbo-plugin-bootstrap`: **optionales** Bootstrap-Modul für die Ein-Klick-Anbindung von Basis-Plugins (Kotlin-Loader + HTTP-Backend); keine Pflichtabhängigkeit.
 - `turbo-plugin-hls`: **optionales** HLS-VOD-Protokoll-Adapter-Plugin — löst Master-/Media-M3U8-Playlisten auf, lädt Segmente parallel herunter (mit Wiederholung pro Segment), entschlüsselt AES-128, beachtet EXT-X-BYTERANGE und gibt geordnete Teile zur Zusammenführung an die Engine zurück. Registriert sich selbst als geroutetes `DownloadBackend`; nicht unterstützte Konstrukte (Live-Streams, DRM/SAMPLE-AES, fMP4/EXT-X-MAP, Diskontinuitäten) schlagen explizit fehl, statt beschädigte Ausgaben zu erzeugen.
+- `turbo-plugin-js`: **optionaler** JavaScript-Plugin-Loader — lädt in JavaScript geschriebene TurboDL-Plugins. Bettet QuickJS ein (eine Runtime und ein Context pro Skript) und gibt Skripten eine stabile `host`/`plugin`-ABI (grobkörnige Fähigkeiten wie http, crypto, log, storage, env, time, timers). Er bindet JS-Link-Parser und Task-Hooks an die gewöhnlichen Erweiterungspunkte an und entlädt über eine `ACTIVE → STOPPING → DRAINING → DISPOSED`-Sequenz, die eine Runtime niemals schließt, solange deren Skript noch läuft. Nur dieses Modul bringt eine JS-Engine mit; ohne es gerät QuickJS gar nicht erst in deinen Classpath.
 - `demo`: Drei ausführbare Beispiele —— Kotlin-natives Plugin / Bootstrap-Nutzung / Shim-Adapter-Vorlage. Ausführen mit `./gradlew :demo:run --args="1"`（oder `2` / `3` / `all`）.
 
 ## Plugin-Framework (optional)
@@ -120,6 +121,7 @@ Plugin-Dokumentation:
 - [Plugin-Autoren-Guide](plugins/README_de.md) — wie man ein Plugin baut und integriert.
 - [Entwicklungs-Konvention](plugins/CONVENTION_de.md) — das offizielle Kompatibilitäts-Regelwerk (stabile API, Versionierung, Namensgebung, Sicherheit).
 - [Plugin-Markt](plugins/MARKET_de.md) — Plugins über GitHub-Themen (Topics) + ein `turbodl-plugin.json`-Manifest veröffentlichen und entdecken.
+- [JavaScript-Plugins](../../turbo-plugin-js/README.md) — Plugins in JavaScript schreiben (QuickJS eingebettet).
 
 ## Designhinweise & Danksagungen
 

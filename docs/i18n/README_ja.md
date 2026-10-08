@@ -104,6 +104,7 @@ client.shutdown()
 - `turbo-plugin-runtime`: **オプション**のプラグインランタイムカーネル（ライフサイクル / disposer / イベントバス / サービスレジストリ / 拡張ポイント / バージョンハンドシェイク / 診断）。core はこれに依存せず、含めなくても core は通常どおり動作します。
 - `turbo-plugin-bootstrap`: **オプション**のブートストラップモジュール。基礎プラグイン（Kotlin ローダー + HTTP バックエンド）をワンクリックで配線します。必須依存ではありません。
 - `turbo-plugin-hls`: **オプション**の HLS VOD プロトコルアダプタプラグイン —— master/media M3U8 プレイリストを解決し、セグメントを並行ダウンロードし（セグメントごとにリトライ）、AES-128 を復号し、EXT-X-BYTERANGE を尊重し、マージのために順序付きパーツをエンジンに返します。ルーティングされる `DownloadBackend` として自身を登録します。非対応の構造（ライブストリーム、DRM/SAMPLE-AES、fMP4 EXT-X-MAP、discontinuity）は、壊れた出力を生成する代わりに明示的に失敗します。
+- `turbo-plugin-js`: **オプション**の JavaScript プラグインローダー —— JavaScript で書かれた TurboDL プラグインを読み込みます。QuickJS を内蔵し（スクリプトごとに 1 つの runtime と 1 つの context）、スクリプトに安定した `host`/`plugin` ABI を提供します（http、crypto、log、storage、env、time、timers といった粒度の粗い機能）。JS 側のリンクパーサーとタスクフックを通常の拡張ポイントにブリッジし、アンロード時は `ACTIVE → STOPPING → DRAINING → DISPOSED` の 4 段階を踏み、スクリプトがまだ実行中に runtime を閉じることは決してありません。このモジュールだけが JS エンジンを持ち込みます。含めなければ QuickJS が classpath に載ることはありません。
 - `demo`: 実行可能な3つのサンプル——Kotlin ネイティブプラグイン / bootstrap 利用 / Shim アダプタのテンプレート。`./gradlew :demo:run --args="1"`（または 2 / 3 / all）で実行。
 
 ## プラグインフレームワーク（オプション）
@@ -120,6 +121,7 @@ TurboDL はスタンドアロンのダウンロードエンジンである**と�
 - [プラグイン制作ガイド](plugins/README_ja.md) — プラグインの作成方法と統合方法。
 - [開発協定](plugins/CONVENTION_ja.md) — 公式の互換性ルールブック（安定 API、バージョニング、命名、安全性）。
 - [プラグインマーケット](plugins/MARKET_ja.md) — GitHub トピックと `turbodl-plugin.json` マニフェストによるプラグインの公開・発見。
+- [JavaScript プラグイン](../../turbo-plugin-js/README.md) — JavaScript でプラグインを書く（QuickJS 内蔵）。
 
 ## 設計ノートと謝辞
 

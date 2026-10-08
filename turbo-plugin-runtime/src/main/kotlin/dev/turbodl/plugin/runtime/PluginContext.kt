@@ -11,8 +11,9 @@ import dev.turbodl.core.TurboEvent
  * are ALSO wired into the plugin's [disposer], so unloading the plugin removes every side effect
  * even if the plugin forgot to clean up manually.
  *
- * NOTE: reserved — a future JS provider will expose a mirror of this surface to scripts; the
- * kernel keeps the surface small and serialization-friendly at the boundary.
+ * NOTE: the external JS provider mirrors this surface to scripts (`plugin.registerParser`, …) and
+ * deliberately does NOT hand the context object itself across the boundary: the kernel keeps the
+ * surface small and serialization-friendly so a mirror is possible without exposing internals.
  */
 interface PluginContext {
     /** This plugin's id. */

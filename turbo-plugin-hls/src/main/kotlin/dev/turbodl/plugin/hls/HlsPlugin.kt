@@ -16,8 +16,9 @@ import dev.turbodl.plugin.runtime.ext.ExtensionPoints
  * an `.m3u8` URL is treated as a stream to assemble rather than a text file to save. The HTTP
  * backend still wins for every non-m3u8 URL because [HlsBackend.supports] only matches m3u8.
  *
- * NOTE: reserved — a future JS Provider or third-party shim could register alternative protocol
- * backends the same way; the kernel remains unaware of HLS specifics.
+ * NOTE: another provider or a third-party shim could register alternative protocol backends the
+ * same way; the kernel remains unaware of HLS specifics. `turbo-plugin-js` is a peer system plugin
+ * (a loader) and deliberately does NOT register a backend — byte-plane contracts stay in Kotlin.
  */
 class HlsPlugin(
     private val priority: Int = 100,

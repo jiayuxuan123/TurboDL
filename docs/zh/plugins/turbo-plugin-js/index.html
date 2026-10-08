@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JavaScript Plugin Loader · TurboDL</title>
+<meta name="description" content="加载用 JavaScript 写的 TurboDL 插件。每个脚本一个 QuickJS runtime 与 context、一套稳定的 `host`/`plugin` ABI，以及一套「绝不在脚本还在执行时关掉 runtime」的加载/卸载流程。">
+<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/zh/plugins/turbo-plugin-js/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TurboDL">
+<meta property="og:title" content="JavaScript Plugin Loader · TurboDL">
+<meta property="og:description" content="加载用 JavaScript 写的 TurboDL 插件。每个脚本一个 QuickJS runtime 与 context、一套稳定的 `host`/`plugin` ABI，以及一套「绝不在脚本还在执行时关掉 runtime」的加载/卸载流程。">
+<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/zh/plugins/turbo-plugin-js/index.html">
+<meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../../../assets/apple-touch-icon.png">
+<link rel="stylesheet" href="../../../assets/site.css">
+</head>
+<body class="brand-turbodl">
+<a class="skip" href="#main">跳到正文</a>
+<header class="site-head">
+<div class="wrap">
+<a class="brand" href="../../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
+<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">菜单</button>
+<nav id="site-nav" class="site-nav"><a href="../../index.html">概览</a><a href="../../download/index.html">下载</a><a href="../index.html">插件</a><a href="../../docs/index.html">文档</a><a href="../../changelog/index.html">更新日志</a><a href="../../community/index.html">社区</a><a href="../../legal/index.html">协议</a></nav>
+<div class="langs"><a href="../../../plugins/turbo-plugin-js/index.html">English</a><span class="lang-cur">中文</span></div>
+</div>
+</header>
+<main id="main">
+<nav class="crumbs"><a href="../index.html">插件</a><span class="sep">/</span><span aria-current="page">JavaScript Plugin Loader</span></nav><section><h1>JavaScript Plugin Loader</h1><p class="lead">加载用 JavaScript 写的 TurboDL 插件。每个脚本一个 QuickJS runtime 与 context、一套稳定的 `host`/`plugin` ABI，以及一套「绝不在脚本还在执行时关掉 runtime」的加载/卸载流程。</p><div class="card-meta"><span class="chip">loader.js</span><span class="chip">turbodl-loader</span><span class="chip">turbodl-js</span><span class="chip">turbodl-quickjs</span></div></section><section><h2>清单</h2><div class="table-wrap"><table><thead><tr><th>字段</th><th>值</th></tr></thead><tbody><tr><td>Id</td><td><span class="mono">loader.js</span></td></tr><tr><td>Category</td><td><span class="mono">turbodl-loader</span></td></tr><tr><td>Capabilities</td><td><span class="chip">turbodl-js</span> <span class="chip">turbodl-quickjs</span> </td></tr><tr><td>Artifact</td><td><span class="mono">dev.turbodl:turbo-plugin-js:0.2.0.5</span></td></tr><tr><td>API version</td><td><span class="mono">1.0.0</span></td></tr><tr><td>Source</td><td><a href="https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-js">turbo-plugin-js</a></td></tr><tr><td>Manifest</td><td><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/turbo-plugin-js/turbodl-plugin.json">turbodl-plugin.json</a></td></tr></tbody></table></div></section><section><h2>明确拒绝的情况</h2><ul><li>注册 `DownloadBackend`（字节面留在 Kotlin 一侧）</li><li>发布服务（服务是 Kotlin 对象图）</li><li>`require` / npm / `fetch` —— 宿主 ABI 就是全部可用面</li><li>`jar:` 与远程脚本源（目前只支持本地文件 / `inline:` / `data:`）</li></ul><div class="note info">脚本负责算 URL、请求头和签名，**从不**经手下载数据流。这条边界正是它不会变成带宽瓶颈的原因。</div></section><section><h2>源码</h2><p>在仓库里读源码 —— 上面的清单就是从那个文件里读出来的。</p><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-js">仓库</a><a class="btn" href="../index.html">全部插件</a></div></section></main>
+<footer class="site-foot">
+<div class="wrap">
+<div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../../download/index.html">下载</a></li><li><a href="../index.html">插件</a></li><li><a href="../../changelog/index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../../docs/readme/index.html">项目说明</a></li><li><a href="../../docs/plugins/index.html">插件开发指南</a></li><li><a href="../../docs/convention/index.html">开发规范</a></li><li><a href="../../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../../docs/manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../../legal/third-party/index.html">第三方组件</a></li><li><a href="../../legal/privacy/index.html">隐私说明</a></li><li><a href="../../legal/terms/index.html">使用条款</a></li><li><a href="../../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-note"><p>TurboDL v0.2.0.5 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
+</div>
+</footer>
+<script src="../../../assets/site.js" defer></script>
+</body>
+</html>

@@ -44,17 +44,23 @@ data class ExtensionRegistration<T : Any>(
 /**
  * PluginLoaderProvider — the ONLY extension point the kernel is aware of by name.
  *
- * A plugin loader knows how to turn some source (a Kotlin class, a JAR, or — in a future
- * iteration — a JS script) into [Plugin] instances. The Kotlin class-based loader itself is
- * just a plugin that registers an implementation of this extension point; the kernel never
- * embeds any loader.
+ * A plugin loader knows how to turn some source (a Kotlin class, a JAR, a JS script, ...) into
+ * [Plugin] instances. The Kotlin class-based loader itself is just a plugin that registers an
+ * implementation of this extension point; the kernel never embeds any loader.
  *
- * NOTE: reserved — a future external `turbo-plugin-provider-js` plugin will implement this to
- * add JS script loading. The kernel has no knowledge of JS; no JS/Node engine dependency is
- * ever pulled into the runtime kernel.
+ * NOTE: a JS provider ships as the external `turbo-plugin-js` plugin and implements this interface
+ * like any other provider. The kernel has no knowledge of JS and pulls no JS engine dependency into
+ * the runtime kernel.
  */
 interface PluginLoaderProvider {
-    /** Loader id for diagnostics (e.g. "kotlin", "js"). */
+    /**
+     * Loader id for diagnostics (e.g. "kotlin", "js").
+     *
+     * [PluginHost.loadSource] records the plugins a loader produces under this id, and
+     * [PluginHost.uninstall] cascades to them by matching the registration's owner plugin — so
+     * loaders are free to pick any id, and unloading the plugin that registered a provider never
+     * leaves its produced plugins reachable.
+     */
     val loaderId: String
 
     /** Whether this loader can handle the given source descriptor. */
@@ -73,8 +79,8 @@ interface PluginLoaderProvider {
  * Opaque descriptor of "where a plugin comes from". Kept intentionally minimal and open so
  * different loaders can interpret it (a class name, a file path, a script URL, ...).
  *
- * NOTE: reserved — JS provider will interpret [uri] as a script location; the kernel does not
- * interpret these fields itself.
+ * NOTE: the JS provider interprets [uri] as a script location (`file:` path, `inline:`, `data:`);
+ * the kernel does not interpret these fields itself.
  */
 data class PluginSource(
     /** Free-form kind hint, e.g. "kotlin-class", "jar", "js". */

@@ -34,9 +34,43 @@ class PluginHost(
     private val lock = Any()
     private val registered = ConcurrentHashMap<String, Managed>()
 
+    /**
+     * Ids whose teardown is in progress but not yet finished.
+     *
+     * Teardown deliberately does **not** hold [lock] across `onUnload` + the disposer drain: a
+     * plugin's unload may block for seconds (JS drain, host I/O, a synchronous engine close), and
+     * parking the kernel lock for that long would stall every other thread's install/uninstall
+     * behind one plugin's shutdown. To keep the "at most one live instance per id" guarantee
+     * without the lock, an id is claimed here while it unloads; [install] refuses an id that is
+     * mid-teardown rather than racing a second instance into the registry.
+     *
+     * (Dependency *resolution* — [tryLoadWaiting] — still runs under the lock: it is the loop that
+     * decides load order and must observe one consistent registry snapshot.)
+     */
+    private val unloading = ConcurrentHashMap.newKeySet<String>()
+
+    /** Monotonic install counter — the only honest source of "reverse install order". */
+    private var nextSeq = 0L
+
+    /** Set once [shutdown] begins; the host is terminal, so no further installs are accepted. */
+    private var shuttingDown = false
+
+    /**
+     * ownerPluginId → ids of the plugins that owner's loader produced (via [loadSource]).
+     *
+     * Language-agnostic ownership bookkeeping: whoever materializes plugins out of a
+     * [PluginSource] owns their lifetime — attributed to the plugin that registered the
+     * [PluginLoaderProvider] (the registration's owner), not to a loader-chosen id, so no naming
+     * convention is required. Unloading a loader therefore cascades to its children, which is what
+     * makes "unload the JS provider" safe: otherwise the produced plugins would stay LOADED, still
+     * routed to by consumers, holding engine resources with no owner left.
+     */
+    private val producedBy = ConcurrentHashMap<String, MutableSet<String>>()
+
     private class Managed(
         val plugin: Plugin,
         var state: PluginState,
+        val seq: Long,
         val disposer: Disposer = Disposer(),
         var error: String? = null,
     )
@@ -49,43 +83,156 @@ class PluginHost(
      */
     fun install(plugin: Plugin) {
         synchronized(lock) {
-            if (registered.containsKey(plugin.id)) {
+            if (shuttingDown) {
+                logger("plugin '${plugin.id}' rejected: the host has been shut down", null)
+                return
+            }
+            if (registered.containsKey(plugin.id) || plugin.id in unloading) {
                 logger("plugin '${plugin.id}' already installed; ignoring", null)
                 return
             }
-            registered[plugin.id] = Managed(plugin, PluginState.WAITING)
+            registered[plugin.id] = Managed(plugin, PluginState.WAITING, nextSeq++)
             tryLoadWaiting()
         }
+    }
+
+    /**
+     * Dispatch a [PluginSource] through the registered [PluginLoaderProvider] implementations
+     * (highest priority first, first `canLoad` match wins), install the plugins the loader
+     * produces through the normal lifecycle, and return their ids.
+     *
+     * This closes the `PluginSource → loader → Plugin → host` loop generically: the kernel
+     * never interprets the source itself, it only routes. A loader that produces no plugin
+     * (no match, bad source, load error) yields an empty list and a diagnostic; a load error
+     * inside a provider is isolated here so one broken loader cannot corrupt the host.
+     *
+     * Ownership: the produced plugins are recorded against the plugin that registered the
+     * matching [PluginLoaderProvider], so [uninstall] of that plugin cascades to them. Nothing
+     * depends on how a loader names its [PluginLoaderProvider.loaderId].
+     *
+     * Reloading a source whose plugin id is already installed is rejected by [install]
+     * (duplicate ids are ignored); uninstall the existing id first if you intend a reload.
+     */
+    fun loadSource(source: PluginSource): List<String> = synchronized(lock) {
+        val match = extensions.registrations(PluginLoaderProvider.KEY).firstOrNull { reg ->
+            runCatching { reg.instance.canLoad(source) }.getOrElse { t ->
+                logger("loader '${reg.instance.loaderId}' canLoad threw for '${source.uri}'; skipping", t)
+                false
+            }
+        }
+        if (match == null) {
+            logger("no plugin loader accepts source kind='${source.kind}' uri='${source.uri}'", null)
+            return emptyList()
+        }
+        val loader = match.instance
+        val produced = runCatching { loader.load(source) }.getOrElse { t ->
+            logger("loader '${loader.loaderId}' failed to load '${source.uri}'", t)
+            return emptyList()
+        }
+        if (produced.isEmpty()) {
+            logger("loader '${loader.loaderId}' produced no plugins for '${source.uri}'", null)
+            return emptyList()
+        }
+        // Ownership must follow the install that actually happened. `installAll` deliberately skips a
+        // duplicate id — and a loader may legitimately hand back a plugin whose id is already in the
+        // host — so recording `produced.map { it.id }` unconditionally would attribute an *existing*,
+        // unrelated plugin to this loader and let `uninstall(loaderId)` remove a plugin it never
+        // installed. Only ids this call newly installed are recorded.
+        val installed = installNew(produced)
+        if (installed.isNotEmpty()) {
+            producedBy.getOrPut(match.ownerPluginId) { ConcurrentHashMap.newKeySet() }.addAll(installed)
+        }
+        installed
     }
 
     /** Install several plugins, then resolve dependencies once. Order-independent. */
     fun installAll(plugins: Iterable<Plugin>) {
-        synchronized(lock) {
-            for (p in plugins) {
-                if (registered.containsKey(p.id)) {
-                    logger("plugin '${p.id}' already installed; ignoring", null)
-                    continue
-                }
-                registered[p.id] = Managed(p, PluginState.WAITING)
+        synchronized(lock) { installNew(plugins) }
+    }
+
+    /**
+     * Register [plugins] that are not already present, resolving dependencies once at the end.
+     *
+     * @return the ids actually installed, in argument order. Duplicates are logged and excluded —
+     *         the caller must not attribute them to itself.
+     */
+    private fun installNew(plugins: Iterable<Plugin>): List<String> = synchronized(lock) {
+        val added = mutableListOf<String>()
+        if (shuttingDown) {
+            logger("refusing to install plugins: the host has been shut down", null)
+            return@synchronized added
+        }
+        for (p in plugins) {
+            if (registered.containsKey(p.id) || p.id in unloading) {
+                logger("plugin '${p.id}' already installed; ignoring", null)
+                continue
             }
-            tryLoadWaiting()
+            registered[p.id] = Managed(p, PluginState.WAITING, nextSeq++)
+            added += p.id
         }
+        tryLoadWaiting()
+        added
     }
 
-    /** Unload a single plugin: onUnload + drain disposer (removes all its side effects). */
+    /**
+     * Unload a single plugin: onUnload + disposer drain (removes all its side effects).
+     *
+     * If [pluginId] is a loader that produced plugins through [loadSource], its children are
+     * unloaded first (reverse install order) so a loader never leaves owned plugins reachable
+     * while it releases the resources they depend on.
+     *
+     * Registry bookkeeping happens under [lock], but `onUnload` + the drain run **outside** it:
+     * a plugin's teardown can block for seconds (JS drain, host I/O, a synchronous engine close),
+     * and parking the kernel lock for that long would stall every other thread's install/uninstall
+     * behind one plugin's shutdown. The id is claimed in [unloading] for the duration, so a
+     * concurrent install or a second uninstall of the same id is refused rather than racing a
+     * duplicate teardown; the registry entry itself stays until teardown finishes, so children
+     * can still resolve their loader while they unload.
+     */
     fun uninstall(pluginId: String) {
+        val m: Managed
+        val children: List<String>
         synchronized(lock) {
-            val m = registered[pluginId] ?: return
+            m = registered[pluginId] ?: return
+            if (!unloading.add(pluginId)) return // already being torn down
+            // Children in true reverse install order (by sequence, not hash iteration order).
+            children = producedBy.remove(pluginId)?.toList().orEmpty()
+                .filter { it != pluginId }
+                .sortedByDescending { registered[it]?.seq ?: Long.MIN_VALUE }
+            // This plugin may itself be someone's child; drop that edge.
+            producedBy.values.forEach { it.remove(pluginId) }
+        }
+        try {
+            for (childId in children) uninstall(childId)
             unloadManaged(m)
-            registered.remove(pluginId)
+        } finally {
+            synchronized(lock) { registered.remove(pluginId) }
+            unloading.remove(pluginId)
         }
     }
 
-    /** Unload every plugin in reverse install order. */
+    /**
+     * Unload every plugin in reverse install order, then drop all bookkeeping.
+     *
+     * Like [uninstall], teardown runs outside [lock]; the registry is snapshotted and cleared in
+     * one critical section so the (potentially slow) unloads never park the lock. Once shutdown
+     * has begun, [install] refuses new plugins — the host is terminal after this.
+     */
     fun shutdown() {
-        synchronized(lock) {
-            registered.values.reversed().forEach { unloadManaged(it) }
+        val all = synchronized(lock) {
+            shuttingDown = true
+            val snapshot = registered.values.sortedByDescending { it.seq }
+            unloading.addAll(snapshot.map { it.plugin.id })
             registered.clear()
+            producedBy.clear()
+            snapshot
+        }
+        for (m in all) {
+            try {
+                unloadManaged(m)
+            } finally {
+                unloading.remove(m.plugin.id)
+            }
         }
     }
 

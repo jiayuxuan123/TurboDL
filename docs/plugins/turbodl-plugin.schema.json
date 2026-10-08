@@ -61,7 +61,7 @@
       "properties": {
         "language": {
           "type": "string",
-          "description": "kotlin today. js is reserved for a future JS provider.",
+          "description": "kotlin for a JVM plugin class, js for a script loaded by turbo-plugin-js.",
           "enum": ["kotlin", "js"]
         },
         "pluginClass": {

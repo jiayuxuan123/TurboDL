@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog · TurboDL</title>
+<meta name="description" content="TurboDL release history, generated from the release notes.">
+<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/changelog/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TurboDL">
+<meta property="og:title" content="Changelog · TurboDL">
+<meta property="og:description" content="TurboDL release history, generated from the release notes.">
+<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/changelog/index.html">
+<meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="brand-turbodl">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-head">
+<div class="wrap">
+<a class="brand" href="../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
+<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+<nav id="site-nav" class="site-nav"><a href="../index.html">Overview</a><a href="../download/index.html">Download</a><a href="../plugins/index.html">Plugins</a><a href="../docs/index.html">Docs</a><a href="index.html" class="active" aria-current="page">Changelog</a><a href="../community/index.html">Community</a><a href="../legal/index.html">Terms</a></nav>
+<div class="langs"><span class="lang-cur">English</span><a href="../zh/changelog/index.html">中文</a></div>
+</div>
+</header>
+<main id="main">
+<section><h1>Changelog</h1><p class="lead">Generated from the release notes themselves — each entry links to its own release page, where the full text and the files live.</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.0.5</span></h3><p class="small">2026-10-07</p><p class="muted">TurboDL 0.2.0.5：释放链逐句兜底，避免一次异常截断后续清理
+---
+修复：一次异常会截断整条资源释放链
+**根因**：`connectionPool.evictAll()` 不是&quot;清空一个列表&quot;这么无害 ——
+它真的会 close 每条空闲连接的 socket（`RealConnectionPool.evictAll` → `Util.closeQuietly(socket)`）。
+关闭 TLS 连接要把 `close_notify` 告警**写出去**，这是一次网络写。
+而 OkHttp 的 `Util.closeQuietly` **只吞 `IOException`**：`NetworkOnMainThreadException`
+是 `RuntimeException`，会**原样穿透**到调用方。
+**后果**（Android 宿主真实场景）：宿主的 `ViewMod…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.5">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.4</span></h3><p class="small">2026-09-30</p><p class="muted">修复诊断探活在主线程被误报为「链接不可用」；新增出站地址预检
+---
+修复：诊断探活的线程调度问题
+**现象**：宿主应用在界面线程上调用 `checkReachable` 做诊断预检时，
+Android 抛出 `NetworkOnMainThreadException`。该异常会被探活的
+异常处理捕获并转成「指定的链接不可用： NetworkOnMainThreadException: 无法连接 …」
+——错误文案伪装成了链接问题，与链接本身好坏无关。
+**根因**：`probeAlive` 内部是 OkHttp 的阻塞 `execute()`。是否允许调用
+完全取决于调用方所在的线程，而这一契约没有任何机制保证 —— 界面层
+很容易在主线程协程里直接调用（事实上已经被破坏了）。
+**修复**：
+1. 新增挂起版入口 `checkReachableAsync`：内部强制切换到 IO 调度…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.4">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.3</span></h3><p class="small">2026-09-29</p><p class="muted">新增 DNS 自动择优（含端点延迟可视化）；修复诊断功能不可用
+---
+新增：DNS 自动模式
+**此前的问题**：DNS 只能二选一 —— 「系统 DNS」或「手动填一个 DoH 地址」。
+而用户很难知道哪个 DoH 在当前网络下可用。实测国内网络环境：
+**境外 DoH（Google / Cloudflare）完全不可达，境内 DoH（阿里 / 腾讯）可用**。
+用户往往先填境外那几个知名地址，结果&quot;开了 DoH 反而更慢甚至解析失败&quot;。
+**自动模式**：并发探测全部候选端点，采用**最快给出有效结果**的那个，
+并在之后 10 分钟内固定复用它；选定端点失效或超过有效期时重新择优；
+全部失败则回退系统 DNS。
+候选端点**国内优先**：阿里 → 腾讯 → Google → Cloudflare。
+顺序只影响极端情况下的兜底，因为探测是并发的、取最快者。
+**为什么并发探测**：串…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.3">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.2</span></h3><p class="small">2026-09-29</p><p class="muted">HLS 插件安全加固：跨域凭证隔离、强制 HTTPS、逐跳重定向校验
+本次改进针对 HLS 下载链路的安全性。设计参考上游 [CYQawa/YunX](https://github.com/CYQawa/YunX)
+的 `HlsRequestPolicy`，并按本引擎的插件契约做了适配。
+---
+修复：跨域请求会携带完整登录凭证
+**问题**：HLS 的播放列表由一个域名提供，但**分片、密钥、`EXT-X-MAP` 初始化段常放在另一个域名**
+（CDN / 对象存储）。原实现把调用方传入的请求头**无差别**附加到每一个请求上 ——
+其中包括网盘直链取播放列表所必需的 `Cookie` / `Authorization` / `Referer`。
+后果是：一次 HLS 下载会把登录凭证发给每一个分片域名。若某个分片域名被劫持，
+或播放列表本身可控（攻击者构造清单诱导客户端），凭证即直接…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.2">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.1</span></h3><p class="small">2026-09-29</p><p class="muted">引擎调度与合并提速；分片请求携带 If-Range；清理死代码
+本版参考 aria2-next 2.8.3 的实现逐条核实，将其中有实测数据支撑的设计吸收进本引擎。
+全部改动均以本地回环基准度量（服务端精确字节计数，零公网流量），每项均附前后对比。
+---
+性能
+测试条件：512MB 文件 / 64 连接 / 每连接限速 4MB/s / 注入 60ms RTT。
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 16 连接吞吐（相对 aria2-next） | 0.56x | **0.87x** |
+| 64 连接吞吐（相对 aria2-next） | 0.31x | **0.42x** |
+| 合并阶段耗时 | 3.80s | **0.27~1.58s** |
+慢启动改为时间驱动 + 完成驱动双触发
+**问题**：原实现的并发爬升挂在「每 N 个分片成功」上，而分片时长…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.1">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc9</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-30</p><p class="muted">修复用户实测反馈的三个并发问题。
+1) 速度变快反而显示线程数下降（上报语义错误）
+上报的是「瞬时在飞分片数」，但 worker 完成一个分片到领取下一个之间存在空档。
+速度越快、分片完成越频繁，空档占比越大，采样到的数字反而越小 —— 于是出现「速度上去了、线程数掉下来」。
+改为上报 `min(目标并发, 在飞数 + 队列剩余)`，语义是「当前有多少连接在干活」；
+收尾阶段剩余工作不足时数字下降属正确行为。
+2) 设 128 线程实际远达不到（爬升太慢）
+慢启动每次只 `+1`：从初始 4 爬到 128 需要 124 次上调、约 248 个成功分片，中小文件根本爬不到顶。
+改为**按比例上调**（当前值 × 0.5，至少 +1），十余次即到顶；慢启动初始值也从固定 4 改为 `max(4, 设定值/4)`。
+3) 弱网（2.4GHz Wi-Fi）下预热拖慢甚至像卡住
+预热此前按 `min…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc9">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc8</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-29</p><p class="muted">修复用户反馈的稳定性问题：有时显示在下载但一直不动，连链接探测这一步都没完成；下载忽好忽坏。
+根因（三处无界等待）
+1. **探测无硬超时**：服务器接受连接但迟迟不返回响应头时，connectTimeout(15s)+readTimeout(60s)
+   可叠加到近一分钟，期间界面已显示「下载中」但字节为 0；探测失败还会直接退化为单线程整文件下载。
+2. **无卡死检测**：OkHttp 的 readTimeout 只约束「单次 read 阻塞多久」。若 CDN 涓涓细流
+   （每几十秒吐几字节），read 永不超时，进度几乎不动，任务可挂到无限久。
+3. **预热无界**：连接预热请求没有超时，服务器不响应时会先卡住 60s 才进入正式下载。
+修复（逻辑参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--s…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc8">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc7</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-28</p><p class="muted">本预发布汇总两批增强（含 rc6 的预热/慢启动/平滑 ETA）。
+批次1（连接预热 / 慢启动 / 平滑 ETA）
+· **连接预热 / DNS 预解析**（warmUpConnections，默认开）：探测拿到最终 URL 后、正式分片前
+  并发建立若干空连接并解析 DNS，填充连接池，分片启动无需串行等待握手。
+· **慢启动动态上调**（slowStart，默认开）：分片并发从少（默认 min(连接数,4)）逐步爬升到设定值，
+  避免瞬时几十连接冲击服务器/被风控，也避免小文件过度建连。
+· **平滑分片级 ETA**：速率改为 EWMA 平滑，消除多分片并发下 ETA 大范围跳变。
+批次2（HTTP 版本自动协商 / 自定义透传）
+· **HTTP 版本自动协商**（httpVersionPolicy，默认 AUTO）：分片并发走 HTTP/1.1（保证多连接…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc7">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc5</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-28</p><p class="muted">修复：原始链接 302 跳转未跟随，卡在&quot;下载中&quot;不动
+网盘/更新等原始链接会 302 跳到带签名的 CDN 临时直链，只有临时直链支持 Range 多线程。
+旧实现探测能拿到 206，但丢弃了重定向后的最终 URL，分片下载仍用原始 URL，每个连接都要重走 302、
+可能命中不同节点或被拒，表现为&quot;显示下载中但线程/字节都不动，最后 Whole-file download failed&quot;。
+修复：probe 返回 resolvedUrl（OkHttp 跟随全部 3xx 后的最终地址），分片/整文件/回退全部用它。
+测试
+新增 RedirectResolveTest（断言分片走解析后 URL、原始端点零命中）；全量 23 项测试通过。</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc5">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc4</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-28</p><p class="muted">修复：大小校验失败（实际字节比声明少约 2~3 倍）
+根因：请求未声明编码时 OkHttp 自动加 Accept-Encoding: gzip 并透明解压，落盘字节是解压后大小，
+与 Content-Range/Content-Length 声明的原始字节数不一致，触发字节级大小校验失败。
+修复：探测/分片/整文件请求全部强制 Accept-Encoding: identity（且置于自定义头之后不被覆盖）。
+修复：设 64 线程只跑到约 16、速度暴跌
+rc3 把 maxConnectionsPerHost 默认设为 16 是错误取舍——单个下载的所有分片本就同一 host，
+等于把每个下载直接限死到 16 并发。rc4 改回默认 0（不限）。个别 CDN 的降级问题应由调用方针对
+具体 host 单独设置，不做全局限制。
+JitPack 支持
+新增 jitpack.yml，可直接用坐标…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc4">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc3</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-28</p><p class="muted">修复用户反馈的「下到后面线程数莫名掉下去、最后只剩几 KB」以及「暂停后恢复直接从头下载」。
+并发调度模型重写
+1. **背压只降不升 + 死锁式降并发**（后期速度暴跌主因）：旧实现所有 5xx 都算限流、连续失败砍半并发，
+   且 throttleDown 在持有信号量许可时又去 acquire，被回收的许可极难完整归还，并发单向衰减到 1。
+   改为**索引自闸门**：固定 N 个协程按自身序号与动态目标并发比较自 park/复活，背压只增减一个整数，
+   无死锁；持续成功后主动把并发恢复到设定值。
+2. **mid-flight 回退清空已下分片**：收到「服务器返回整文件」立即删光所有分片，网盘 CDN 偶发 200
+   会瞬间丢失几百 MB。改为单分片先回投重试，累计超过容忍阈值才判定不支持 Range；真回退时保留已完成分片。
+3. **per-host 并发上限**…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc3">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc23</span> <span class="chip">prerelease</span></h3><p class="small">2026-09-28</p><p class="muted">数据安全修复：探测失败不再删除旧分片；诊断工具修正；启动段优化
+---
+⛔ 最重要：探测失败不再删旧分片
+**真实事故**：用户一个夸克任务暂停时留下 32 个分片 / **14.75 MB**，约 24 小时后恢复下载 ——
+夸克直链早已过期（`__puus` 约 3 小时），于是：
+1. 探测拿到 403 → `totalSize` / `etag` / `lastModified` 全为 null
+2. `probe.validator` 退化为 `&quot;weak&quot;`（连 `len=` 都没有）
+3. 旧逻辑 `changed = prev.isNotEmpty() &amp;&amp; prev != now` → `&quot;len=…|weak&quot; != &quot;weak&quot;` → **true**
+4. `discard = changed` → **删光全部分片**
+**根因**：把「探测没拿到信息（**无法取…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc23">release page</a></p></div></div></section><section><h2>Full history</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">All releases</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">Tags</a></div></section></main>
+<footer class="site-foot">
+<div class="wrap">
+<div class="foot-cols"><div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">Download</a></li><li><a href="../plugins/index.html">Plugins</a></li><li><a href="index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></div><div class="foot-col"><h4>Documentation</h4><ul><li><a href="../docs/readme/index.html">README</a></li><li><a href="../docs/plugins/index.html">Plugin guide</a></li><li><a href="../docs/convention/index.html">Convention</a></li><li><a href="../docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="../docs/js-loader/index.html">JS loader architecture</a></li><li><a href="../docs/manifest/index.html">Manifest reference</a></li></ul></div><div class="foot-col"><h4>Terms &amp; policies</h4><ul><li><a href="../legal/license/index.html">License (MIT)</a></li><li><a href="../legal/third-party/index.html">Third-party components</a></li><li><a href="../legal/privacy/index.html">Privacy</a></li><li><a href="../legal/terms/index.html">Terms of use</a></li><li><a href="../community/index.html">Community</a></li></ul></div><div class="foot-col"><h4>Docs in other languages</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-note"><p>TurboDL v0.2.0.5 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div>
+</div>
+</footer>
+<script src="../assets/site.js" defer></script>
+</body>
+</html>

@@ -25,8 +25,9 @@ import dev.turbodl.plugin.runtime.ext.ExtensionPoints
  * instance via attributes handled by the caller; class-name reflection loading is a thin,
  * optional convenience. The kernel embeds NO loader — this one lives in bootstrap.
  *
- * NOTE: reserved — a JS loader is provided by a separate external plugin implementing the same
- * [PluginLoaderProvider] extension point; the kernel and this Kotlin loader know nothing of JS.
+ * NOTE: a JS loader is provided by the separate external plugin `turbo-plugin-js`, implementing the
+ * same [PluginLoaderProvider] extension point; the kernel and this Kotlin loader know nothing of JS,
+ * and bootstrap does not install it — a host opts in via `extraPlugins`.
  */
 class KotlinPluginLoaderPlugin : Plugin {
     override val id = "loader.kotlin"

@@ -15,8 +15,9 @@ package dev.turbodl.plugin.runtime
  *    automatically, so a well-behaved plugin needs no manual teardown here — but it may do
  *    extra work if desired.
  *
- * NOTE: reserved — JS plugins will be adapted to this same lifecycle by an external JS
- * provider; the kernel does not special-case JS. Only Kotlin-native plugins are supported now.
+ * NOTE: JS plugins are adapted to this same lifecycle by the external `turbo-plugin-js` provider;
+ * the kernel does not special-case JS. Nothing in this interface is Kotlin-only — a plugin built
+ * from a script runs the identical onLoad/onUnload contract.
  */
 interface Plugin {
     /** Stable unique id, e.g. "loader.kotlin", "backend.http", "adapter.cordis". */

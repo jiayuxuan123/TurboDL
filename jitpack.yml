@@ -6,4 +6,4 @@ jdk:
   - openjdk17
 install:
   # 跳过测试（测试会起本地 HTTP 服务器，JitPack 沙箱环境不稳定），仅发布库模块到本地 Maven。
-  - ./gradlew :turbodl-core:publishToMavenLocal :turbo-plugin-runtime:publishToMavenLocal :turbo-plugin-bootstrap:publishToMavenLocal :turbo-plugin-hls:publishToMavenLocal -x test
+  - ./gradlew :turbodl-core:publishToMavenLocal :turbo-plugin-runtime:publishToMavenLocal :turbo-plugin-bootstrap:publishToMavenLocal :turbo-plugin-hls:publishToMavenLocal :turbo-plugin-js:publishToMavenLocal -x test

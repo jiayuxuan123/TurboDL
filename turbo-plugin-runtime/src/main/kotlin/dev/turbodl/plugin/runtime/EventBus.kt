@@ -15,8 +15,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  *     before it reaches the engine (e.g. rewrite URL, inject headers). Interceptors run in
  *     registration order; each receives the previous one's output.
  *
- * NOTE: reserved — event objects are designed to be serialization-friendly at the boundary so a
- * future JS bridge can forward them to scripts; serialization itself is not implemented now.
+ * NOTE: event objects are designed to be serialization-friendly at the boundary, which is what lets
+ * the external JS provider forward them to scripts as plain data (observation only). The kernel
+ * itself implements no serialization.
  */
 class EventBus(private val logger: (String, Throwable?) -> Unit = { _, _ -> }) {
 

@@ -107,8 +107,9 @@ Field notes:
   a given TurboDL version **before** downloading them.
 - `category` MUST be one of the category topics; `capabilities` SHOULD mirror the repo's
   capability topics.
-- `entry.language` is `kotlin` today. `js` is **reserved** for a future JS provider; the core and
-  the Kotlin loader remain unaware of JS.
+- `entry.language` is `kotlin` for a JVM plugin class, or `js` for a script loaded by the
+  `turbo-plugin-js` loader. Requiring `js` means the host must have that loader installed;
+  the core and the Kotlin loader itself stay unaware of JS.
 - `artifact.type` is `maven` (published JAR) or `jar` (direct release asset URL in
   `artifact.url`). Choose what your distribution uses.
 

@@ -104,6 +104,7 @@ client.shutdown()
 - `turbo-plugin-runtime`：**可选**插件运行时内核（生命周期/disposer/事件总线/服务注册/扩展点/版本握手/诊断）。core 不依赖它；不引入时 core 照常工作。
 - `turbo-plugin-bootstrap`：**可选**引导模块，一键装配基础插件（Kotlin 加载器 + HTTP 后端）；非强制依赖。
 - `turbo-plugin-hls`：**可选** HLS VOD 协议适配插件 —— 解析 master/media M3U8 播放列表、并发下载分段（分段级重试）、AES-128 解密、支持 EXT-X-BYTERANGE，按序返回分片交由引擎合并。以路由 `DownloadBackend` 注册；不支持的构造（直播流、DRM/SAMPLE-AES、fMP4 EXT-X-MAP、discontinuity）显式失败而非产出损坏文件。
+- `turbo-plugin-js`：**可选**的 JavaScript 插件加载器 —— 加载用 JavaScript 编写的 TurboDL 插件。内嵌 QuickJS（每个脚本一个 runtime、一个 context），为脚本提供一套稳定的 `host`/`plugin` ABI（http、crypto、log、storage、env、time、timers 等粗粒度能力）。它把 JS 侧的链接解析器与任务钩子桥接到普通扩展点上，卸载时按 `ACTIVE → STOPPING → DRAINING → DISPOSED` 四步走，绝不在脚本仍在执行时关闭 runtime。只有这个模块会引入 JS 引擎；不引入它，QuickJS 就不会进入你的 classpath。
 - `demo`：三个可运行示例 —— Kotlin 原生插件、bootstrap 使用、Shim 适配器模板。运行：`./gradlew :demo:run --args="1"`（或 `2`、`3`、`all`）。
 
 ## 插件框架（可选）
@@ -120,6 +121,7 @@ TurboDL 既是独立引擎，**也是**可选的插件平台。三条设计理�
 - [插件接入教程](../plugins/README.md) —— 如何构建并接入插件。
 - [开发协定](../plugins/CONVENTION.md) —— 官方兼容性规则手册（稳定 API、版本、命名、安全）。
 - [插件市场](../plugins/MARKET.md) —— 经 GitHub 标签 + `turbodl-plugin.json` 清单发布/发现插件。
+- [JavaScript 插件](../../turbo-plugin-js/README.md) —— 用 JavaScript 编写插件（内嵌 QuickJS）。
 
 ## 设计说明与致谢
 

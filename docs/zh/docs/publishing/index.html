@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发布与发现 · TurboDL</title>
+<meta name="description" content="没有需要注册的中心仓库。插件靠 GitHub topic 加一份清单被发现 —— 这套约定就是全部。">
+<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/zh/docs/publishing/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TurboDL">
+<meta property="og:title" content="发布与发现 · TurboDL">
+<meta property="og:description" content="没有需要注册的中心仓库。插件靠 GitHub topic 加一份清单被发现 —— 这套约定就是全部。">
+<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/zh/docs/publishing/index.html">
+<meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../../../assets/apple-touch-icon.png">
+<link rel="stylesheet" href="../../../assets/site.css">
+</head>
+<body class="brand-turbodl">
+<a class="skip" href="#main">跳到正文</a>
+<header class="site-head">
+<div class="wrap">
+<a class="brand" href="../../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
+<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">菜单</button>
+<nav id="site-nav" class="site-nav"><a href="../../index.html">概览</a><a href="../../download/index.html">下载</a><a href="../../plugins/index.html">插件</a><a href="../index.html">文档</a><a href="../../changelog/index.html">更新日志</a><a href="../../community/index.html">社区</a><a href="../../legal/index.html">协议</a></nav>
+<div class="langs"><a href="../../../docs/publishing/index.html">English</a><span class="lang-cur">中文</span></div>
+</div>
+</header>
+<main id="main">
+<nav class="crumbs"><a href="../index.html">文档</a><span class="sep">/</span><span aria-current="page">发布与发现</span></nav><section class="doc-head"><h1>发布与发现</h1><p class="lead">没有需要注册的中心仓库。插件靠 GitHub topic 加一份清单被发现 —— 这套约定就是全部。</p></section><div class="doc-meta"><span class="mono small">docs/i18n/plugins/MARKET_zh-CN.md</span><a class="mono small" href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/plugins/MARKET_zh-CN.md">在 GitHub 上查看</a><a class="mono small" href="https://github.com/jiayuxuan123/TurboDL/raw/main/docs/i18n/plugins/MARKET_zh-CN.md">原文下载</a></div><div class="doc-grid"><aside class="doc-aside"><nav class="toc" aria-label="目录"><div class="toc-title">本页目录</div><ul><li><a href="#1-发现插件">1. 发现插件</a></li><li><a href="#2-主题标签-货架">2. 主题标签（“货架”）</a></li><li><a href="#3-turbodl-plugin-json-清单">3. turbodl-plugin.json 清单</a></li><li><a href="#4-推荐的仓库布局">4. 推荐的仓库布局</a></li><li><a href="#5-发布清单">5. 发布清单</a></li><li><a href="#6-安装插件-使用者侧">6. 安装插件（使用者侧）</a></li><li><a href="#7-信任与安全">7. 信任与安全</a></li><li><a href="#8-未来-可选的官方索引">8. 未来：可选的官方索引</a></li></ul></nav><nav class="toc doc-nav"><div class="toc-title">全部页面</div><ul><li><a href="../readme/index.html">项目说明</a></li><li><a href="../plugins/index.html">插件开发指南</a></li><li><a href="../convention/index.html">开发规范</a></li><li class="cur"><span>发布与发现</span></li><li><a href="../js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../js-loader/index.html">JS 加载器架构</a></li><li><a href="../manifest/index.html">清单字段参考</a></li><li><a href="../../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../../legal/third-party/index.html">第三方组件与致谢</a></li><li><a href="../../legal/privacy/index.html">隐私说明</a></li><li><a href="../../legal/terms/index.html">使用条款</a></li></ul></nav></aside><article class="doc-body"><div class="note"><p>简体中文翻译 · 原文：<a href="../readme/index.html">English</a> · <a href="../readme/index.html">中文总览</a></p></div><p>TurboDL 不运行集中式包服务器。插件的“市场”其实就是 <strong>GitHub 主题标签（topic tags）加上机器可读的清单</strong>。任何人发布插件只需：推送一个仓库、添加正确的主题标签、并在仓库根放置 <code>turbodl-plugin.json</code>。任何人都能通过 GitHub 主题搜索发现插件。这让生态保持开放、去中心化、零基础设施。</p><p>本文档定义这些标签、清单以及发布/发现流程。它与<a href="../convention/index.html">插件生态开发协定</a>（兼容性规则手册）和<a href="../plugins/index.html">插件接入教程</a>配合使用。</p><hr><h2 id="1-发现插件">1. 发现插件<a class="anchor" href="#1-发现插件" aria-label="链接到此节">#</a></h2><p>所有 TurboDL 插件都携带根主题标签 <strong><code>turbodl-plugin</code></strong>。在此浏览：</p><div class="code"><pre><code>https://github.com/topics/turbodl-plugin</code></pre></div><p>通过在 GitHub 搜索中组合主题标签来按能力收窄范围：</p><div class="code"><pre><code>topic:turbodl-plugin topic:turbodl-backend      # 协议后端
+topic:turbodl-plugin topic:turbodl-adapter       # shim/服务适配器
+topic:turbodl-plugin topic:turbodl-hls           # 与 HLS 相关</code></pre></div><p>GitHub API 同样可用：</p><div class="code"><pre><code>GET https://api.github.com/search/repositories?q=topic:turbodl-plugin+topic:turbodl-backend</code></pre></div><hr><h2 id="2-主题标签-货架">2. 主题标签（“货架”）<a class="anchor" href="#2-主题标签-货架" aria-label="链接到此节">#</a></h2><p>每个插件仓库 MUST 拥有 <code>turbodl-plugin</code>，外加<strong>恰好一个</strong>分类主题标签，以及任意数量的能力主题标签。</p><p><strong>根标签（必需）</strong></p><ul><li><code>turbodl-plugin</code></li></ul><p><strong>分类（任选其一，必需）</strong></p><ul><li><code>turbodl-backend</code> —— 新增/覆盖一个下载协议（<code>DownloadBackend</code>）</li><li><code>turbodl-adapter</code> —— 桥接外部系统/服务（shim；通常是 <code>LinkParser</code> + 下载后端）</li><li><code>turbodl-parser</code> —— 仅链接/清单解析器（<code>LinkParser</code>）</li><li><code>turbodl-hook</code> —— 任务前/后处理（<code>TaskPreHook</code> / <code>TaskPostHook</code>）</li><li><code>turbodl-loader</code> —— 插件加载器（<code>PluginLoaderProvider</code>，例如某个 JS 提供方）</li></ul><p><strong>能力（可选，任意数量）</strong></p><ul><li>协议/格式：<code>turbodl-hls</code>、<code>turbodl-dash</code>、<code>turbodl-ftp</code>、<code>turbodl-magnet</code>、<code>turbodl-m3u8</code></li><li>行为：<code>turbodl-remux</code>、<code>turbodl-checksum</code>、<code>turbodl-notify</code>、<code>turbodl-unpack</code></li><li>集成：<code>turbodl-cloud</code>、<code>turbodl-drm-free</code></li></ul><p>分类与能力标签正是让市场插件易于构建和查找的东西：你挑选自己的货架，用户按它筛选。</p><hr><h2 id="3-turbodl-plugin-json-清单">3. <code>turbodl-plugin.json</code> 清单<a class="anchor" href="#3-turbodl-plugin-json-清单" aria-label="链接到此节">#</a></h2><p>将此文件放在仓库根。它是工具（或未来的官方索引器）读取以理解你插件的唯一机器可读描述符。</p><div class="code"><div class="code-cap">json</div><pre><code>{
+  &quot;manifestVersion&quot;: &quot;1.0&quot;,
+  &quot;id&quot;: &quot;backend.hls&quot;,
+  &quot;name&quot;: &quot;HLS VOD Backend&quot;,
+  &quot;description&quot;: &quot;Downloads HLS VOD (.m3u8) streams: variant selection, AES-128, byte-range.&quot;,
+  &quot;version&quot;: &quot;1.0.0&quot;,
+  &quot;author&quot;: &quot;your-name-or-org&quot;,
+  &quot;homepage&quot;: &quot;https://github.com/you/turbodl-plugin-hls&quot;,
+  &quot;license&quot;: &quot;MIT&quot;,
+
+  &quot;category&quot;: &quot;turbodl-backend&quot;,
+  &quot;capabilities&quot;: [&quot;turbodl-hls&quot;, &quot;turbodl-m3u8&quot;],
+
+  &quot;turbodl&quot;: {
+    &quot;apiMajor&quot;: 1,
+    &quot;requiredApiVersion&quot;: &quot;1.0.0&quot;
+  },
+
+  &quot;entry&quot;: {
+    &quot;language&quot;: &quot;kotlin&quot;,
+    &quot;pluginClass&quot;: &quot;dev.turbodl.plugin.hls.HlsPlugin&quot;
+  },
+
+  &quot;artifact&quot;: {
+    &quot;type&quot;: &quot;maven&quot;,
+    &quot;coordinates&quot;: &quot;dev.turbodl:turbo-plugin-hls:1.0.0&quot;
+  },
+
+  &quot;extensionPoints&quot;: [&quot;turbo.downloadBackend&quot;],
+  &quot;services&quot;: [&quot;backend.hls&quot;]
+}</code></pre></div><p>字段说明：</p><ul><li><code>id</code> MUST 等于插件的 <code>Plugin.id</code>，并遵循开发协定（§4）中的命名规则。</li><li><code>turbodl.apiMajor</code> 与 <code>requiredApiVersion</code> MUST 与插件在代码中声明的 <code>Plugin.requiredApiVersion</code> 一致。市场/工具正是据此在<strong>下载前</strong>过滤掉无法在给定 TurboDL 版本上运行的插件。</li><li><code>category</code> MUST 是分类主题标签之一；<code>capabilities</code> SHOULD 镜像仓库的能力主题标签。</li><li><code>entry.language</code> 目前是 <code>kotlin</code>。<code>js</code> <strong>预留</strong>给未来的 JS 提供方；core 与 Kotlin 加载器保持对 JS 无感知。</li><li><code>artifact.type</code> 是 <code>maven</code>（已发布的 JAR）或 <code>jar</code>（<code>artifact.url</code> 中的直接发行版资源 URL）。按你的分发方式选择。</li></ul><p>用于校验的 JSON Schema 位于 <a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/plugins/turbodl-plugin.schema.json" target="_blank" rel="noopener"><code>turbodl-plugin.schema.json</code></a>。</p><hr><h2 id="4-推荐的仓库布局">4. 推荐的仓库布局<a class="anchor" href="#4-推荐的仓库布局" aria-label="链接到此节">#</a></h2><div class="code"><pre><code>turbodl-plugin-&lt;name&gt;/
+├─ turbodl-plugin.json          # 清单（仓库根）
+├─ README.md                    # 用途、安装片段、支持的 TurboDL MAJOR
+├─ LICENSE
+├─ src/main/kotlin/...          # Plugin 实现
+└─ src/test/kotlin/...          # 证明它能加载并履行能力的测试</code></pre></div><p>仓库描述与 README SHOULD 显式声明支持的 TurboDL 主版本线（例如“TurboDL 1.x”）。</p><hr><h2 id="5-发布清单">5. 发布清单<a class="anchor" href="#5-发布清单" aria-label="链接到此节">#</a></h2><ol><li>依据<a href="../plugins/index.html">接入教程</a>和<a href="../convention/index.html">开发协定</a>实现一个 <code>Plugin</code>。</li><li>将 <code>Plugin.requiredApiVersion</code> 设为你实际使用到的最低 API。</li><li>在仓库根添加 <code>turbodl-plugin.json</code>；对照 schema 校验它。</li><li>添加 GitHub 主题标签：<code>turbodl-plugin</code> + 一个分类 + 能力。</li><li>用安装片段和所支持的 TurboDL MAJOR 填写 README。</li><li>发布与 <code>artifact</code> 匹配的构件（Maven 坐标或发行版 JAR）。</li><li>打一个版本号等于清单 <code>version</code> 的 release。</li></ol><p>这就是“市场”的全部：推送、打标签、完成。没有守门人，没有服务器。</p><hr><h2 id="6-安装插件-使用者侧">6. 安装插件（使用者侧）<a class="anchor" href="#6-安装插件-使用者侧" aria-label="链接到此节">#</a></h2><ol><li>将插件构件加入你的构建（清单中的 Maven 坐标），与 <code>turbodl-core</code> 和 <code>turbo-plugin-runtime</code> 一同引入。</li><li>安装到你的宿主：</li></ol><div class="code"><div class="code-cap">kotlin</div><pre><code>val host = PluginHost()
+host.install(HlsPlugin())                 // 或该插件文档记载的入口类
+// 若使用 bootstrap 便捷装配：
+val boot = TurboBootstrap.create(extraPlugins = listOf(HlsPlugin()))</code></pre></div><ol><li>版本握手自动运行。如果插件需要的 API 比你的 TurboDL 更新，它会被标记为 <code>INCOMPATIBLE</code> 且永不加载——检查 <code>host.diagnostics().render()</code>。</li></ol><hr><h2 id="7-信任与安全">7. 信任与安全<a class="anchor" href="#7-信任与安全" aria-label="链接到此节">#</a></h2><p>这里没有中心审查，所以请像对待任何依赖一样对待第三方插件：</p><ul><li>阅读源码；优先选择带测试与清晰许可证的插件。</li><li>安装前检查清单中的 <code>apiMajor</code> 是否与你的 TurboDL 匹配。</li><li><a href="../convention/index.html">开发协定 §9</a> 列出了插件应当遵循的安全规则（不可信输入校验、无数据外泄、无静默削弱 TLS）。违反这些规则的插件应在其仓库上举报，并 MAY 从任何官方索引中除名。</li></ul><hr><h2 id="8-未来-可选的官方索引">8. 未来：可选的官方索引<a class="anchor" href="#8-未来-可选的官方索引" aria-label="链接到此节">#</a></h2><p>基于主题标签的市场不需要服务器。如果需求增长，项目 MAY 发布一个静态、生成的索引：定期爬取 <code>topic:turbodl-plugin</code>、校验每个 <code>turbodl-plugin.json</code>，并渲染一个可按分类、能力及所支持的 API 主版本过滤的可搜索列表。这仍将是 GitHub 主题标签之上的一层便利设施，永远不会变成守门人。</p></article></div><p class="small"><a href="../index.html">← 全部文档</a></p></main>
+<footer class="site-foot">
+<div class="wrap">
+<div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../../download/index.html">下载</a></li><li><a href="../../plugins/index.html">插件</a></li><li><a href="../../changelog/index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../readme/index.html">项目说明</a></li><li><a href="../plugins/index.html">插件开发指南</a></li><li><a href="../convention/index.html">开发规范</a></li><li><a href="../js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../js-loader/index.html">JS 加载器架构</a></li><li><a href="../manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../../legal/third-party/index.html">第三方组件</a></li><li><a href="../../legal/privacy/index.html">隐私说明</a></li><li><a href="../../legal/terms/index.html">使用条款</a></li><li><a href="../../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-note"><p>TurboDL v0.2.0.5 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
+</div>
+</footer>
+<script src="../../../assets/site.js" defer></script>
+</body>
+</html>

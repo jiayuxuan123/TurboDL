@@ -23,7 +23,7 @@
 
   "artifact": {
     "type": "maven",
-    "coordinates": "dev.turbodl:turbo-plugin-hls:0.1.0"
+    "coordinates": "dev.turbodl:turbo-plugin-hls:0.2.0.6"
   },
 
   "extensionPoints": ["turbo.downloadBackend"],

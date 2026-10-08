@@ -12,8 +12,9 @@ import dev.turbodl.plugin.runtime.ExtensionPointKey
  * business plugins and the bootstrap integration share. The kernel only knows
  * [dev.turbodl.plugin.runtime.PluginLoaderProvider].
  *
- * NOTE: reserved — future JS Provider / third-party shim adapter plugins may implement any of
- * these extension points. No implementation is provided in this iteration.
+ * NOTE: external loaders and shims implement these contracts through the registry. `turbo-plugin-js`
+ * bridges `LinkParser` and the two task hooks for scripts; `DOWNLOAD_BACKEND` stays Kotlin-only, and
+ * no implementation of it is provided by the runtime itself.
  */
 object ExtensionPoints {
 

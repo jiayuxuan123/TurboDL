@@ -21,8 +21,8 @@ import dev.turbodl.plugin.runtime.ext.BackendRegistry
  * This module is NOT a mandatory dependency. Advanced users may construct [PluginHost] and
  * [TurboClient] themselves and wire only what they need, in any order.
  *
- * NOTE: bootstrap intentionally contains no business logic beyond wiring; adapters, JS provider,
- * HLS, etc. remain external plugins.
+ * NOTE: bootstrap intentionally contains no business logic beyond wiring; adapters, the JS loader
+ * (`turbo-plugin-js`, opt-in through [extraPlugins]), HLS, etc. remain external plugins.
  */
 class TurboBootstrap private constructor(
     val host: PluginHost,
