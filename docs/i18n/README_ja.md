@@ -6,6 +6,8 @@
 
 **言語:** [English](../../README.md) · [简体中文](README_zh-CN.md) · [繁體中文](README_zh-TW.md) · 日本語 · [한국어](README_ko.md) · [Deutsch](README_de.md)
 
+**公式サイト:** [jiayuxuan123.github.io/TurboDL](https://jiayuxuan123.github.io/TurboDL/) — ドキュメント、プラグイン開発ガイド、ダウンロード
+
 TurboDL はゼロから書き下ろされたマルチスレッドダウンロードコアです。成熟したダウンロードマネージャー（aria2、IDM/XDM、axel、Persepolis、Motrix、ab-download-manager）のアーキテクチャとアルゴリズムの**アイデアのみを参考**しており、**いずれのソースコードもコピーしていません**。そのため、寛容な **MIT ライセンス（プラグインエコシステム補足条項付き）** でリリースされ、オープンソースまたは商用プロジェクトで自由に使用できます。
 
 ## 特徴

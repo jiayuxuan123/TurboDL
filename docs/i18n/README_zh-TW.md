@@ -6,6 +6,8 @@
 
 **語言：** [English](../../README.md) · [简体中文](README_zh-CN.md) · 繁體中文 · [日本語](README_ja.md) · [한국어](README_ko.md) · [Deutsch](README_de.md)
 
+**官網：**[jiayuxuan123.github.io/TurboDL](https://jiayuxuan123.github.io/TurboDL/) —— 文件、外掛開發指南、下載頁
+
 TurboDL 是一個從零開始撰寫的多執行緒下載核心。它**僅參考**了業界成熟下載器（aria2、IDM/XDM、axel、Persepolis、Motrix、ab-download-manager）的架構與演算法**思想**，未複製任何一方的原始碼，因此以寬鬆的 **MIT（附插件生態補充條款）** 授權釋出，可自由用於開源或商業專案。
 
 ## 特性
