@@ -84,12 +84,12 @@ Only these symbols are covered by the compatibility policy. Package prefixes:
 - `Plugin`, `PluginContext` (+ `service` reified helper)
 - `PluginHost` public methods: `install`, `installAll`, `uninstall`, `shutdown`,
   `publishEvent`, `applyRequestInterceptors`, `diagnostics`, and the `services`/`extensions`/
-  `eventBus` accessors
+  `eventBus`/`protocols` accessors
 - `Disposer`, `PluginState`, `PluginInfo`, `DiagnosticsSnapshot`
 - `ExtensionPointKey`, `ExtensionRegistration`, `ExtensionRegistry`, `ServiceRegistry`, `EventBus`
 - `PluginLoaderProvider` (+ `KEY`), `PluginSource`
 - `dev.turbodl.plugin.runtime.ext.*`: `ExtensionPoints`, `LinkParser`, `TaskPreHook`,
-  `TaskPostHook`, `BackendRegistry`
+  `TaskPostHook`, `BackendRegistry`, `ProtocolClaim`, `ProtocolRegistry`
 
 **Explicitly NOT stable** (internal; do not depend on): `SegmentDownloader`, `SegmentScheduler`,
 `BuiltinHttpBackend`, `HttpClientFactory`, `PartMerger`, `SpeedLimiter`, and anything not listed
@@ -142,6 +142,9 @@ above.
 - `LinkParser.parse` MUST return `null` (not throw) for input it does not handle, so the router
   can try the next parser.
 - Hook/parser/backend implementations MUST tolerate being called concurrently.
+- Protocol declarations (`ProtocolClaim` at `ExtensionPoints.PROTOCOL_HANDLER`) are extension-point
+  registrations too, but they are declarative only: they MUST stay consistent with the predicates
+  that do the routing (§12).
 
 ---
 
@@ -198,6 +201,8 @@ integrity. A backend:
 
 - One plugin repository SHOULD ship one primary capability. Provide a `turbodl-plugin.json`
   manifest (see the plugin market doc) and tag the repo with the appropriate GitHub topics.
+- Declare the protocols the plugin handles in the manifest `protocols` array, in the same form
+  the code registers (§12). A loader/parser/hook that handles no protocol declares `[]`.
 - Declare which TurboDL MAJOR line the release targets in both the manifest and the release notes.
 - Provide a runnable example or test proving the plugin loads and performs its capability.
 - License your plugin however you wish. Under TurboDL's supplemental terms, interacting through
@@ -215,7 +220,50 @@ Apply the same discipline to your own plugin that TurboDL applies to the core:
 
 ---
 
-## 12. Changing this convention
+## 12. Protocol declarations
+
+A plugin declares which protocols/schemes it handles by registering one `ProtocolClaim` per
+protocol at `ExtensionPoints.PROTOCOL_HANDLER` while it loads, and by listing the same names in
+its manifest `protocols` array. The host indexes the registrations at load time
+(`PluginHost.protocols`, a `ProtocolRegistry`), so "which plugin declares this protocol?" is
+answerable **without running a download** — for the market, for diagnostics, and for a future
+protocol plugin.
+
+Rules:
+
+- **Naming.** A protocol name MUST be lowercase, MUST start with a letter, and MUST contain only
+  `[a-z0-9+.-]`, at most 32 characters (`^[a-z][a-z0-9+.-]{0,31}$`, the pattern the manifest
+  schema enforces). Use the name the ecosystem already knows the protocol by (`hls`, `magnet`,
+  `ftp`, `webdavs`); do not invent a vendor prefix (`acme-ftp`) for a protocol that already has a
+  name — a vendor-distinct implementation belongs in `capabilities`, not in `protocols`.
+- **One plugin, many protocols.** Declare every protocol the plugin genuinely handles
+  (`["magnet","bt","ed2k"]`). The ecosystem deliberately does not require one plugin per
+  protocol: fewer plugins means fewer installs and fewer integration failures, so a plugin that
+  covers a protocol family SHOULD declare the whole family rather than publishing one plugin per
+  scheme where a single plugin suffices.
+- **Manifest and code MUST agree.** The manifest `protocols` array and the `ProtocolClaim`s
+  registered in `onLoad` MUST list the same names. The manifest is what a user/market reads
+  before installing; the registration is what the host indexes. Extra declarations in code that
+  the manifest hides (or vice versa) are a defect.
+- **Conflicts.** Several plugins MAY declare the same protocol. The index orders claimants by
+  `priority` (higher first), `ProtocolRegistry.resolve(url)` picks the highest-priority claimant,
+  and `conflicts()` reports the overlap so the market can warn the user. A plugin that declares a
+  protocol it does not actually win at routing MUST say so in its own docs — the reference case
+  is HLS: it declares `hls` while `.m3u8` URLs are routed by the backend predicate, because `hls`
+  is a content type, not a URL scheme. Quietly claiming a protocol another plugin owns, in the
+  hope of winning by priority, is not acceptable; extend it and declare the capability instead.
+- **Declarations route nothing.** Routing stays with §6/§7 (`DownloadBackend.supports`). A
+  declaration that is not backed by a matching predicate changes nothing about what actually
+  downloads a URL, and a plugin MUST NOT expect the index to dispatch work on its behalf.
+- **Declarations grant nothing.** A protocol declaration is a label, not a permission and not a
+  sandbox boundary. It MUST NOT be used as, or mistaken for, authorization to reach the network,
+  the filesystem, user data or another plugin's services, and it MUST NOT be used to bypass any
+  rule in §9. Conversely, consumers MUST NOT treat a declaration as a grant of anything: the
+  index answers "who declares this", never "what is this plugin allowed to do".
+
+---
+
+## 13. Changing this convention
 
 This document is versioned. Backwards-compatible clarifications bump its MINOR; a change that
 invalidates previously-conformant plugins bumps its MAJOR and MUST ship with the corresponding

@@ -52,7 +52,58 @@ object ExtensionPoints {
      */
     val TASK_POST_HOOK: ExtensionPointKey<TaskPostHook> =
         ExtensionPointKey.of("turbo.taskPostHook")
+
+    /**
+     * Protocol declaration extension point.
+     *
+     * A plugin registers one [ProtocolClaim] per protocol/scheme it can handle ("hls", "magnet",
+     * "ftp", "ed2k", ...). One plugin MAY declare several — the ecosystem's model is "one plugin,
+     * many protocols", not "one protocol, one plugin", so a single magnet/BT/eD2K plugin can own
+     * its whole family of schemes.
+     *
+     * This is a DECLARATION, not a grant and not a routing rule:
+     *  - it does not change what handles a download — [DOWNLOAD_BACKEND] predicates still decide
+     *    that, so a claim by itself routes nothing;
+     *  - it confers no permission of any kind (see the Convention: capabilities/declarations are
+     *    labels, permissions are enforced by the host's own boundaries);
+     *  - it is the load-time answer to "who declares this scheme?", consumed by
+     *    [ProtocolRegistry] for diagnostics, market filtering and pre-download discovery.
+     *
+     * Multiple plugins MAY claim the same scheme; [ProtocolRegistry] orders claimants by
+     * priority (highest first) and exposes the overlap through `conflicts()`.
+     */
+    val PROTOCOL_HANDLER: ExtensionPointKey<ProtocolClaim> =
+        ExtensionPointKey.of("turbo.protocolHandler")
 }
+
+/**
+ * A plugin's declaration that it handles one protocol/scheme.
+ *
+ * Registered at [ExtensionPoints.PROTOCOL_HANDLER], normally right next to the plugin's real
+ * routing registration (e.g. its [dev.turbodl.core.DownloadBackend]) so the two never drift
+ * apart. [ProtocolRegistry] turns the registered claims into a load-time scheme index.
+ *
+ * @param scheme protocol/scheme name, lowercase ("hls", "magnet", "ftp", "webdavs"). The
+ *   registry normalizes it (trim + lowercase) and ignores a value that does not normalize to a
+ *   valid protocol token, so a malformed claim can never throw at query time.
+ * @param pluginId the plugin making the declaration. Filled by the declaring plugin; when blank
+ *   the registry falls back to the plugin that actually registered the claim.
+ * @param priority ordering among multiple claimants of the same scheme (higher wins). It SHOULD
+ *   equal the `priority` passed to `PluginContext.registerExtension` so the generic extension
+ *   registry and the scheme index agree on order.
+ * @param label optional free-form origin/provenance note ("hls", "aria2-adapter", ...) surfaced
+ *   in diagnostics and market listings. Never interpreted by the runtime.
+ */
+data class ProtocolClaim(
+    /** 归一化后的 scheme，小写，如 "magnet" / "ftp" / "webdav"。 */
+    val scheme: String,
+    /** 声明它的插件 id。 */
+    val pluginId: String,
+    /** 同一 scheme 多方声明时的优先级（大的先）。 */
+    val priority: Int,
+    /** 可选：说明这个声明从哪来（"hls" / "aria2-adapter"…），用于诊断与市场展示。 */
+    val label: String = "",
+)
 
 /**
  * Link parser extension point contract.

@@ -54,6 +54,8 @@ loudly instead of silently corrupting plugins.
 
 **Built-in extension points** (`dev.turbodl.plugin.runtime.ext.ExtensionPoints`):
 - `DOWNLOAD_BACKEND` — add/override a protocol (`DownloadBackend`)
+- `PROTOCOL_HANDLER` — declare which protocols/schemes you handle (`ProtocolClaim`; indexed at
+  load time by `host.protocols` — a declaration only, it routes nothing)
 - `LINK_PARSER` — turn a raw link into `DownloadRequest`s (`LinkParser`)
 - `TASK_PRE_HOOK` — rewrite a request before submit (`TaskPreHook`)
 - `TASK_POST_HOOK` — react after a task finishes (`TaskPostHook`)
@@ -163,6 +165,68 @@ If your plugin shows `INCOMPATIBLE`, the running TurboDL API does not satisfy yo
 
 Follow the [Plugin Market](MARKET.md) steps: add `turbodl-plugin.json`, tag the repo with
 `turbodl-plugin` + a category + capabilities, publish an artifact, cut a release.
+
+---
+
+## Declaring the protocols you support
+
+A plugin that handles protocols should say so, once, in a form the host can index **at load
+time**. That is what `PROTOCOL_HANDLER` plus the manifest `protocols` field are for — and it is
+why the ecosystem is "one plugin, many protocols": a single magnet/BT/eD2K plugin declares all
+three instead of shipping three plugins.
+
+```kotlin
+class P2pPlugin : Plugin {
+    override val id = "backend.p2p"
+
+    override fun onLoad(context: PluginContext) {
+        // 1. The real routing registration — what actually handles a request.
+        context.registerExtension(ExtensionPoints.DOWNLOAD_BACKEND, P2pBackend(), priority = 200)
+
+        // 2. The declaration — one claim per protocol, indexed by the host at load time.
+        //    (Same priority as the backend so the index and the router order identically.)
+        listOf("magnet", "bt", "ed2k").forEach { scheme ->
+            context.registerExtension(
+                ExtensionPoints.PROTOCOL_HANDLER,
+                ProtocolClaim(scheme = scheme, pluginId = id, priority = 200, label = "aria2-adapter"),
+                priority = 200,
+            )
+        }
+    }
+}
+```
+
+```json
+// turbodl-plugin.json — the same names, so the market and the host agree
+"protocols": ["magnet", "bt", "ed2k"],
+```
+
+What the declaration buys you:
+
+- **Load-time answers.** `host.protocols.resolve("magnet:?xt=urn:btih:...")` finds the claimant
+  without running a download; `claimsFor("magnet")` lists every claimant, highest priority
+  first; `allClaims()` drives diagnostics and listings.
+- **Market filtering.** The manifest `protocols` array lets a market — or a user reading a
+  manifest — filter "which plugins handle `ftp`?" before installing anything, and
+  `host.protocols.conflicts()` reports when two installed plugins declare the same protocol.
+- **One plugin, many protocols.** There is no one-plugin-per-protocol rule: declaring a whole
+  family in one plugin is the expected shape (fewer installs, fewer things to break).
+
+What it does **not** do (read this twice):
+
+- **It does not route.** Routing stays with the `DownloadBackend.supports` predicate. A claim
+  with no matching predicate changes nothing about what downloads your URL.
+- **It grants no permission.** A declaration is a label for the market and diagnostics — not a
+  sandbox boundary, not an authorization to touch the network, the filesystem or user data.
+  "I declared protocol X" is never license to do anything (Convention §12).
+
+Names must be lowercase and start with a letter (`^[a-z][a-z0-9+.-]{0,31}$`); the hard rules,
+including conflict handling, are in [Convention §12](CONVENTION.md).
+
+Gotcha worth knowing: a protocol name is **not** automatically a URL scheme. HLS declares `hls`,
+but an `.m3u8` link is an `http(s)` URL — so `resolve("https://x/y.m3u8")` will never return the
+HLS claim, and HLS routes `.m3u8` through its backend predicate instead. Declare the name the
+ecosystem knows the protocol by, and let the predicate own URL matching.
 
 ---
 

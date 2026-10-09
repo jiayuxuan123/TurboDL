@@ -86,14 +86,47 @@ class JsPluginLoaderPlugin(
      */
     override val requiredApiVersion: dev.turbodl.core.ApiVersion = dev.turbodl.core.ApiVersion(1, 0, 0)
 
+    /**
+     * The manager this loader created in [onLoad]. Null before load and after unload.
+     *
+     * Held as a field (it used to be a local) so a host that manages plugins can ask "what is
+     * installed right now" without going through the kernel's plugin list and casting. The manager
+     * itself stays `internal`: hosts see [livePlugins] and [leakedRuntimeCount], not its internals.
+     */
+    private var managerRef: JsPluginManager? = null
+
+    /**
+     * Every JavaScript plugin instance alive right now, sorted by id.
+     *
+     * Empty before [onLoad] and once the loader is unloaded — both are honest answers, not errors.
+     */
+    fun livePlugins(): List<JsScriptPlugin.Info> =
+        managerRef?.livePlugins()?.map { it.info() } ?: emptyList()
+
+    /** Ids only; cheaper when a host just needs to know what is there. */
+    fun livePluginIds(): List<String> = managerRef?.liveIds() ?: emptyList()
+
+    /**
+     * How many QuickJS runtimes this loader refused to close because JavaScript was still executing
+     * in them. Non-zero means a script kept running past its drain budget — worth surfacing in a
+     * diagnostics screen, because the leak is otherwise invisible.
+     */
+    fun leakedRuntimeCount(): Int = managerRef?.leakedCount() ?: 0
+
     override fun onLoad(context: PluginContext) {
         val manager = JsPluginManager(
             loaderId = "js",
             engineConfig = engineConfig,
             purgeSandboxOnUnload = purgeSandboxOnUnload,
         )
+        managerRef = manager
         // The disposer stops instances first, then the scheduler — see JsPluginManager.shutdown.
-        context.disposer.register { manager.shutdown { message, error -> context.log(message, error) } }
+        context.disposer.register {
+            // Clear the field first: a host querying livePlugins() while teardown runs must see
+            // "nothing is loaded" rather than a half-torn-down manager.
+            managerRef = null
+            manager.shutdown { message, error -> context.log(message, error) }
+        }
 
         val provider = object : PluginLoaderProvider {
             override val loaderId: String = "js"

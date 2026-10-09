@@ -2,6 +2,8 @@ package dev.turbodl.plugin.runtime
 
 import dev.turbodl.core.DownloadRequest
 import dev.turbodl.core.TurboEvent
+import dev.turbodl.plugin.runtime.ext.ExtensionPoints
+import dev.turbodl.plugin.runtime.ext.ProtocolRegistry
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -30,6 +32,15 @@ class PluginHost(
     val services = ServiceRegistry()
     val extensions = ExtensionRegistry()
     val eventBus = EventBus(logger)
+
+    /**
+     * Load-time scheme → plugin index over the plugins' [ExtensionPoints.PROTOCOL_HANDLER]
+     * declarations ("this URL's protocol is declared by …").
+     *
+     * Purely additive and read-only: it observes the extension registry, so it follows plugin
+     * load/unload automatically and takes no part in routing (see [ProtocolRegistry]).
+     */
+    val protocols = ProtocolRegistry(extensions)
 
     private val lock = Any()
     private val registered = ConcurrentHashMap<String, Managed>()
@@ -238,6 +249,22 @@ class PluginHost(
 
     /** Publish an engine event onto the bus (used by an integration layer bridging a client). */
     fun publishEvent(event: TurboEvent) = eventBus.publish(event)
+
+    /**
+     * The live plugin instance registered under [id], or null.
+     *
+     * Exists so a host that *manages* plugins can reach the concrete type behind an id without the
+     * kernel having to know about it: a plugin-management screen needs, say, the JS loader instance
+     * to ask "which scripts are running right now", and the kernel has no business exposing JS
+     * details. The caller casts to the type it installed — information it already had.
+     *
+     * Returns null for an unknown id and after a plugin is unloaded; both are honest answers.
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Plugin> plugin(id: String): T? = registered[id]?.plugin as T?
+
+    /** Every live plugin instance, in installation order. See [plugin] for why this is exposed. */
+    fun plugins(): List<Plugin> = registered.values.sortedBy { it.seq }.map { it.plugin }
 
     /** Run submit-time interceptors over a request (used by an integration layer at submit). */
     fun applyRequestInterceptors(request: DownloadRequest): DownloadRequest =

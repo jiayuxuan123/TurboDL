@@ -24,9 +24,15 @@ Narrow by capability by combining topics in GitHub search:
 
 ```
 topic:turbodl-plugin topic:turbodl-backend      # protocol backends
-topic:turbodl-plugin topic:turbodl-adapter       # shim/service adapters
-topic:turbodl-plugin topic:turbodl-hls           # HLS-related
+topic:turbodl-plugin topic:turbodl-protocol     # plugins that declare protocols/schemes
+topic:turbodl-plugin topic:turbodl-adapter      # shim/service adapters
+topic:turbodl-plugin topic:turbodl-hls          # HLS-related
 ```
+
+Then narrow further by **protocol**: a plugin's manifest `protocols` array is the
+machine-readable "what does it handle" list — one plugin may declare several — so a market
+indexer built on these manifests can answer "which plugins handle `magnet`?" without a central
+server (see §2 and §3).
 
 The GitHub API works too:
 
@@ -46,6 +52,8 @@ number of **capability** topics.
 
 **Category (choose one, required)**
 - `turbodl-backend` — adds/overrides a download protocol (`DownloadBackend`)
+- `turbodl-protocol` — declares the protocols/schemes it handles (`protocols`); typically an
+  adapter/backend for one protocol family, e.g. HLS, magnet/BT, FTP family
 - `turbodl-adapter` — bridges an external system/service (shim; usually `LinkParser` + backend)
 - `turbodl-parser` — link/manifest parser only (`LinkParser`)
 - `turbodl-hook` — task pre/post processing (`TaskPreHook` / `TaskPostHook`)
@@ -58,6 +66,24 @@ number of **capability** topics.
 
 Category and capability tags are what make market plugins easy to build and find: you pick your
 shelf, users filter to it.
+
+### Filtering by protocol
+
+Topics are the coarse shelf; the manifest `protocols` array is the precise answer to "does this
+plugin handle my link?". Conventions:
+
+- A plugin that handles a protocol declares it in `protocols` (one plugin MAY declare several —
+  e.g. `["magnet","bt","ed2k"]`); a plugin that handles none (a loader, a hook, a checksum tool)
+  declares `[]`.
+- A market/indexer SHOULD offer "filter by protocol" alongside "filter by category", reading
+  `protocols` from validated manifests, and SHOULD surface the protocols on the plugin card.
+- When two listed plugins declare the same protocol, the market SHOULD show both and say that the
+  host picks the higher-`priority` claimant at load time (the host's index reports this overlap as
+  a conflict) rather than hiding one.
+- Protocol names are lowercase tokens (`^[a-z][a-z0-9+.-]{0,31}$`). A name is not a URL scheme
+  guarantee: HLS declares `hls` although an `.m3u8` link is an `http(s)` URL; routing is decided
+  by the plugin's backend predicate, the declaration is what the market filters on. Plugin cards
+  SHOULD carry that caveat when it applies.
 
 ---
 
@@ -77,8 +103,9 @@ future official indexer) reads to understand your plugin.
   "homepage": "https://github.com/you/turbodl-plugin-hls",
   "license": "MIT",
 
-  "category": "turbodl-backend",
-  "capabilities": ["turbodl-hls", "turbodl-m3u8"],
+  "category": "turbodl-protocol",
+  "capabilities": ["dev.turbodl.cap.hls", "dev.turbodl.cap.m3u8"],
+  "protocols": ["hls"],
 
   "turbodl": {
     "apiMajor": 1,
@@ -95,7 +122,7 @@ future official indexer) reads to understand your plugin.
     "coordinates": "dev.turbodl:turbo-plugin-hls:1.0.0"
   },
 
-  "extensionPoints": ["turbo.downloadBackend"],
+  "extensionPoints": ["turbo.downloadBackend", "turbo.protocolHandler"],
   "services": ["backend.hls"]
 }
 ```
@@ -105,8 +132,17 @@ Field notes:
 - `turbodl.apiMajor` and `requiredApiVersion` MUST match what the plugin declares in code
   (`Plugin.requiredApiVersion`). This is how a market/tool filters out plugins that cannot run on
   a given TurboDL version **before** downloading them.
-- `category` MUST be one of the category topics; `capabilities` SHOULD mirror the repo's
-  capability topics.
+- `category` MUST be one of the category topics.
+- `protocols` lists the protocols/schemes the plugin declares it handles — the field the market
+  filters by. It is optional (omit or `[]` when the plugin handles no protocol) and a plugin MAY
+  declare several: `["magnet","bt","ed2k"]` is one plugin, three protocols. The names MUST match
+  the `ProtocolClaim`s the plugin registers (Convention §12), and a declaration grants no
+  permission and does not by itself route a download.
+- `capabilities` SHOULD list one namespaced id per capability topic the repo carries, in the form
+  `<namespace>.cap.<name>` — TurboDL's own namespace is `dev.turbodl.cap.*`
+  (`dev.turbodl.cap.hls` ↔ topic `turbodl-hls`). The namespace is what lets two vendors publish a
+  same-named capability without colliding; a bare legacy id such as `turbodl-hls` is rejected by
+  the schema. Like a protocol declaration, a capability is a label: it grants no permission.
 - `entry.language` is `kotlin` for a JVM plugin class, or `js` for a script loaded by the
   `turbo-plugin-js` loader. Requiring `js` means the host must have that loader installed;
   the core and the Kotlin loader itself stay unaware of JS.
@@ -138,10 +174,12 @@ Repository description and README SHOULD state the supported TurboDL MAJOR line 
 1. Implement a `Plugin` per the [authoring guide](README.md) and the [Convention](CONVENTION.md).
 2. Set `Plugin.requiredApiVersion` to the lowest API you actually use.
 3. Add `turbodl-plugin.json` at the repo root; validate it against the schema.
-4. Add GitHub topics: `turbodl-plugin` + one category + capabilities.
-5. Fill README with an install snippet and the supported TurboDL MAJOR.
-6. Publish an artifact (Maven coordinates or a release JAR) matching `artifact`.
-7. Tag a release whose version equals the manifest `version`.
+4. Handle protocols? List them in the manifest `protocols` and register the matching
+   `ProtocolClaim`s (Convention §12); if you handle none, `protocols: []`.
+5. Add GitHub topics: `turbodl-plugin` + one category + capabilities.
+6. Fill README with an install snippet and the supported TurboDL MAJOR.
+7. Publish an artifact (Maven coordinates or a release JAR) matching `artifact`.
+8. Tag a release whose version equals the manifest `version`.
 
 That's the whole "market": push, tag, done. No gatekeeper, no server.
 

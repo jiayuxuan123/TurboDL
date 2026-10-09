@@ -1,6 +1,6 @@
 {
   "name": "@turbodl/cli",
-  "version": "0.2.0.6",
+  "version": "0.2.0.7",
   "description": "TurboDL command-line downloader — high-performance multi-threaded HTTP(S) downloads with resume, batch, and NDJSON output. Thin NPM wrapper around the TurboDL JVM CLI.",
   "license": "MIT",
   "repository": {

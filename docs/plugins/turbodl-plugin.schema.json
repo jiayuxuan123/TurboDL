@@ -29,8 +29,10 @@
     "license": { "type": "string" },
     "category": {
       "type": "string",
+      "description": "Which shelf the plugin sits on. turbodl-protocol is for a plugin that declares the protocols/schemes it handles (the `protocols` field; it may also implement a DownloadBackend); turbodl-backend is for a plugin whose identity is implementing a backend; turbodl-loader is for a plugin that loads plugins written in another language.",
       "enum": [
         "turbodl-backend",
+        "turbodl-protocol",
         "turbodl-adapter",
         "turbodl-parser",
         "turbodl-hook",
@@ -39,7 +41,14 @@
     },
     "capabilities": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^turbodl-[a-z0-9-]+$" },
+      "description": "Capability ids this plugin provides, in namespaced form <namespace>.cap.<name> (the TurboDL project's own namespace is dev.turbodl.cap.*, e.g. dev.turbodl.cap.hls). The namespace keeps two vendors' same-named capabilities from colliding. A capability is a market/diagnostics label only: it grants NO permission and changes no behavior. Legacy bare strings such as turbodl-hls (or turbodl-parser) do NOT match and are rejected; capability GitHub topics keep the turbodl-* spelling (see MARKET.md).",
+      "items": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+\\.cap\\.[a-z0-9][a-z0-9.-]*$" },
+      "uniqueItems": true
+    },
+    "protocols": {
+      "type": "array",
+      "description": "Protocols/schemes this plugin declares it can handle, e.g. [\"hls\"], [\"magnet\",\"bt\",\"ed2k\"], [\"ftp\",\"sftp\",\"webdavs\"]. One plugin MAY declare several: the ecosystem model is one plugin for many protocols, not one plugin per protocol. The host builds a load-time scheme -> plugin index from these declarations (host.protocols), used for discovery, market filtering, diagnostics and conflict reporting. A declaration grants NO permission and does not by itself route downloads: a DownloadBackend (see extensionPoints) still decides what handles a request. Names are lowercase URL-scheme-like tokens; note a content type is not a URL scheme (an .m3u8 URL's scheme is http(s)), so declare the name the market should know the plugin by.",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9+.-]{0,31}$" },
       "uniqueItems": true
     },
     "turbodl": {

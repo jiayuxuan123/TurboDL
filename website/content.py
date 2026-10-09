@@ -168,6 +168,7 @@ FEATURES = [
 
 PLUGIN_CATEGORIES = [
     ("turbodl-backend", {"en": "A protocol backend (replaces or extends the built-in HTTP engine).", "zh": "协议后端（替换或扩展内置 HTTP 引擎）。"}),
+    ("turbodl-protocol", {"en": "Declares the protocols/schemes it handles (the manifest `protocols` list).", "zh": "声明它处理哪些协议 / scheme（清单的 `protocols` 列表）。"}),
     ("turbodl-adapter", {"en": "Bridges an external downloader.", "zh": "对接外部下载器。"}),
     ("turbodl-parser", {"en": "Turns a share link / magnet / kouling into download requests.", "zh": "把分享链接 / 磁力 / 口令变成下载请求。"}),
     ("turbodl-hook", {"en": "Observes or rewrites requests and results.", "zh": "观察或改写请求与结果。"}),
@@ -180,8 +181,9 @@ OFFICIAL_PLUGINS = [
         "key": "plugin-hls",
         "id": "backend.hls",
         "name": "HLS VOD Backend",
-        "category": "turbodl-backend",
-        "capabilities": ["turbodl-hls", "turbodl-m3u8"],
+        "category": "turbodl-protocol",
+        "capabilities": ["dev.turbodl.cap.hls", "dev.turbodl.cap.m3u8"],
+        "protocols": ["hls"],
         "artifact": "turbo-plugin-hls",
         "manifest": f"{BLOB}/turbo-plugin-hls/turbodl-plugin.json",
         "source": f"{REPO}/tree/main/turbo-plugin-hls",
@@ -203,7 +205,8 @@ OFFICIAL_PLUGINS = [
         "id": "loader.js",
         "name": "JavaScript Plugin Loader",
         "category": "turbodl-loader",
-        "capabilities": ["turbodl-js", "turbodl-quickjs"],
+        "capabilities": ["dev.turbodl.cap.js", "dev.turbodl.cap.quickjs"],
+        "protocols": [],
         "artifact": "turbo-plugin-js",
         "manifest": f"{BLOB}/turbo-plugin-js/turbodl-plugin.json",
         "source": f"{REPO}/tree/main/turbo-plugin-js",
@@ -466,7 +469,7 @@ def _manifest_reference(lang: str) -> str:
     heads = ["Field", "Type", " ", "Notes"] if en else ["字段", "类型", " ", "说明"]
     groups = schema.get("$comment") or ""
     example = {
-        "manifestVersion": "1",
+        "manifestVersion": "1.0",
         "id": "parser.example",
         "name": "Example parser",
         "description": "Turns example:// links into download requests.",
@@ -475,9 +478,11 @@ def _manifest_reference(lang: str) -> str:
         "homepage": "https://github.com/you/turbodl-plugin-example",
         "license": "MIT",
         "category": "turbodl-parser",
-        "capabilities": ["turbodl-parser"],
-        "turbodl": {"apiVersion": "1.0.0"},
-        "entry": {"kind": "kotlin", "class": "com.example.ExamplePlugin"},
+        "capabilities": ["dev.turbodl.cap.parser"],
+        "protocols": ["example"],
+        "turbodl": {"apiMajor": 1, "requiredApiVersion": "1.0.0"},
+        "entry": {"language": "kotlin", "pluginClass": "com.example.ExamplePlugin"},
+        "extensionPoints": ["turbo.linkParser"],
     }
     return (
         (f'<p>{esc(schema.get("description", ""))}</p>' if schema.get("description") else "")
@@ -867,9 +872,11 @@ java -jar turbodl-cli-{ver}-all.jar --batch tasks.txt   # one URL per line / 每
 def _plugin_detail(p: dict, lang: str, href) -> str:
     en = lang == "en"
     chips = "".join(f'<span class="chip">{esc(c)}</span>' for c in [p["id"], p["category"]] + p["capabilities"])
+    protocols = p.get("protocols", [])
     meta_rows = [
         ["Id", f'<span class="mono">{esc(p["id"])}</span>'],
         ["Category", f'<span class="mono">{esc(p["category"])}</span>'],
+        ["Protocols", "".join(f'<span class="chip">{esc(x)}</span> ' for x in protocols) or "—"],
         ["Capabilities", "".join(f'<span class="chip">{esc(c)}</span> ' for c in p["capabilities"])],
         ["Artifact", f'<span class="mono">dev.turbodl:{esc(p["artifact"])}:{LATEST_VERSION}</span>'],
         ["API version", f'<span class="mono">{API_VERSION}</span>'],

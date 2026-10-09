@@ -89,6 +89,9 @@ internal class JsPluginManager(
 
     fun liveIds(): List<String> = instances.keys.toList().sorted()
 
+    /** The live instances themselves — the loader's public listing is built from this. */
+    fun livePlugins(): List<JsScriptPlugin> = instances.values.sortedBy { it.id }
+
     fun liveCount(): Int = instances.size
 
     /** How many QuickJS runtimes were left un-closed because JS was still executing at unload. */

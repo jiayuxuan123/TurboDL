@@ -276,6 +276,53 @@ class JsScriptPlugin internal constructor(
      */
     override fun onUnload() = dispose(logSink)
 
+    /**
+     * Where this script came from — the `PluginSource.uri` the host passed to `loadSource`.
+     *
+     * Exposed because a host that manages plugins (an app with an "installed plugins" screen, a
+     * marketplace, a diagnostics page) has to be able to say *which file* a running plugin is, and
+     * until now that string was private to this class. Reading it is harmless: the value is what the
+     * host already handed in.
+     */
+    val source: String get() = sourceUri
+
+    /** The script's display name (its file name, or the name the source declared). */
+    val scriptFileName: String get() = scriptName
+
+    /**
+     * Metadata a plugin manager needs to list this plugin: id, name, source, state and what it
+     * registered. Deliberately **not** a `Map<String, Any?>` like [diagnostics] — a manager renders
+     * these fields, and a typed snapshot cannot silently lose a key when someone edits a map literal.
+     */
+    data class Info(
+        val id: String,
+        val name: String,
+        val source: String,
+        val scriptFileName: String,
+        /** `UNSTARTED` / `ACTIVE` / `STOPPING` / `DRAINING` / `DISPOSED`. */
+        val state: String,
+        /** ABI version the script sealed against, or null when it never got that far. */
+        val abiVersion: String?,
+        val registrations: List<String>,
+        val grantedPermissions: List<String>,
+        val memoryUsedBytes: Long,
+        val inFlight: Int,
+    )
+
+    /** A typed snapshot for host-side plugin management. See [Info] for why it is not a map. */
+    fun info(): Info = Info(
+        id = id,
+        name = name,
+        source = sourceUri,
+        scriptFileName = scriptName,
+        state = lifecycleState,
+        abiVersion = abiVersion(),
+        registrations = registrations(),
+        grantedPermissions = config.permissions.map { it.jsName }.sorted(),
+        memoryUsedBytes = memoryUsed(),
+        inFlight = inFlight(),
+    )
+
     internal fun diagnostics(): Map<String, Any?> = mapOf(
         "id" to id,
         "source" to sourceUri,

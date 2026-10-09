@@ -7,25 +7,28 @@
   "author": "TurboDL",
   "homepage": "https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-js",
   "license": "MIT",
-
   "category": "turbodl-loader",
-  "capabilities": ["turbodl-js", "turbodl-quickjs"],
-
+  "capabilities": [
+    "dev.turbodl.cap.js",
+    "dev.turbodl.cap.quickjs"
+  ],
+  "protocols": [],
   "turbodl": {
     "apiMajor": 1,
     "requiredApiVersion": "1.0.0"
   },
-
   "entry": {
     "language": "js",
     "pluginClass": "dev.turbodl.plugin.js.JsPluginLoaderPlugin"
   },
-
   "artifact": {
     "type": "maven",
-    "coordinates": "dev.turbodl:turbo-plugin-js:0.2.0.6"
+    "coordinates": "dev.turbodl:turbo-plugin-js:0.2.0.7"
   },
-
-  "extensionPoints": ["turbo.pluginLoaderProvider"],
-  "services": ["loader.js"]
+  "extensionPoints": [
+    "turbo.pluginLoaderProvider"
+  ],
+  "services": [
+    "loader.js"
+  ]
 }

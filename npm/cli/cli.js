@@ -26,7 +26,7 @@ const path = require("path");
 const https = require("https");
 
 /** 本 NPM 包的版本（与仓库版本一致）；`--npm-version` 输出它。 */
-const PKG_VERSION = "0.2.0.6";
+const PKG_VERSION = "0.2.0.7";
 
 /**
  * 要拉取的运行时版本。默认与本包同版本，可用 TURBODL_VERSION 覆盖

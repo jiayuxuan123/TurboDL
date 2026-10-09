@@ -105,7 +105,7 @@ client.shutdown()
 - `turbodl-cli`：命令列範例，示範 SDK 用法。
 - `turbo-plugin-runtime`：**可選**插件執行時期核心（生命週期／disposer／事件匯流排／服務註冊／擴充點／版本握手／診斷）。core 不依賴它；不引入時 core 照常運作。
 - `turbo-plugin-bootstrap`：**可選**引導模組，一鍵裝配基礎插件（Kotlin 載入器 + HTTP 後端）；非強制依賴。
-- `turbo-plugin-hls`：**可選** HLS VOD 協定轉接插件 —— 解析 master/media M3U8 播放清單、並行下載分段（分段級重試）、AES-128 解密、支援 EXT-X-BYTERANGE，並按序回傳分片交由引擎合併。以路由式 `DownloadBackend` 自我註冊；不支援的構造（直播串流、DRM/SAMPLE-AES、fMP4 EXT-X-MAP、discontinuity）會顯式失敗，而非產出損壞檔案。
+- `turbo-plugin-hls`：**可選** HLS VOD 協定轉接插件 —— 解析 master/media M3U8 播放清單、並行下載分段（分段級重試）、AES-128 解密、支援 EXT-X-BYTERANGE，並按序回傳分片交由引擎合併。以路由式 `DownloadBackend` 自我註冊；不支援的構造（直播串流、DRM/SAMPLE-AES、fMP4 EXT-X-MAP、discontinuity）會顯式失敗，而非產出損壞檔案。此外宣告支援 `hls` 協定（清單 `protocols` 欄位 + 載入期的 `ProtocolClaim`；宣告不授予權限、也不參與路由，`.m3u8` 仍由 `DownloadBackend` 謂詞負責）。
 - `turbo-plugin-js`：**可選**的 JavaScript 插件載入器 —— 載入以 JavaScript 撰寫的 TurboDL 插件。內嵌 QuickJS（每個指令碼一個 runtime、一個 context），為指令碼提供一套穩定的 `host`/`plugin` ABI（http、crypto、log、storage、env、time、timers 等粗粒度能力）。它把 JS 端的連結解析器與任務鉤子橋接到一般擴充點上，卸載時依 `ACTIVE → STOPPING → DRAINING → DISPOSED` 四階段進行，絕不在指令碼仍在執行時關閉 runtime。只有這個模組會引入 JS 引擎；不引入它，QuickJS 就不會進入你的 classpath。
 - `demo`：三個可執行範例 —— Kotlin 原生插件、bootstrap 使用、Shim 轉接器範本。執行：`./gradlew :demo:run --args="1"`（或 `2`、`3`、`all`）。
 

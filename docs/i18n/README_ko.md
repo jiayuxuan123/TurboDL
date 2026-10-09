@@ -105,7 +105,7 @@ client.shutdown()
 - `turbodl-cli`: SDK 사용법을 보여주는 커맨드 라인 예제.
 - `turbo-plugin-runtime`: **선택적** 플러그인 런타임 커널(생명주기 / disposer / 이벤트 버스 / 서비스 레지스트리 / 확장 포인트 / 버전 핸드셰이크 / 진단). core는 이것에 의존하지 않으며, 포함하지 않아도 core는 평소대로 동작합니다.
 - `turbo-plugin-bootstrap`: **선택적** 부트스트랩 모듈로 기본 플러그인(Kotlin 로더 + HTTP 백엔드)을 원클릭으로 배선; 필수 의존성이 아닙니다.
-- `turbo-plugin-hls`: **선택적** HLS VOD 프로토콜 어댑터 플러그인 — master/media M3U8 재생목록을 해석하고, 세그먼트를 동시에 다운로드하며(세그먼트별 재시도), AES-128을 복호화하고, EXT-X-BYTERANGE를 준수하며, 병합을 위해 정렬된 조각을 엔진에 반환합니다. 라우팅되는 `DownloadBackend`로 스스로를 등록합니다; 지원하지 않는 구조(라이브 스트림, DRM/SAMPLE-AES, fMP4 EXT-X-MAP, discontinuity)는 손상된 출력을 만드는 대신 명시적으로 실패합니다.
+- `turbo-plugin-hls`: **선택적** HLS VOD 프로토콜 어댑터 플러그인 — master/media M3U8 재생목록을 해석하고, 세그먼트를 동시에 다운로드하며(세그먼트별 재시도), AES-128을 복호화하고, EXT-X-BYTERANGE를 준수하며, 병합을 위해 정렬된 조각을 엔진에 반환합니다. 라우팅되는 `DownloadBackend`로 스스로를 등록합니다; 지원하지 않는 구조(라이브 스트림, DRM/SAMPLE-AES, fMP4 EXT-X-MAP, discontinuity)는 손상된 출력을 만드는 대신 명시적으로 실패합니다. 또한 `hls` 프로토콜을 선언합니다(매니페스트 `protocols` 필드 + 로드 시점의 `ProtocolClaim`; 선언은 권한을 부여하지 않고 라우팅에도 관여하지 않습니다 — `.m3u8`은 여전히 `DownloadBackend` 술어가 담당합니다).
 - `turbo-plugin-js`: **선택적** JavaScript 플러그인 로더 — JavaScript로 작성된 TurboDL 플러그인을 로드합니다. QuickJS를 내장하고(스크립트마다 runtime 하나와 context 하나), 스크립트에 안정적인 `host`/`plugin` ABI를 제공합니다(http, crypto, log, storage, env, time, timers 등 굵직한 기능). JS 쪽 링크 파서와 작업 훅을 일반 확장 포인트에 연결하며, 언로드할 때는 `ACTIVE → STOPPING → DRAINING → DISPOSED` 네 단계를 거쳐 스크립트가 아직 실행 중일 때 runtime을 절대 닫지 않습니다. 이 모듈만 JS 엔진을 끌어옵니다. 포함하지 않으면 QuickJS는 classpath에 들어오지 않습니다.
 - `demo`: 실행 가능한 세 가지 예제 — Kotlin 네이티브 플러그인, bootstrap 사용, Shim 어댑터 템플릿. `./gradlew :demo:run --args="1"`(또는 `2`, `3`, `all`)로 실행.
 

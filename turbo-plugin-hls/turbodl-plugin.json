@@ -7,25 +7,31 @@
   "author": "TurboDL",
   "homepage": "https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-hls",
   "license": "MIT",
-
-  "category": "turbodl-backend",
-  "capabilities": ["turbodl-hls", "turbodl-m3u8"],
-
+  "category": "turbodl-protocol",
+  "capabilities": [
+    "dev.turbodl.cap.hls",
+    "dev.turbodl.cap.m3u8"
+  ],
+  "protocols": [
+    "hls"
+  ],
   "turbodl": {
     "apiMajor": 1,
     "requiredApiVersion": "1.0.0"
   },
-
   "entry": {
     "language": "kotlin",
     "pluginClass": "dev.turbodl.plugin.hls.HlsPlugin"
   },
-
   "artifact": {
     "type": "maven",
-    "coordinates": "dev.turbodl:turbo-plugin-hls:0.2.0.6"
+    "coordinates": "dev.turbodl:turbo-plugin-hls:0.2.0.7"
   },
-
-  "extensionPoints": ["turbo.downloadBackend"],
-  "services": ["backend.hls"]
+  "extensionPoints": [
+    "turbo.downloadBackend",
+    "turbo.protocolHandler"
+  ],
+  "services": [
+    "backend.hls"
+  ]
 }
