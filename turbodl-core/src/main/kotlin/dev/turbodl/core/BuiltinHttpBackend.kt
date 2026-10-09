@@ -129,7 +129,6 @@ internal class BuiltinHttpBackend(
             // 因此 `changed` 现在**要求 `now` 本身是完整可用的令牌**：
             // 至少要含 `len=` 或 `etag=`/`lm=` 之一；只有 `weak` 或空串一律不算"变了"。
             val nowUsable = now.contains("len=") || now.contains("etag=") || now.contains("lm=")
-            val changed = prev.isNotEmpty() && prev != now && nowUsable
             val weakButResuming = probe.isWeak && !context.config.trustWeakValidator
             val hasOldParts = hasResumableParts
 
@@ -145,13 +144,34 @@ internal class BuiltinHttpBackend(
             //   UNVERIFIABLE → 取不到（状态码异常/请求失败/无可读分片）→ **保留**
             // 旧写法把后两者混为一谈，于是"一次指纹请求没成功"就丢掉用户已下载的 GB 级数据 ——
             // 用户实报的"暂停还是从头下"极可能就是这一支。
-            val decision = if (weakButResuming && hasOldParts && !changed && !probeDegraded) {
+            // 【⛔ 2026-10-09 用户实报「点暂停有时进度归零重下、有时又正常」——就是这一支】
+            //
+            // 旧判据是 `changed = prev != now && nowUsable`：只要令牌**不完全相同**就认定"文件变了"→ 清空分片
+            // 从头下。但夸克这类直链挂在多节点 CDN 后面，**每次续传可能落到不同节点、拿到不同的
+            // ETag/Last-Modified**，长度却完全一致。于是同一份文件被反复判定为"变了"：
+            // 续传时命中就正常，没命中就从头下 —— 表现就是"时好时坏、进度条回到最初"。
+            //
+            // 正确的三层判据（按证据强度）：
+            //   · **长度变了** → 确证换了文件 → 丢弃（唯一可以直接丢弃的证据）；
+            //   · 长度一致但令牌不同 → 不足以定性 → 交**内容指纹**逐字节裁决（真正的安全底线）；
+            //   · 弱校验器 → 同样交内容指纹；
+            //   · 探测拿不到有效令牌（probeDegraded）→ 无法取证 → **保留**。
+            val lenOf = fun(s: String): String? =
+                Regex("""(?:^|\|)len=(\d+)""").find(s)?.groupValues?.get(1)
+            val prevLen = lenOf(prev)
+            val nowLen = lenOf(now)
+            val lenChanged = prevLen != null && nowLen != null && prevLen != nowLen
+            val validatorDiffers = prev.isNotEmpty() && prev != now && nowUsable && !lenChanged
+
+            val needFingerprint = hasOldParts && !probeDegraded && !lenChanged &&
+                (weakButResuming || validatorDiffers)
+            val decision = if (needFingerprint) {
                 verifyResumeFingerprint(chunkDir, effectiveUrl, request.headers)
             } else {
                 ResumeDecision.NOT_ATTEMPTED
             }
 
-            val discard = changed || (weakButResuming && hasOldParts && decision == ResumeDecision.MISMATCH)
+            val discard = lenChanged || decision == ResumeDecision.MISMATCH
             if (discard) {
                 // 丢弃过期/无法安全校验的分片，从头下（不报错，对用户透明）。
                 // 排除 .validator 自身，避免"删了又写"的脆弱时序。
@@ -160,7 +180,8 @@ internal class BuiltinHttpBackend(
                 }
                 chunkDir.mkdirs()
             }
-            resumeNote = "parts=$hasOldParts weak=$weakButResuming changed=$changed " +
+            resumeNote = "parts=$hasOldParts weak=$weakButResuming lenChanged=$lenChanged " +
+                "validDiff=$validatorDiffers " +
                 "print=$decision discard=$discard" +
                 if (probeDegraded) " probeDegraded=true(探测失效,已保留旧分片)" else ""
 
@@ -179,7 +200,7 @@ internal class BuiltinHttpBackend(
 
         // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
         // - probeMs   ：探测耗时（大=探测慢；≈0 跳过探测而首字节慢=慢在首连接）
-        // - resumeNote：续传判定结果（parts/weak/changed/print/discard），用于定位"断点续传为什么不生效"
+        // - resumeNote：续传判定结果（parts/weak/lenChanged/validDiff/print/discard），用于定位"断点续传为什么不生效"
         runCatching {
             context.reportMetadata(
                 suggestedFileName = probe.suggestedFileName,
