@@ -28,7 +28,17 @@
 </div>
 </header>
 <main id="main">
-<section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.0.7</span></h3><p class="small">2026-10-09</p><p class="muted">TurboDL 0.2.0.7：插件协议声明 + 脚本预检 + 续传误判修正
+<section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.0.8</span></h3><p class="small">2026-10-10</p><p class="muted">TurboDL 0.2.0.8：读缓冲改为按并发摊薄
+修的是内存
+真机上出现过 `OutOfMemoryError`：堆 100% 占满（256MiB），崩在 Okio 的 Watchdog 线程上。
+看栈像是网络问题——它只是想关掉一个超时的 socket——但实际是**读缓冲把堆吃光了**。
+旧实现是「每个在飞连接固定分配 1MB」。这个数看起来不大，乘上连接数就大了，而连接数上限是 256：
+报错里的 `target footprint 268435456` 正是 256MiB，一字节不差。缓冲都是**活对象**
+（正被下载协程引用），GC 一个都回收不掉，所以堆是&quot;占满&quot;而不是&quot;垃圾太多&quot;。
+触发条件很普通：线程数调高 + 下载一个大文件。
+改法
+新增 `ioBufferTotalBudgetBytes`（默认 32MB）作为**进程级**预算，单连接缓冲按并发摊开：
+| 场景 |…</p><p class="small">17 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.8">发布页</a></p></div><div class="card"><h3><span class="mono">v0.2.0.7</span></h3><p class="small">2026-10-09</p><p class="muted">TurboDL 0.2.0.7：插件协议声明 + 脚本预检 + 续传误判修正
 一个插件可以声明多个协议
 插件在清单里声明自己支持哪些协议，引擎在加载时建立「协议 → 插件」索引：
 此前是一个协议一个插件。分成太多插件的问题不在写法上，而在运行上：插件数量一多，加载与切换的开销、以及插件之间的选择冲突都会跟着涨。建立索引之后，按协议找插件是查表，不是每次遍历。
@@ -127,20 +137,11 @@ Android 抛出 `NetworkOnMainThreadException`。该异常会被探活的
 可能命中不同节点或被拒，表现为&quot;显示下载中但线程/字节都不动，最后 Whole-file download failed&quot;。
 修复：probe 返回 resolvedUrl（OkHttp 跟随全部 3xx 后的最终地址），分片/整文件/回退全部用它。
 测试
-新增 RedirectResolveTest（断言分片走解析后 URL、原始端点零命中）；全量 23 项测试通过。</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc5">发布页</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc4</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-28</p><p class="muted">修复：大小校验失败（实际字节比声明少约 2~3 倍）
-根因：请求未声明编码时 OkHttp 自动加 Accept-Encoding: gzip 并透明解压，落盘字节是解压后大小，
-与 Content-Range/Content-Length 声明的原始字节数不一致，触发字节级大小校验失败。
-修复：探测/分片/整文件请求全部强制 Accept-Encoding: identity（且置于自定义头之后不被覆盖）。
-修复：设 64 线程只跑到约 16、速度暴跌
-rc3 把 maxConnectionsPerHost 默认设为 16 是错误取舍——单个下载的所有分片本就同一 host，
-等于把每个下载直接限死到 16 并发。rc4 改回默认 0（不限）。个别 CDN 的降级问题应由调用方针对
-具体 host 单独设置，不做全局限制。
-JitPack 支持
-新增 jitpack.yml，可直接用坐标…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc4">发布页</a></p></div></div></section><section><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
+新增 RedirectResolveTest（断言分片走解析后 URL、原始端点零命中）；全量 23 项测试通过。</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc5">发布页</a></p></div></div></section><section><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
 <footer class="site-foot">
 <div class="wrap">
 <div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">下载</a></li><li><a href="../plugins/index.html">插件</a></li><li><a href="index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../docs/readme/index.html">项目说明</a></li><li><a href="../docs/plugins/index.html">插件开发指南</a></li><li><a href="../docs/convention/index.html">开发规范</a></li><li><a href="../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../docs/manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../legal/third-party/index.html">第三方组件</a></li><li><a href="../legal/privacy/index.html">隐私说明</a></li><li><a href="../legal/terms/index.html">使用条款</a></li><li><a href="../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
-<div class="foot-note"><p>TurboDL v0.2.0.7 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
+<div class="foot-note"><p>TurboDL v0.2.0.8 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
 </div>
 </footer>
 <script src="../../assets/site.js" defer></script>
