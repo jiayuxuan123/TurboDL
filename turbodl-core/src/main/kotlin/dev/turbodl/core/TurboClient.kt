@@ -90,6 +90,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         { segmentClient },
         { streamClientOrCreate() },
         { config.ioBufferSize },
+        { config.bufferedSegmentWrite },
     )
     private val speedLimiter = SpeedLimiter { config.globalSpeedLimitBytesPerSec }
 

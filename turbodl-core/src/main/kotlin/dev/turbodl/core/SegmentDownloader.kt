@@ -62,6 +62,14 @@ internal class SegmentDownloader(
     private val streamClientProvider: (() -> OkHttpClient)? = null,
     /** IO 缓冲区大小（字节）；默认 1MB。过小会在高吞吐时产生大量回调开销。 */
     private val bufferSizeProvider: () -> Int = { DEFAULT_BUFFER },
+    /**
+     * 分片写入是否走缓冲流（P12 开关）。
+     *
+     * 与 [bufferSizeProvider] 同样用 provider 而不是把整个 config 传进来：
+     * 本类只需要这一个布尔量，注入 config 会扩大它与配置结构的耦合面。
+     * 默认 false = 直写（实测结论见 [TurboConfig.bufferedSegmentWrite]）。
+     */
+    private val bufferedWriteProvider: () -> Boolean = { false },
 ) {
 
     private val client get() = clientProvider()
@@ -122,6 +130,15 @@ internal class SegmentDownloader(
 
         /** 非退化区间（从 0 到结尾）：用于复探服务器是否**真的**支持 Range。 */
         private const val RANGE_FROM_START = "bytes=0-"
+
+        /**
+         * 开启 [TurboConfig.bufferedSegmentWrite] 时的写缓冲大小（64KB）。
+         *
+         * 与读缓冲（按并发摊薄，最大 1MB）**不同量级是有意的**：写缓冲只是减少
+         * `write` 系统调用次数，64KB 已远超收益拐点；再大只会推迟落盘、放大中断时的损失。
+         * 而且每个在飞分片都会占一份，所以它同样受内存预算的约束。
+         */
+        private const val WRITE_BUFFER_BYTES = 64 * 1024
     }
 
     /**
@@ -572,6 +589,8 @@ internal class SegmentDownloader(
                         val written = writeSlice(
                             body.byteStream(), partFile, existing, expected - existing, onBytes,
                             bufferSize,
+                            // P12 开关：默认直写（见 TurboConfig.bufferedSegmentWrite 的实测结论）。
+                            bufferedWriteProvider(),
                         )
                         if (existing + written != expected) SegmentResult.FAILED else SegmentResult.OK
                     }
@@ -710,6 +729,14 @@ internal class SegmentDownloader(
         onBytes: suspend (Long) -> Unit,
         /** 按并发摊薄后的缓冲大小；null = 用 provider（见 [downloadSegment] 的说明）。 */
         bufferSize: Int? = null,
+        /**
+         * 写入是否走 [BufferedOutputStream]（P12 评估项，默认 false）。
+         *
+         * 【为什么默认关闭】见 [TurboConfig.bufferedSegmentWrite] 的记录：实测在本机回环
+         * 128 连接档没有可复现的收益，而它会把"已写入长度"的含义从"已落盘"变成"已交给 OS 缓冲"，
+         * 与断点续传的语义耦合。开关留着是为了能在更快的链路上复测。
+         */
+        bufferedWrite: Boolean = false,
     ): Long {
         var written = 0L
         RandomAccessFile(partFile, "rw").use { raf ->
@@ -717,15 +744,34 @@ internal class SegmentDownloader(
             val buf = ByteArray(
                 (bufferSize ?: bufferSizeProvider()).coerceAtLeast(TurboConfig.MIN_IO_BUFFER_BYTES)
             )
-            while (true) {
-                val n = input.read(buf)
-                if (n <= 0) break
-                val allow = min(n.toLong(), expected - written)
-                if (allow <= 0) break
-                raf.write(buf, 0, allow.toInt())
-                written += allow
-                onBytes(allow)
-                if (written >= expected) break
+            if (!bufferedWrite) {
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    val allow = min(n.toLong(), expected - written)
+                    if (allow <= 0) break
+                    raf.write(buf, 0, allow.toInt())
+                    written += allow
+                    onBytes(allow)
+                    if (written >= expected) break
+                }
+                return written
+            }
+            // 【flush 的时机就是 onBytes 的时机】先 flush 再回调，保证回调发生时
+            // 字节确实已经落到文件里 —— 断点续传读的是文件长度，若缓冲未刷就回调，
+            // 中途被杀会留下"进度说下了但文件没有"的缺口。
+            java.io.BufferedOutputStream(java.io.FileOutputStream(raf.fd), WRITE_BUFFER_BYTES).use { out ->
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    val allow = min(n.toLong(), expected - written)
+                    if (allow <= 0) break
+                    out.write(buf, 0, allow.toInt())
+                    out.flush()
+                    written += allow
+                    onBytes(allow)
+                    if (written >= expected) break
+                }
             }
         }
         return written

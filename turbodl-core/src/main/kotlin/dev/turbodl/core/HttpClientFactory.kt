@@ -42,20 +42,59 @@ internal object HttpClientFactory {
             else -> ProtocolPreference.H1_ONLY
         }
 
+    /**
+     * **分片链路**实际允许的协议列表（按优先级）。
+     *
+     * 提成公开函数是为了让"策略 → 实际协议"变成可断言的确定性行为：
+     * 此前只有 policy 枚举的映射被测试覆盖，协议列表是在 [build] 里内联算的，
+     * 于是"策略改对了但协议没跟着变"这类缺陷测不出来（P14 期间整理）。
+     *
+     * 默认（AUTO）下只有 h1：多分片并发要靠每个请求各自建连、各自拥有独立拥塞窗口
+     * （`SlicedConnectionCountTest` 实测 16 请求 = 16 条连接）。
+     */
+    internal fun segmentProtocolsFor(config: TurboConfig): List<Protocol> =
+        if (allowH2(config, ProtocolPreference.H1_ONLY)) {
+            listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+        } else {
+            listOf(Protocol.HTTP_1_1)
+        }
+
+    /**
+     * **单流/探测链路**实际允许的协议列表（按优先级）。
+     *
+     * 单流没有"多连接被抹平"的问题，因此 AUTO 下允许协商 h2 ——
+     * 既兼容只支持 h2 的服务器，也不会因此损失并发收益。
+     */
+    internal fun streamProtocolsFor(config: TurboConfig): List<Protocol> =
+        if (allowH2(config, ProtocolPreference.ALLOW_H2)) {
+            listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+        } else {
+            listOf(Protocol.HTTP_1_1)
+        }
+
+    /**
+     * 实际协议：由策略 + 链路偏好共同决定。
+     *  - FORCE_HTTP1：永远 h1；
+     *  - FORCE_HTTP2：允许 h2；
+     *  - AUTO：分片链路（H1_ONLY）走 h1，探测/单流链路（ALLOW_H2）允许 h2。
+     */
+    private fun allowH2(config: TurboConfig, preference: ProtocolPreference): Boolean =
+        when (config.effectiveHttpVersionPolicy) {
+            HttpVersionPolicy.FORCE_HTTP1 -> false
+            HttpVersionPolicy.FORCE_HTTP2 -> true
+            HttpVersionPolicy.AUTO -> preference == ProtocolPreference.ALLOW_H2
+        }
+
     fun build(config: TurboConfig, preference: ProtocolPreference): OkHttpClient {
         val dispatcher = Dispatcher().apply {
             // 满并发不被 OkHttp 默认的 per-host=5 锁死
             maxRequests = 1024
             maxRequestsPerHost = 1024
         }
-        // 实际协议：由策略 + 偏好共同决定。
-        //  - FORCE_HTTP1：永远 H1；
-        //  - FORCE_HTTP2：允许 h2；
-        //  - AUTO：分片链路（H1_ONLY）走 H1，探测/单流链路（ALLOW_H2）允许 h2。
-        val allowH2 = when (config.effectiveHttpVersionPolicy) {
-            HttpVersionPolicy.FORCE_HTTP1 -> false
-            HttpVersionPolicy.FORCE_HTTP2 -> true
-            HttpVersionPolicy.AUTO -> preference == ProtocolPreference.ALLOW_H2
+        val protocols = if (allowH2(config, preference)) {
+            listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+        } else {
+            listOf(Protocol.HTTP_1_1)
         }
         val builder = OkHttpClient.Builder()
             .dispatcher(dispatcher)
@@ -75,12 +114,8 @@ internal object HttpClientFactory {
                     timeUnit = TimeUnit.SECONDS,
                 )
             )
-            // 协议：多分片并发默认只用 HTTP/1.1（HTTP/2 多路复用会把所有分片挤到一条 TCP 连接，
-            // 共享单个拥塞/流控窗口 → 多线程得不到加速）；单流/探测链路可允许 h2。
-            .protocols(
-                if (allowH2) listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
-                else listOf(Protocol.HTTP_1_1)
-            )
+            // 协议由 [allowH2]（策略 × 链路偏好）决定，见 segment/streamProtocolsFor 的说明。
+            .protocols(protocols)
             .connectTimeout(config.connectTimeoutMs, TimeUnit.MILLISECONDS)
             .readTimeout(config.readTimeoutMs, TimeUnit.MILLISECONDS)
             .writeTimeout(config.readTimeoutMs, TimeUnit.MILLISECONDS)

@@ -129,6 +129,37 @@ data class TurboConfig(
     val overlapMerge: Boolean = false,
 
     /**
+     * 分片写入是否走缓冲流（P12 评估项，**默认 false**）。
+     *
+     * ## 为什么不加缓冲（实测结论，不是没做）
+     *
+     * `SegmentDownloader.writeSlice` 原本（以及默认）用裸 `RandomAccessFile` 直写。
+     * "裸直写会有系统调用开销"听起来像优化点，所以做了 A/B 实测
+     * （`SegmentWriteBufferTest`，16MB / 128 连接 / 64KB 分片 = 256 片、交错 3 轮取中位数）：
+     *
+     * | 写法 | 中位数 | 吞吐 | 样本 |
+     * |---|---|---|---|
+     * | 直写 | 2576ms | 6.2 MB/s | 2391 / 2576 / 2906 |
+     * | 缓冲写（64KB + 每块 flush） | 2584ms | 6.2 MB/s | 2419 / 2584 / 2700 |
+     *
+     * **差异 0.3%，落在噪声范围内** —— 没有可复现的收益。
+     *
+     * 【为什么这里学不到东西】回环的写路径几乎不阻塞（页缓存），既没有磁盘寻道也没有真实
+     * IO 等待，因此"减少 write 调用次数"省不出时间；而真实瓶颈在磁盘时，缓冲的收益又取决于
+     * 文件系统与存储介质，不是引擎能一概而论的。
+     *
+     * 【代价却是确定的】缓冲会把"已写入长度"的含义从"已落盘"变成"已交给 OS 缓冲"。
+     * 断点续传靠文件长度判断下了多少（见 `SegmentScheduler.verifyCoverage`），
+     * 所以开启后必须"每次回调前 flush" —— 那就等于每块一次 flush，把缓冲的意义抵消掉大半
+     * （上表的缓冲写就是这么实现的）。要真正做到"批量落盘 + 精确续传"，
+     * 得给分片加"已写入区间"的显式记录，那是 [overlapMerge] 同级的复杂度。
+     *
+     * 结论：**保持直写**。本开关留作"我知道自己在干什么"时的复测入口 ——
+     * 换到更快的链路或真实磁盘压力下，结论可能不同，届时先用 `SegmentWriteBufferTest` 对比再改默认值。
+     */
+    val bufferedSegmentWrite: Boolean = false,
+
+    /**
      * 分段最小尺寸（字节，默认 64KB）—— 块大小的**下限**。
      *
      * 这个值刻意保持较小：本引擎用「细粒度预分块 + 工作窃取」消除长尾，
@@ -246,11 +277,33 @@ data class TurboConfig(
     /**
      * 强制使用 HTTP/1.1（默认 true，专为多线程下载优化）。
      *
-     * 原因：HTTP/2 会把所有并发请求**多路复用到同一条 TCP 连接**上，
-     * 共享单个拥塞窗口与流控窗口——即使开 64/256 个分片，吞吐量仍等同单连接，
-     * 这是“开了很多线程却只跑出单线程速度”的典型原因（GitHub / 大多数 CDN 均启用 HTTP/2）。
-     * HTTP/1.1 下每个并发请求各自建立 TCP 连接，各自拥有独立拥塞窗口，
-     * 才能真正获得多连接加速（aria2 / IDM / XDM 同策略）。
+     * ## 机制前提（已验证）
+     *
+     * HTTP/2 会把并发请求**多路复用**到少数 TCP 连接上，共享拥塞/流控窗口。
+     * 实测（`HttpVersionComparisonTest`，GitHub Release 资产 / 19MB / 16 并发 Range）：
+     * **h1 开了 32 条连接，h2 只开 2 条** —— 塌缩确实发生。
+     * 而 h1 那一侧每并发请求各占一条连接（`SlicedConnectionCountTest` 实测 16 请求 = 16 条）。
+     *
+     * ## 但"h2 会更慢"这一条**不成立**（实测订正）
+     *
+     * 同一环境的吞吐：h2 **6.79 MB/s** vs h1 **2.84 MB/s** —— **h2 更快**，不是更慢。
+     * 原因是那次测量里真正的变量不是协议而是**连接数**：单连接基线就有 **6.16 MB/s**，
+     * 而 32 条 h1 连接反而只有 2.84 MB/s —— 那个 CDN 在**惩罚高并发**（每连接/聚合限速），
+     * 多开连接只是白付握手与限速代价。旧注释把"多连接没用"归因给 h2 的多路复用，是**归因错了**。
+     *
+     * ## 为什么默认值仍然保持 true
+     *
+     * 不是因为"h2 更慢"，而是因为**这个结论不能外推**：
+     *  - 上述差异来自单个 CDN 在特定网络下的行为，换一个 CDN 结论可能相反；
+     *  - h1 的**每连接独立拥塞窗口**在真实丢包链路上仍有价值（这正是 aria2/IDM 用 h1 的理由），
+     *    而回环与本地无丢包环境测不出这一项；
+     *  - 改变默认值需要**多个 CDN、带丢包的链路**上的对照证据，目前没有。
+     *
+     * 所以：保持 h1 默认（保守），但**不要再引用"h2 必然更慢"当作理由** —— 那是错的。
+     * 真正的自适应手段是 [adaptiveConcurrency]（按实测吞吐收敛并发），它对本问题有效，
+     * 且不依赖对协议的猜测。
+     *
+     * 复测方法：`_audit\_run_h2ab.bat`（会消耗约 38MB 真实流量）。
      *
      * 注意：当 [httpVersionPolicy] 为 AUTO 时，本字段仅影响“分片并发”链路（仍走 HTTP/1.1），
      * 而“整文件单流回退”链路允许协商 HTTP/2（单流场景 h2 未必更差且兼容性更好）。
@@ -504,12 +557,13 @@ data class TurboConfig(
      * 这是有意的取舍 —— 宁愿在荒谬配置下稍微超一点，也不让缓冲小到只剩 syscall 开销。
      * 而在任何**可达的**配置下（App 上限 5 任务 × 256 连接）总占用都稳定在预算内。
      */
-    fun effectiveIoBufferSize(connections: Int): Int {
-        val langs = connections.coerceAtLeast(1).toLong() *
-            maxConcurrentTasks.coerceAtLeast(1).toLong()
-        val shared = (ioBufferTotalBudgetBytes / langs).coerceAtMost(Int.MAX_VALUE.toLong())
-        return shared.toInt().coerceIn(MIN_IO_BUFFER_BYTES, ioBufferSize)
-    }
+    fun effectiveIoBufferSize(connections: Int): Int =
+        budgetedIoBufferSize(
+            totalBudgetBytes = ioBufferTotalBudgetBytes,
+            perConnectionCapBytes = ioBufferSize,
+            connections = connections,
+            concurrentTasks = maxConcurrentTasks,
+        )
 
     /**
      * 解析实际生效的 HTTP 版本策略（兼容旧的 [forceHttp1] 字段）。
@@ -529,6 +583,43 @@ data class TurboConfig(
          * [effectiveIoBufferSize] 的摊薄结果触底时取本值。
          */
         const val MIN_IO_BUFFER_BYTES = 8 * 1024
+
+        /**
+         * **预算摊薄的唯一实现**：按「最坏情况的连接总数」把总预算摊到单连接，
+         * 并夹在 [MIN_IO_BUFFER_BYTES, perConnectionCapBytes] 之间。
+         *
+         * ## 为什么提成静态函数而不是各自算
+         *
+         * 这段算法原先在**两个仓库里各写了一份**：引擎的 `TurboConfig.effectiveIoBufferSize`
+         * 与 App 兜底引擎的 `ChunkDownloader.ioBufferSizeFor`（0.2.0.8 修 OOM 时留下的）。
+         * 两份实现的**上下限参数不同**（引擎 1MB / App 256KB），所以不能简单共用一份配置，
+         * 但**摊薄公式必须只有一个** —— 否则改了一处另一处不会跟着改，
+         * 而这类不变量（"总占用 ≤ 预算"）出问题时是 OOM，不是可忽略的小偏差。
+         *
+         * App 侧现在调用本函数并只传自己的上限值，见 `ChunkDownloader.ioBufferSizeFor`。
+         *
+         * ## 分母为什么含 [concurrentTasks]
+         *
+         * 预算是**整个进程**的：真实连接数 = 并发任务数 × 每任务连接数。
+         * 只按单任务摊，多任务并行时仍会突破（5 任务 × 256 连接 = 1280 条）。
+         *
+         * @param totalBudgetBytes 全部在飞连接的总预算
+         * @param perConnectionCapBytes 单连接上限（低并发时就是这个值）
+         * @param connections 单任务的连接数；<=0 视为 1
+         * @param concurrentTasks 并发任务数；<=0 视为 1
+         */
+        fun budgetedIoBufferSize(
+            totalBudgetBytes: Int,
+            perConnectionCapBytes: Int,
+            connections: Int,
+            concurrentTasks: Int,
+        ): Int {
+            val cap = perConnectionCapBytes.coerceAtLeast(MIN_IO_BUFFER_BYTES)
+            val lanes = connections.coerceAtLeast(1).toLong() *
+                concurrentTasks.coerceAtLeast(1).toLong()
+            val shared = (totalBudgetBytes.toLong() / lanes).coerceAtMost(Int.MAX_VALUE.toLong())
+            return shared.toInt().coerceIn(MIN_IO_BUFFER_BYTES, cap)
+        }
     }
 }
 

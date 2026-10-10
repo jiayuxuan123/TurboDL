@@ -151,4 +151,53 @@ class IoBufferBudgetTest {
             TurboConfig(ioBufferSize = 1024 * 1024, ioBufferTotalBudgetBytes = 512 * 1024)
         }
     }
+
+    /**
+     * P13：摊薄算法是**唯一实现**，两个调用方只传各自的单连接上限。
+     *
+     * 背景：这段算法原先在引擎与 App 兜底引擎里各写了一份（0.2.0.8 修 OOM 时留下），
+     * 逐字相同、只有上限不同（引擎 1MB / App 256KB）。收敛后两面共用
+     * [TurboConfig.budgetedIoBufferSize]，本测试钉住"同一算法、不同上限"都给出正确结果 ——
+     * 否则将来有人只改一处，另一次调用会静默走样（这类不变量出问题就是 OOM）。
+     */
+    @Test
+    fun `shared budget helper honours both per-connection caps`() {
+        val budget = 32 * 1024 * 1024
+
+        // 引擎口径：上限 1MB。低并发触上限；高并发取摊薄值。
+        assertEquals(
+            1024 * 1024,
+            TurboConfig.budgetedIoBufferSize(budget, 1024 * 1024, connections = 16, concurrentTasks = 1),
+            "低并发时应取引擎的上限 1MB",
+        )
+        assertEquals(
+            budget / (256 * 1),
+            TurboConfig.budgetedIoBufferSize(budget, 1024 * 1024, connections = 256, concurrentTasks = 1),
+            "256 连接时取摊薄值",
+        )
+
+        // App 兜底引擎口径：上限 256KB，同一个连接数下上限更低。
+        assertEquals(
+            256 * 1024,
+            TurboConfig.budgetedIoBufferSize(budget, 256 * 1024, connections = 16, concurrentTasks = 1),
+            "低并发时应取 App 引擎的上限 256KB",
+        )
+        assertEquals(
+            TurboConfig.budgetedIoBufferSize(budget, 1024 * 1024, connections = 256, concurrentTasks = 5),
+            TurboConfig.budgetedIoBufferSize(budget, 256 * 1024, connections = 256, concurrentTasks = 5),
+            "高并发时摊薄值低于两个上限，因此两个口径的结果必须相同",
+        )
+
+        // 下限保底：荒谬配置下不低于 8KB（ByteArray(0) 会让读循环空转）。
+        assertEquals(
+            TurboConfig.MIN_IO_BUFFER_BYTES,
+            TurboConfig.budgetedIoBufferSize(budget, 1024 * 1024, connections = 65536, concurrentTasks = 64),
+            "摊薄到下限时应保底 8KB，不能返回 0",
+        )
+        // 非法入参按 1 处理，不除零。
+        assertEquals(
+            1024 * 1024,
+            TurboConfig.budgetedIoBufferSize(budget, 1024 * 1024, connections = 0, concurrentTasks = 0),
+        )
+    }
 }
