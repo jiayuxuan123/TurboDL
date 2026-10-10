@@ -80,6 +80,20 @@ internal class SegmentScheduler(
         /** 被 park 的协程轮询间隔（毫秒）。 */
         const val PARK_POLL_MS = 80L
 
+        /** 吞吐自适应的窗口长度；两个稳定窗口合并后交给候选档控制器。 */
+        const val ADAPTIVE_SAMPLE_INTERVAL_MS = 750L
+
+        /**
+         * 判定窗口有效时，「在飞连接数相对目标并发」的最低比例。
+         *
+         * 【为什么不要求 100%】worker 完成一个分片到领取下一个之间有瞬时空档，越高速越频繁；
+         * 要求满载会把绝大多数窗口判废，特性就永远学不到东西。
+         * 【为什么也要有个下限】若目标 128、实际只有 10 条连接在跑（服务器握手挤住、
+         * 或请求大面积退避），此时测到的低吞吐是「并发根本没起来」，不是「128 不如 64」——
+         * 拿它当档位比较依据会把结论搞反。
+         */
+        const val ADAPTIVE_MIN_ACTIVE_RATIO = 0.5
+
         /** 队列暂空但仍有在飞分片时的等待间隔（毫秒）。 */
         const val DRAIN_WAIT_MS = 30L
 
@@ -271,8 +285,17 @@ internal class SegmentScheduler(
         /** 本窗口内是否出现过限流（429/503）。有则不爬升，把窗口让给背压生效。 */
         val windowThrottled = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        // ---------- 并发闸门：workers 个协程按 idx 与 desired 自闸门 ----------
-        /** 动态目标并发（可因背压下调、因持续成功恢复；上限 workers）。 */
+        /**
+         * 本窗口内是否出现过任何非成功结果（429/503、网络失败、授权失效、Range 被忽略）。
+         *
+         * 【为什么按窗口而不是用全局的 [consecutiveFailures]】后者是跨窗口的衰减计数，
+         * 在真实网盘 CDN（频繁 502/503）上会长期不为 0，于是**每一个**采样窗口都被判废，
+         * 特性就成了"默认开着但从不生效"。而判断"多开的连接有没有换来吞吐"只需要
+         * **本窗口**是干净的：窗口内有失败，测到的吞吐就不是这条链路的稳态能力。
+         * 背压与降并发仍由 [windowThrottled]/[consecutiveFailures] 那套负责，两者不混。
+         */
+        val windowHadFailure = java.util.concurrent.atomic.AtomicBoolean(false)
+
         // ---------- 并发闸门：workers 个协程按 idx 与 desired 自闸门 ----------
         // 慢启动：初始目标并发从较小值开始，随持续成功逐步升到 workers，
         // 避免瞬时几十连接同时握手冲击服务器/被风控，也避免小文件过度建连。
@@ -283,8 +306,22 @@ internal class SegmentScheduler(
             // 配合比例上调可快速到顶，同时避免一上来就全开冲击服务器。
             else -> min(workers, max(4, workers / 4))
         }
-        /** 动态目标并发（慢启动从 slowStartInit 升、背压时降、健康时升；上限 workers）。 */
+        /** 动态目标并发（慢启动从 slowStartInit 升、背压时降；自适应时由控制器定档）。 */
         val desired = AtomicInteger(slowStartInit)
+
+        /** 用户级总限速会人为封顶吞吐，因此该任务不启用吞吐学习。 */
+        val adaptive = if (
+            config.adaptiveConcurrency && config.globalSpeedLimitBytesPerSec <= 0
+        ) AdaptiveConcurrencyController(
+            maximumConcurrency = workers,
+            initialConcurrency = workers,
+            probeDownFirst = true,
+        ) else null
+        val throughputLock = Any()
+        var throughputWindowBytes = 0L
+        var throughputWindowStartedAt = System.nanoTime()
+        var throughputWindowConcurrency = desired.get()
+        var throughputWindowEligible = true
 
         /**
          * 学到的「服务器能接受的并发天花板」。
@@ -323,6 +360,91 @@ internal class SegmentScheduler(
         fun offer(seg: Segment) = synchronized(pendingLock) { pending.offer(seg) }
         fun queueEmpty(): Boolean = synchronized(pendingLock) { pending.isEmpty() }
         fun queueSize(): Int = synchronized(pendingLock) { pending.size }
+
+        /**
+         * 上报给 UI 的并发数。
+         *
+         * 不能直接用“瞬时在飞分片数”：worker 完成一个分片到领取下一个之间有瞬时空档，
+         * 速度越快、分片完成越频繁，这种空档占比越大，采样到的数字反而越小
+         * ——表现为“速度变快但显示的线程数下降”（用户实测反馈的现象）。
+         * 正确语义是“当前有多少连接在干活”：即目标并发，但受剩余工作量限制
+         * （收尾阶段剩不到 N 块时，确实就只有那么多连接）。
+         */
+        fun reportConns() {
+            val work = inFlight.get() + queueSize()
+            onConnections(min(desired.get(), work).coerceAtLeast(if (work > 0) 1 else 0))
+        }
+
+        /** 开始一个干净的吞吐窗口；窗口跨过并发变化时一律丢弃。 */
+        fun resetThroughputWindow(nowNanos: Long, concurrency: Int) = synchronized(throughputLock) {
+            throughputWindowBytes = 0L
+            throughputWindowStartedAt = nowNanos
+            throughputWindowConcurrency = concurrency
+            throughputWindowEligible = concurrency == desired.get()
+        }
+
+        /**
+         * 收到已写入字节时更新总吞吐窗口。不是每连接速率；每连接独立限速时，
+         * 总吞吐随连接增加而增加，控制器会保留高并发。
+         */
+        fun recordThroughputBytes(bytes: Long) {
+            if (adaptive == null || bytes <= 0) return
+            synchronized(throughputLock) {
+                if (throughputWindowConcurrency != desired.get()) throughputWindowEligible = false
+                throughputWindowBytes += bytes
+            }
+        }
+
+        /**
+         * 检查并结算候选档吞吐。资格不足时只重置窗口，不把限速/失败/收尾误判成平台期。
+         *
+         * 【资格判据为什么是这几条】
+         *  - `measuredAt == desired`：窗口跨越了并发变化 → 测到的是混合吞吐，不能用。
+         *  - 不是收尾（队列仍有活可领 或 在飞分片够多）：收尾阶段并发天然塌下去。
+         *  - 在飞连接达到目标的一半：[ADAPTIVE_MIN_ACTIVE_RATIO] 的说明。
+         *  - 窗口内无 429/503、无连续失败：那是背压的地盘，吞吐不能用来做档位判断。
+         */
+        fun observeThroughput(nowNanos: Long, queued: Int) {
+            if (adaptive == null) return
+            synchronized(throughputLock) {
+                val elapsed = nowNanos - throughputWindowStartedAt
+                if (elapsed < ADAPTIVE_SAMPLE_INTERVAL_MS * 1_000_000L) return
+                val measuredAt = throughputWindowConcurrency
+                val bytes = throughputWindowBytes
+                val inFlightNow = inFlight.get()
+                val notTail = queued > 0 || inFlightNow >= measuredAt
+                val activeEnough = activeConns.get() >= max(1, (measuredAt * ADAPTIVE_MIN_ACTIVE_RATIO).toInt())
+                val eligible = throughputWindowEligible &&
+                    measuredAt == desired.get() && notTail && activeEnough &&
+                    !windowHadFailure.get() && bytes > 0
+                val throughput = if (elapsed > 0) bytes * 1_000_000_000.0 / elapsed else 0.0
+                throughputWindowBytes = 0L
+                throughputWindowStartedAt = nowNanos
+                throughputWindowConcurrency = desired.get()
+                throughputWindowEligible = true
+                windowHadFailure.set(false)
+                if (!eligible) {
+                    // 窗口不合格（收尾/限速/失败/并发刚变）：不做任何档位判断。
+                    return
+                }
+                val decision = adaptive.observe(
+                    throughput = throughput,
+                    rampDone = desired.get() >= workers,
+                    concurrencyLimit = min(workers, ceiling.get()),
+                )
+                decision.suggestedCeiling?.let { suggested ->
+                    ceiling.updateAndGet { current -> min(current, suggested) }
+                }
+                decision.target?.let { desired.set(it.coerceIn(1, ceiling.get())) }
+                if (decision.target != null || decision.suggestedCeiling != null) {
+                    reportConns()
+                    throughputWindowBytes = 0L
+                    throughputWindowStartedAt = nowNanos
+                    throughputWindowConcurrency = desired.get()
+                    throughputWindowEligible = true
+                }
+            }
+        }
 
         /**
          * 收尾托管：把一个在飞分片的**后半段**让给新连接，自己保留前半段。
@@ -383,20 +505,6 @@ internal class SegmentScheduler(
             return true
         }
 
-        /**
-         * 上报给 UI 的并发数。
-         *
-         * 不能直接用“瞬时在飞分片数”：worker 完成一个分片到领取下一个之间有瞬时空档，
-         * 速度越快、分片完成越频繁，这种空档占比越大，采样到的数字反而越小
-         * ——表现为“速度变快但显示的线程数下降”（用户实测反馈的现象）。
-         * 正确语义是“当前有多少连接在干活”：即目标并发，但受剩余工作量限制
-         * （收尾阶段剩不到 N 块时，确实就只有那么多连接）。
-         */
-        fun reportConns() {
-            val work = inFlight.get() + queueSize()
-            onConnections(min(desired.get(), work).coerceAtLeast(if (work > 0) 1 else 0))
-        }
-
         // ---------- 卡死（stall）守护：思路参考 aria2 --lowest-speed-limit / curl --speed-limit ----------
         // OkHttp 的 readTimeout 只能管“单次 read 阻塞多久”；若 CDN 涓涓吐字节（每几十秒几字节），
         // 永远不超时，表现为“显示下载中但进度几乎不动”。因此额外监控任务级总字节：
@@ -453,8 +561,15 @@ internal class SegmentScheduler(
             val target = max(1, cur / 2)
             if (target < cur) {
                 desired.set(target)
-                // 天花板同步收紧：这次限流证明「上一个天花板」也太高了。
+                // 429/503 背压高于吞吐学习：清掉旧基线，不能让自适应立即爬回被拒档位。
                 ceiling.updateAndGet { min(it, target) }
+                adaptive?.resetTo(target)
+                synchronized(throughputLock) {
+                    throughputWindowBytes = 0L
+                    throughputWindowStartedAt = System.nanoTime()
+                    throughputWindowConcurrency = target
+                    throughputWindowEligible = false
+                }
                 reportConns()
             }
         }
@@ -474,11 +589,17 @@ internal class SegmentScheduler(
         fun rampUpIfHealthy() {
             if (desired.get() >= workers) return
             if (windowThrottled.get()) return                 // 窗口内被限流过：先稳住
+            // 【与吞吐自适应互斥】控制器正在下探/上探时，desired 必须保持它设的档位 ——
+            // 否则这里会立刻把并发推回设定值，控制器永远测不到真实的低档窗口（实测表现为特性"不生效"）。
+            if (adaptive?.isProbing() == true) return
             val cur = desired.get()
             val cap = ceiling.get()
             if (cur >= cap) {
                 // 已稳定在学到的天花板：缓步试探能否再高一点（+1）。
                 // 撞墙 → throttleDown 会把天花板重新压回来，代价只有一次 503。
+                // 但自适应开启时**不做这个试探**：那个 +1 会一点点侵蚀控制器学到的档位，
+                // 最终又爬回设定值（也就是又变慢）。回探由控制器自己负责。
+                if (adaptive != null) return
                 if (cap < workers && ceilingStableCount.incrementAndGet() >= CEILING_PROBE_AFTER) {
                     ceilingStableCount.set(0)
                     ceiling.incrementAndGet()
@@ -509,18 +630,26 @@ internal class SegmentScheduler(
          * 两者取先到者：小块场景由完成事件驱动，大块场景由时间兜底，
          * 爬升时间从此不再被分片时长绑架。
          */
-        val rampLoop = if (config.slowStart) launch(ioDispatcher) {
+        val rampLoop = launch(ioDispatcher) {
             var lastBytes = downloaded.get()
             while (isActive() && !needWholeFallback.get()) {
                 delay(RAMP_INTERVAL_MS)
+                val nowNanos = System.nanoTime()
                 val cur = downloaded.get()
                 val progressed = cur > lastBytes
                 lastBytes = cur
+                if (adaptive != null) {
+                    // 自适应开启：并发档位由吞吐控制器唯一决定，旧的比例爬升退位。
+                    observeThroughput(nowNanos, queueSize())
+                    if (progressed) windowThrottled.set(false)
+                    continue
+                }
+                if (!config.slowStart) continue
                 if (!progressed) continue        // 本窗口没进展：不涨，也不清限流标记
                 rampUpIfHealthy()
                 windowThrottled.set(false)
             }
-        } else null
+        }
 
         val ok = try {
             val jobs = List(workers) { idx ->
@@ -556,9 +685,10 @@ internal class SegmentScheduler(
                                 taskId, url, seg.start, { seg.end }, seg.file(chunkDir), headers,
                                 { bytes ->
                                     speedLimiter.awaitAllow(bytes)
-                                    val abs = min(downloaded.addAndGet(bytes), total)
-                                    if (!isActive()) return@downloadSegment
-                                    onBytes(bytes, abs)
+                            val abs = min(downloaded.addAndGet(bytes), total)
+                            recordThroughputBytes(bytes)
+                            if (!isActive()) return@downloadSegment
+                            onBytes(bytes, abs)
                                 },
                                 ifRange = ifRange,
                                 // 缓冲按**实际并发数**摊薄：本任务会同时跑 workers 个分片，
@@ -588,6 +718,7 @@ internal class SegmentScheduler(
                                     }
                                 }
                                 SegmentResult.RANGE_IGNORED -> {
+                                    windowHadFailure.set(true)
                                     // 单分片被返回整文件：容忍偶发，反复出现才判定服务器不支持 Range。
                                     offer(seg)  // 回投，可能只是该 CDN 节点抖动
                                     if (rangeIgnoredCount.incrementAndGet() >= RANGE_IGNORED_TOLERANCE) {
@@ -595,6 +726,7 @@ internal class SegmentScheduler(
                                     }
                                 }
                                 SegmentResult.AUTH_EXPIRED -> {
+                                    windowHadFailure.set(true)
                                     // 【不降并发】401/403/410 = 授权/时效信号（签名直链过期、
                                     // 反盗链拦截），**不是**"你太快了"。降并发既解决不了它，
                                     // 还会白白拖慢后续重试。
@@ -616,6 +748,7 @@ internal class SegmentScheduler(
                                     }
                                 }
                                 SegmentResult.THROTTLED -> {
+                                    windowHadFailure.set(true)
                                     // 标记本窗口被限流：rampLoop 会跳过这次爬升，
                                     // 把 250ms 留给背压（throttleDown）生效。
                                     windowThrottled.set(true)
@@ -657,6 +790,7 @@ internal class SegmentScheduler(
                                     }
                                 }
                                 SegmentResult.FAILED -> {
+                                    windowHadFailure.set(true)
                                     consecutiveSuccesses.set(0)
                                     seg.attempts++
                                     val n = consecutiveFailures.incrementAndGet()

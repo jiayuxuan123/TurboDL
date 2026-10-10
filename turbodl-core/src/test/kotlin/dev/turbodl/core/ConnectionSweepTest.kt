@@ -188,6 +188,10 @@ class ConnectionSweepTest {
                 maxConcurrentTasks = 1,
                 warmUpConnections = false,
                 slowStart = false,
+                // 【诊断台的立身之本】固定并发：本测量台要分离「服务端限速模型」这个自变量，
+                // 所以必须钉死并发 —— 若让吞吐自适应参与调档，各档测到的就不是设定的 N 了。
+                // 自适应自身的收敛行为由 `AdaptiveConcurrencyTest` 验证。
+                adaptiveConcurrency = false,
                 maxRetries = 3,
             )
         )
