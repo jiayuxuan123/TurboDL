@@ -561,6 +561,11 @@ internal class SegmentScheduler(
                                     onBytes(bytes, abs)
                                 },
                                 ifRange = ifRange,
+                                // 缓冲按**实际并发数**摊薄：本任务会同时跑 workers 个分片，
+                                // 每个都独占 ioBufferSize（默认 1MB）的话，256 连接 = 256MB
+                                // = Android 默认整堆（2026-10-10 真机 OOM 事故）。
+                                // 传 workers（而非配置上限）以免把缓冲白摊小。
+                                bufferSize = config.effectiveIoBufferSize(workers),
                             )
                             when (res) {
                                 SegmentResult.OK -> {

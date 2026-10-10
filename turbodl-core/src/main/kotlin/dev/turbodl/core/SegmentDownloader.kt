@@ -509,6 +509,15 @@ internal class SegmentDownloader(
          * 故调用方需按 [strongIfRange] 的规则挑选。
          */
         ifRange: String? = null,
+        /**
+         * 本次分片读缓冲大小（字节）。**由调度器按并发数摊薄后传入**（见
+         * [TurboConfig.effectiveIoBufferSize]）：同一任务会同时跑 `workers` 个分片，
+         * 每个都按 [TurboConfig.ioBufferSize] 独占一个缓冲的话，
+         * 256 连接 = 256MB = Android 默认整堆（2026-10-10 真机 OOM 事故）。
+         *
+         * null 时回落到构造时注入的 [bufferSizeProvider]（整文件单流等低并发场景）。
+         */
+        bufferSize: Int? = null,
     ): SegmentResult {
         var end = endProvider()
         val existing = partFile.length()
@@ -562,6 +571,7 @@ internal class SegmentDownloader(
                         if (existing >= expected) return@use SegmentResult.OK
                         val written = writeSlice(
                             body.byteStream(), partFile, existing, expected - existing, onBytes,
+                            bufferSize,
                         )
                         if (existing + written != expected) SegmentResult.FAILED else SegmentResult.OK
                     }
@@ -698,11 +708,15 @@ internal class SegmentDownloader(
         seekPos: Long,
         expected: Long,
         onBytes: suspend (Long) -> Unit,
+        /** 按并发摊薄后的缓冲大小；null = 用 provider（见 [downloadSegment] 的说明）。 */
+        bufferSize: Int? = null,
     ): Long {
         var written = 0L
         RandomAccessFile(partFile, "rw").use { raf ->
             raf.seek(seekPos)
-            val buf = ByteArray(bufferSizeProvider().coerceAtLeast(8 * 1024))
+            val buf = ByteArray(
+                (bufferSize ?: bufferSizeProvider()).coerceAtLeast(TurboConfig.MIN_IO_BUFFER_BYTES)
+            )
             while (true) {
                 val n = input.read(buf)
                 if (n <= 0) break

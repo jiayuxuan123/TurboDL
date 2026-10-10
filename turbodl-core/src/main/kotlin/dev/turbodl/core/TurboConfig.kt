@@ -345,12 +345,44 @@ data class TurboConfig(
     val trustWeakValidator: Boolean = false,
 
     /**
-     * 分片读写缓冲区大小（字节，默认 1MB）。
+     * 分片读写缓冲区大小的**上限**（字节，默认 1MB）。
      *
      * 缓冲区越小 → 单位时间内 read/write 与进度回调次数越多，高吞吐时开销显著：
      * 256KB 缓冲在 50MB/s 下每秒要跑 200 次完整回调链路。取 1MB 在内存与吞吐间平衡。
+     *
+     * ★ 这是**单连接的上限**，不是实际值：实际按 [ioBufferTotalBudgetBytes] 与并发数摊薄，
+     *   见 [effectiveIoBufferSize]。低并发时就是本值。
      */
     val ioBufferSize: Int = 1024 * 1024,
+
+    /**
+     * 全部在飞连接的读缓冲**总预算**（字节，默认 32MB）。
+     *
+     * ## 为什么必须有这个上限
+     *
+     * 旧实现是「每个连接固定 [ioBufferSize]（1MB）」—— 看起来很小，乘上连接数就不小了：
+     *
+     * | 连接数 | 缓冲总量 |
+     * |---|---|
+     * | 16（默认） | 16MB |
+     * | 64 | 64MB |
+     * | 128 | 128MB |
+     * | **256（引擎上限）** | **256MB** |
+     *
+     * 2026-10-10 真机事故：Android 默认堆就是 256MB，用户在 256 连接下下载
+     * → 256 个 1MB 缓冲**刚好等于整堆** → `OutOfMemoryError`。
+     * 缓冲都是活对象（正被下载协程引用），GC 回收不掉，于是堆占满、连 64 字节都分不出来。
+     * 崩溃现场落在 Okio 的 Watchdog 线程（它只是想关掉一个超时的 socket），
+     * **看起来像网络问题，实际是缓冲把堆吃光了**。
+     *
+     * 【为什么不是"把线程数降回去"】连接数是吞吐的关键手段（服务端按连接限速时，
+     * 总吞吐 ≈ 单连接上限 × 连接数）。砍连接数是拿吞吐换内存，而真正的问题是
+     * 内存花得不值：256 个连接每个独占 1MB 缓冲，绝大部分时间都是空着的。
+     * 按总量摊薄后，256 连接仍有 128KB/连接 —— 远高于读 socket 的性价比区间，
+     * 吞吐不受影响。
+     */
+    val ioBufferTotalBudgetBytes: Int = 32 * 1024 * 1024,
+
 
     /**
      * 进度上报最小间隔（毫秒，默认 200ms）0 = 不节流。
@@ -426,7 +458,45 @@ data class TurboConfig(
         require(warmUpTimeoutMs >= 500) { "warmUpTimeoutMs 至少 500ms" }
         require(warmUpMaxParallel >= 1) { "warmUpMaxParallel 至少 1" }
         require(ioBufferSize >= 8 * 1024) { "ioBufferSize 至少 8KB" }
+        require(ioBufferTotalBudgetBytes >= ioBufferSize) {
+            "ioBufferTotalBudgetBytes 不能小于单连接缓冲上限 ioBufferSize" +
+                "（否则低并发时反而比旧行为更省，语义混乱）"
+        }
         require(progressIntervalMs >= 0) { "progressIntervalMs 不能为负" }
+    }
+
+    /**
+     * 实际生效的单连接读缓冲大小：把 [ioBufferTotalBudgetBytes] 按**最坏情况的连接总数**摊开，
+     * 且不超过 [ioBufferSize]。
+     *
+     * ## 分母为什么是 maxConcurrentTasks × connections
+     *
+     * 预算是**整个进程**的，而连接来自两边相乘：同时跑的任务数 × 每个任务的连接数。
+     * 只按单个任务的连接数摊，多任务并行时仍会突破预算 —— 例如 5 个任务各 256 连接
+     * （App 里这两项都能设到）就是 1280 条连接，按 128KB/连接算要 160MB。
+     *
+     * 分母取 [maxConcurrentTasks]（**声明上限**，不是"此刻在跑几个"）是刻意的：
+     * 这样不需要跨任务协调、不会阻塞，也让上限是**可静态验证**的。
+     * 代价是"设了 5 并但它只跑 1 个"时缓冲比需要的略小，但仍在合理区间（见下）。
+     *
+     * ## 数值范围
+     *
+     * | 场景 | 单连接缓冲 | 总占用 |
+     * |---|---|---|
+     * | 16 连接 × 1 任务（App 默认） | 1MB（触上限） | 16MB |
+     * | 256 连接 × 1 任务 | 128KB | 32MB |
+     * | 256 连接 × 5 任务 | 26KB | 33MB |
+     *
+     * [MIN_IO_BUFFER_BYTES]（8KB）是保底：配置极端到摊薄结果低于它时取它，
+     * 此时**总占用会略超预算**（如 64 任务 × 256 连接 = 16384 连接 × 8KB = 128MB）。
+     * 这是有意的取舍 —— 宁愿在荒谬配置下稍微超一点，也不让缓冲小到只剩 syscall 开销。
+     * 而在任何**可达的**配置下（App 上限 5 任务 × 256 连接）总占用都稳定在预算内。
+     */
+    fun effectiveIoBufferSize(connections: Int): Int {
+        val langs = connections.coerceAtLeast(1).toLong() *
+            maxConcurrentTasks.coerceAtLeast(1).toLong()
+        val shared = (ioBufferTotalBudgetBytes / langs).coerceAtMost(Int.MAX_VALUE.toLong())
+        return shared.toInt().coerceIn(MIN_IO_BUFFER_BYTES, ioBufferSize)
     }
 
     /**
@@ -438,6 +508,16 @@ data class TurboConfig(
             HttpVersionPolicy.AUTO -> if (forceHttp1) HttpVersionPolicy.AUTO else HttpVersionPolicy.FORCE_HTTP2
             else -> httpVersionPolicy
         }
+
+    companion object {
+        /**
+         * 单连接读缓冲的硬下限（8KB）。
+         *
+         * 与 [ioBufferSize] 的校验下限同源：再往下就只剩系统调用与回调的开销了。
+         * [effectiveIoBufferSize] 的摊薄结果触底时取本值。
+         */
+        const val MIN_IO_BUFFER_BYTES = 8 * 1024
+    }
 }
 
 /** HTTP 版本协商策略。 */
