@@ -15,19 +15,24 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../../assets/apple-touch-icon.png">
+<!-- 主题：在样式表之前定下 data-theme，避免深色偏好下闪一帧白 -->
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<!-- Pico（classless，MIT）在前，site.css 在后：我们的规则覆盖它 -->
+<link rel="stylesheet" href="../../assets/pico.min.css">
 <link rel="stylesheet" href="../../assets/site.css">
 </head>
 <body class="brand-turbodl">
 <a class="skip" href="#main">跳到正文</a>
-<header class="site-head">
-<div class="wrap">
+<div class="app">
+<aside class="side" id="site-nav">
+<div class="side-top">
 <a class="brand" href="../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
 <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">菜单</button>
-<nav id="site-nav" class="site-nav"><a href="../index.html">概览</a><a href="../download/index.html">下载</a><a href="../plugins/index.html">插件</a><a href="../docs/index.html">文档</a><a href="index.html" class="active" aria-current="page">更新日志</a><a href="../community/index.html">社区</a><a href="../legal/index.html">协议</a></nav>
-<div class="langs"><a href="../../changelog/index.html">English</a><span class="lang-cur">中文</span></div>
 </div>
-</header>
-<main id="main">
+<nav class="side-nav"><a href="../index.html">概览</a><a href="../download/index.html">下载</a><a href="../plugins/index.html">插件</a><a href="../docs/index.html">文档</a></nav>
+<div class="side-tools"><div class="langs"><a href="../../changelog/index.html">English</a><span class="lang-cur">中文</span></div><button class="theme-toggle" type="button" aria-label="切换深色 / 浅色主题" title="切换深色 / 浅色主题"><svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></div>
+</aside>
+<main id="main" class="canvas">
 <section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.1.0</span></h3><p class="small">2026-10-10</p><p class="muted">Three evaluations, each ending with a decision. Two of them contradict
 what the code comments used to claim, so the corrections are the substance
 of this release.
@@ -137,7 +142,8 @@ Android 抛出 `NetworkOnMainThreadException`。该异常会被探活的
 2. **无卡死检测**：OkHttp 的 readTimeout 只约束「单次 read 阻塞多久」。若 CDN 涓涓细流
    （每几十秒吐几字节），read 永不超时，进度几乎不动，任务可挂到无限久。
 3. **预热无界**：连接预热请求没有超时，服务器不响应时会先卡住 60s 才进入正式下载。
-修复（逻辑参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--s…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc8">发布页</a></p></div></div></section><section><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
+修复（逻辑参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--s…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc8">发布页</a></p></div></div></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
+</div>
 <footer class="site-foot">
 <div class="wrap">
 <div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">下载</a></li><li><a href="../plugins/index.html">插件</a></li><li><a href="index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../docs/readme/index.html">项目说明</a></li><li><a href="../docs/plugins/index.html">插件开发指南</a></li><li><a href="../docs/convention/index.html">开发规范</a></li><li><a href="../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../docs/manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../legal/third-party/index.html">第三方组件</a></li><li><a href="../legal/privacy/index.html">隐私说明</a></li><li><a href="../legal/terms/index.html">使用条款</a></li><li><a href="../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>

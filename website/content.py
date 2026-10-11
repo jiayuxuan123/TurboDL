@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 
 import mdlite
-from sitekit import buttons, cards, code_block, esc, note, section, table
+from sitekit import buttons, cards, code_block, esc, note, section, seg_rule, table
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -608,13 +608,23 @@ def _hero(lang: str, href) -> str:
         pill = f"{LATEST['tag']} · MIT · JVM 17+"
     dl = {"en": "Download", "zh": "下载"}[lang]
     ds = {"en": "Read the docs", "zh": "看文档"}[lang]
+    # 版本块：真实数据 + 一条分段带。元信息用「标签 + 值」的两行结构，
+    # 不用「A · B · C」中点串（那是模板化生成的典型特征之一）。
+    req_k = {"en": "Requires", "zh": "运行要求"}[lang]
+    lic_k = {"en": "License", "zh": "开源协议"}[lang]
+    eng_k = {"en": "Tested with", "zh": "实测环境"}[lang]
     return (
         '<section class="hero"><div class="hero-grid"><div>'
         f"<h1>{h1}</h1><p class=\"lead\">{lead}</p>"
         + buttons([(f"{dl} {LATEST['tag']}", href("download")), (ds, href("docs"))])
         + '</div><div class="hero-side">'
-        f'<div class="version-bar"><span class="tag">{pill}</span>'
-        f'<span>{TESTED[lang]}</span></div>'
+        f'<div class="version-bar"><span class="tag">{esc(LATEST["tag"])}</span>'
+        + seg_rule([(6, True), (3, False), (8, False), (2, True), (5, False)])
+        + '<dl class="seg-meta">'
+        f'<div><dt>{req_k}</dt><dd>JVM 17+</dd></div>'
+        f'<div><dt>{lic_k}</dt><dd>MIT</dd></div>'
+        f'<div><dt>{eng_k}</dt><dd>{esc(TESTED[lang])}</dd></div>'
+        "</dl>"
         "</div></div></section>"
     )
 
@@ -779,8 +789,11 @@ def _page_download(lang: str, href) -> str:
     )
     bar = (
         f'<div class="version-bar"><span class="tag">{tag}</span>'
-        f"<span>{published}</span>"
-        f'<span>{n_assets} {"files" if en else "个文件"}</span></div>'
+        + seg_rule([(9, True), (4, False), (6, True), (3, False)])
+        + '<dl class="seg-meta">'
+        f'<div><dt>{"Published" if en else "发布时间"}</dt><dd>{published}</dd></div>'
+        f'<div><dt>{"Files" if en else "附件数"}</dt><dd>{n_assets}</dd></div>'
+        "</dl></div>"
     )
     parts = [
         f'<section><h1>{"Download" if en else "下载"}</h1>'
@@ -1208,14 +1221,16 @@ def plugin_cards(lang: str) -> str:
 
 
 def _nav() -> list:
+    """顶栏只放**最常走的四条路**（其余入口在页脚按栏目列全）。
+
+    上一版七项（Overview/Download/Plugins/Docs/Changelog/Community/Terms），
+    加上语言切换与主题按钮就是九个目标挤在一行 —— 按钮墙，主行动反而被淹掉。
+    """
     return [
         ("home", {"en": "Overview", "zh": "概览"}),
         ("download", {"en": "Download", "zh": "下载"}),
         ("plugins", {"en": "Plugins", "zh": "插件"}),
         ("docs", {"en": "Docs", "zh": "文档"}),
-        ("changelog", {"en": "Changelog", "zh": "更新日志"}),
-        ("community", {"en": "Community", "zh": "社区"}),
-        ("legal", {"en": "Terms", "zh": "协议"}),
     ]
 
 
@@ -1463,8 +1478,8 @@ SITE = {
     ),
     "nav": _nav(),
     "ui": {
-        "en": {"skip": "Skip to content", "menu": "Menu", "notfound_title": "Page not found", "notfound_body": "That address does not exist on this site. Everything is one of these:"},
-        "zh": {"skip": "跳到正文", "menu": "菜单", "notfound_title": "页面不存在", "notfound_body": "这个地址在本站不存在。全部内容就在下面这几处："},
+        "en": {"skip": "Skip to content", "menu": "Menu", "theme": "Toggle dark / light theme", "notfound_title": "Page not found", "notfound_body": "That address does not exist on this site. Everything is one of these:"},
+        "zh": {"skip": "跳到正文", "menu": "菜单", "theme": "切换深色 / 浅色主题", "notfound_title": "页面不存在", "notfound_body": "这个地址在本站不存在。全部内容就在下面这几处："},
     },
     "footer": {"en": _footer("en"), "zh": _footer("zh")},
     "pages": _pages(),

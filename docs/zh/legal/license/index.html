@@ -15,19 +15,24 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../../../assets/apple-touch-icon.png">
+<!-- 主题：在样式表之前定下 data-theme，避免深色偏好下闪一帧白 -->
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<!-- Pico（classless，MIT）在前，site.css 在后：我们的规则覆盖它 -->
+<link rel="stylesheet" href="../../../assets/pico.min.css">
 <link rel="stylesheet" href="../../../assets/site.css">
 </head>
 <body class="brand-turbodl">
 <a class="skip" href="#main">跳到正文</a>
-<header class="site-head">
-<div class="wrap">
+<div class="app">
+<aside class="side" id="site-nav">
+<div class="side-top">
 <a class="brand" href="../../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
 <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">菜单</button>
-<nav id="site-nav" class="site-nav"><a href="../../index.html">概览</a><a href="../../download/index.html">下载</a><a href="../../plugins/index.html">插件</a><a href="../../docs/index.html">文档</a><a href="../../changelog/index.html">更新日志</a><a href="../../community/index.html">社区</a><a href="../index.html">协议</a></nav>
-<div class="langs"><a href="../../../legal/license/index.html">English</a><span class="lang-cur">中文</span></div>
 </div>
-</header>
-<main id="main">
+<nav class="side-nav"><a href="../../index.html">概览</a><a href="../../download/index.html">下载</a><a href="../../plugins/index.html">插件</a><a href="../../docs/index.html">文档</a></nav>
+<div class="side-tools"><div class="langs"><a href="../../../legal/license/index.html">English</a><span class="lang-cur">中文</span></div><button class="theme-toggle" type="button" aria-label="切换深色 / 浅色主题" title="切换深色 / 浅色主题"><svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></div>
+</aside>
+<main id="main" class="canvas">
 <nav class="crumbs"><a href="../index.html">协议与说明</a><span class="sep">/</span><span aria-current="page">开源协议（MIT）</span></nav><section class="doc-head"><h1>开源协议（MIT）</h1><p class="lead">MIT 协议，附四条澄清插件是独立作品的追加条款。原文照录，不做概括。</p></section><div class="doc-meta"><span class="mono small">LICENSE</span><a class="mono small" href="https://github.com/jiayuxuan123/TurboDL/blob/main/LICENSE">在 GitHub 上查看</a><a class="mono small" href="https://github.com/jiayuxuan123/TurboDL/raw/main/LICENSE">原文下载</a></div><div class="doc-grid"><aside class="doc-aside"><nav class="toc doc-nav"><div class="toc-title">全部页面</div><ul><li><a href="../../docs/readme/index.html">项目说明</a></li><li><a href="../../docs/plugins/index.html">插件开发指南</a></li><li><a href="../../docs/convention/index.html">开发规范</a></li><li><a href="../../docs/publishing/index.html">发布与发现</a></li><li><a href="../../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../../docs/manifest/index.html">清单字段参考</a></li><li class="cur"><span>开源协议（MIT）</span></li><li><a href="../third-party/index.html">第三方组件与致谢</a></li><li><a href="../privacy/index.html">隐私说明</a></li><li><a href="../terms/index.html">使用条款</a></li></ul></nav></aside><article class="doc-body"><pre class="doc-raw">MIT License
 
 Copyright (c) 2026 jiayuxuan123 and TurboDL contributors
@@ -85,6 +90,7 @@ the MIT License above. In case of any conflict, the MIT License prevails.
    These licenses do not grant rights to use the names, logos, or trademarks of
    TurboDL, its authors, or any referenced third-party project.
    本许可不授予使用 TurboDL、其作者或任何被引用第三方项目的名称、标识或商标的权利。</pre></article></div><p class="small"><a href="../../docs/index.html">← 全部文档</a></p></main>
+</div>
 <footer class="site-foot">
 <div class="wrap">
 <div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../../download/index.html">下载</a></li><li><a href="../../plugins/index.html">插件</a></li><li><a href="../../changelog/index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../../docs/readme/index.html">项目说明</a></li><li><a href="../../docs/plugins/index.html">插件开发指南</a></li><li><a href="../../docs/convention/index.html">开发规范</a></li><li><a href="../../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../../docs/manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="index.html">开源协议（MIT）</a></li><li><a href="../third-party/index.html">第三方组件</a></li><li><a href="../privacy/index.html">隐私说明</a></li><li><a href="../terms/index.html">使用条款</a></li><li><a href="../../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
