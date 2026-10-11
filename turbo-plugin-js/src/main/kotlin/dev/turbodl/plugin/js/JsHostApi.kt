@@ -64,12 +64,21 @@ internal class JsHost(
     private val scheduler: ScheduledExecutorService,
 ) : JsHostApi {
 
+    /**
+     * 凭据命名空间**由 pluginId 派生**，不需要外部注入。
+     *
+     * 为什么不从 config 里读：一个 loader 实例服务多个插件，而命名空间必须按插件 ——
+     * 从 config 读会让所有插件共用同一个空间，那正是"插件只能看自己的凭据"要防的事。
+     * `pluginId` 本来就保证唯一（PluginHost 用它做注册键），拿它当命名空间是现成的。
+     */
+    private val secretScope: JsSecretScope = JsSecretScope.of(pluginId)
+
     /** Ensures an ungranted `host.log` is announced once per instance, not once per line. */
     private val logRefusalReported = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val http = JsHostHttp(pluginId, config, engineConfig, sandbox)
     private val crypto = JsHostCrypto(config)
-    private val environment = JsHostEnvironment(config, sandbox)
+    private val environment = JsHostEnvironment(config, sandbox, secretScope)
     /** JS-visible timer id → pending task. Only this map is touched by timer.* paths. */
     private val timers = java.util.concurrent.ConcurrentHashMap<Long, ScheduledFuture<*>>()
     private val nextTimerId = AtomicLong(1)
@@ -130,6 +139,30 @@ internal class JsHost(
         "storage.keys" -> {
             requireCapability(JsCapability.STORAGE, "host.storage")
             environment.storageKeys()
+        }
+        // 凭据（P2）。与 storage 分开是因为威胁模型不同 —— 见 JsSecretStore 的注释。
+        // 另外这组调用**首先**检查后端是否可用：设备不支持凭据存储与"这个键还没有值"
+        // 是两件事，混为一谈会让插件反复提示用户登录。
+        "secrets.get" -> {
+            requireCapability(JsCapability.SECRETS, "host.secrets")
+            environment.secretsGet(payloadJson)
+        }
+        "secrets.set" -> {
+            requireCapability(JsCapability.SECRETS, "host.secrets")
+            environment.secretsSet(payloadJson)
+        }
+        "secrets.remove" -> {
+            requireCapability(JsCapability.SECRETS, "host.secrets")
+            environment.secretsRemove(payloadJson)
+        }
+        "secrets.keys" -> {
+            requireCapability(JsCapability.SECRETS, "host.secrets")
+            environment.secretsKeys()
+        }
+        "secrets.available" -> {
+            // 可用性是纯查询，不要求授权 —— 插件需要在没权限时就告诉用户
+            // "这台设备不支持保存登录态"，而不是等到写的时候才报错。
+            environment.secretsAvailable()
         }
         "env.get" -> {
             requireCapability(JsCapability.ENV, "host.env")

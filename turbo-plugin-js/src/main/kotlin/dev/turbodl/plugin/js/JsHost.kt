@@ -605,6 +605,13 @@ internal class JsHostCrypto(private val config: JsPluginConfig) {
 internal class JsHostEnvironment(
     private val config: JsPluginConfig,
     private val sandbox: JsSandbox,
+    /**
+     * 凭据命名空间，由 loader 按 pluginId 注入。
+     *
+     * 一个 loader 实例服务多个插件，所以它**不能**来自 config（那会让所有插件共用
+     * 一个命名空间）。为 null 时 `host.secrets.*` 一律报错而不是退化到共用空间。
+     */
+    private val secretScope: JsSecretScope? = null,
 ) {
 
     fun now(): Map<String, Any?> = mapOf("millis" to System.currentTimeMillis())
@@ -666,6 +673,82 @@ internal class JsHostEnvironment(
 
     fun storageKeys(): List<String> =
         sandbox.storage.listFiles()?.filter { it.isFile }?.map { decodeKey(it.name) }?.sorted() ?: emptyList()
+
+    // ------------------------------------------------------------ 凭据（P2）
+
+    /**
+     * 凭据命名空间由 loader 在装载时按 pluginId 注入（见 [secretScopeFor]）。
+     *
+     * 为什么不是配置里的一个字段：一个 loader 实例服务多个插件，命名空间必须**按插件**，
+     * 否则所有插件会共用同一个命名空间 —— 那就是"凭据只能看自己的"这条标准的反例。
+     */
+    private fun requireSecretScope(): JsSecretScope =
+        secretScope ?: throw JsAbi.AbiException(
+            JsAbi.Code.VALIDATION,
+            "本实例没有凭据命名空间（loader 未注入）",
+        )
+
+    /** 后端可用性（不需要授权就能查，见 JsHostApi 的注释）。 */
+    fun secretsAvailable(): Map<String, Any?> = mapOf(
+        "available" to (config.secretStore.isAvailable() && secretScope != null),
+    )
+
+    fun secretsGet(payloadJson: String?): Any? {
+        val scope = requireSecretScope()
+        val key = secretKey(scope, payloadJson)
+        if (!config.secretStore.isAvailable()) {
+            // 与"键不存在"区分开：抛错让插件知道该走降级路径，
+            // 而不是以为用户没登录过。
+            throw JsAbi.AbiException(
+                JsAbi.Code.PERMISSION,
+                "本设备没有可用的凭据存储后端（host.secrets 不可用）",
+            )
+        }
+        return config.secretStore.get(scope, key)
+    }
+
+    fun secretsSet(payloadJson: String?): Map<String, Any?> {
+        val scope = requireSecretScope()
+        val obj = objectOf(payloadJson)
+        val key = secretKey(scope, payloadJson)
+        val value = obj["value"] as? String
+            ?: throw JsAbi.AbiException(JsAbi.Code.VALIDATION, "secrets.set 的 value 必须是字符串")
+        if (value.length > JsSecretScope.MAX_VALUE_CHARS) {
+            throw JsAbi.AbiException(
+                JsAbi.Code.LIMIT,
+                "凭据长度超过上限（${JsSecretScope.MAX_VALUE_CHARS} 字符）",
+            )
+        }
+        config.secretStore.put(scope, key, value)
+        return mapOf("ok" to true, "chars" to value.length.toLong())
+    }
+
+    fun secretsRemove(payloadJson: String?): Map<String, Any?> {
+        val scope = requireSecretScope()
+        val key = secretKey(scope, payloadJson)
+        return mapOf("removed" to config.secretStore.remove(scope, key))
+    }
+
+    fun secretsKeys(): List<String> {
+        val scope = requireSecretScope()
+        return config.secretStore.keys(scope)
+    }
+
+    /**
+     * 校验并返回插件键名。
+     *
+     * 两层检查都要做：`validateKey` 挡掉含保留字符的键名（否则插件能自己拼出
+     * 跨命名空间的存储键），命名空间前缀则由 [JsSecretStore] 的实现加上。
+     */
+    private fun secretKey(scope: JsSecretScope, payloadJson: String?): String {
+        val obj = objectOf(payloadJson)
+        val key = obj["key"] as? String
+            ?: throw JsAbi.AbiException(JsAbi.Code.VALIDATION, "缺少 key")
+        scope.validateKey(key)?.let { reason ->
+            throw JsAbi.AbiException(JsAbi.Code.VALIDATION, reason)
+        }
+        return key
+    }
 
     fun envGet(payloadJson: String?): Map<String, Any?> {
         val obj = objectOf(payloadJson)

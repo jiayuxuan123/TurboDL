@@ -1,5 +1,7 @@
 package dev.turbodl.plugin.js
 
+import dev.turbodl.plugin.runtime.CapabilityId
+
 import java.io.File
 
 /**
@@ -57,6 +59,16 @@ data class JsPluginConfig(
     val sandboxRoot: File? = null,
     val allowedEnvVars: Set<String> = emptySet(),
     val allowExternalDestination: Boolean = false,
+
+    /**
+     * 凭据后端；宿主注入。不给就是 [JsSecretStore.Unavailable]（写操作会报错，
+     * 见那里的注释：静默丢弃比报错糟得多）。
+     *
+     * 命名空间不在这里 —— 一个 loader 实例服务多个插件，而命名空间是**按插件**的，
+     * 所以由 loader 在装载时按 pluginId 构造 [JsSecretScope]（见 JsPluginLoaderPlugin）。
+     */
+    val secretStore: JsSecretStore = JsSecretStore.Unavailable,
+
 ) {
     init {
         require(evaluationTimeoutMillis > 0) { "evaluationTimeoutMillis must be > 0" }
@@ -111,6 +123,15 @@ enum class JsCapability(val jsName: String) {
 
     /** `host.setTimeout`/`setInterval` — JS timers, always cancellable on unload. */
     TIMER("timer"),
+
+    /**
+     * `host.secrets` — 加密存取凭据（cookie / token / 账号口令）。
+     *
+     * **默认不授予**（见 [defaultGrant]）：凭据是这套系统里最敏感的数据，
+     * 多开一条让插件访问它的路径就多一个被滥用的面。必须由用户显式授权，
+     * 且授权项要出现在安装确认界面上。
+     */
+    SECRETS("secrets"),
     ;
 
     companion object {
@@ -123,14 +144,46 @@ enum class JsCapability(val jsName: String) {
         fun defaultGrant(): Set<JsCapability> = setOf(HTTP, CRYPTO, LOG, TIME)
 
         /** Parse a manifest/source permission string ("http,crypto") into the enum set. */
+        /**
+         * Parses a permission spec into the capability set.
+         *
+         * Accepts two forms (design doc §12.1–12.2):
+         *
+         *  - **current**: `dev.turbodl.cap.http@1.0.0` — namespaced and versioned;
+         *  - **legacy**: `http`, `crypto` — the bare names this engine shipped with.
+         *
+         * Legacy names stay readable during the migration window, but only the ones this enum
+         * actually defines. An *unknown* bare name is not legacy, it is a typo — accepting it
+         * would let the namespacing rule be bypassed by inventing a new bare name.
+         *
+         * Unrecognised tokens are **dropped**, not fatal: a plugin written against a newer
+         * engine may declare capabilities this version has never heard of, and refusing to load
+         * it would be worse than running it with fewer permissions. The caller can compare the
+         * result size against the input to notice.
+         */
         fun parse(spec: String?): Set<JsCapability> {
             if (spec.isNullOrBlank()) return emptySet()
             return spec.split(',', ' ', ';')
-                .mapNotNull { token ->
-                    val name = token.trim().lowercase()
-                    if (name.isEmpty()) null else entries.firstOrNull { it.jsName == name }
-                }
+                .mapNotNull { token -> resolve(token.trim()) }
                 .toSet()
+        }
+
+        /** Resolves one token to a capability, or null when it names nothing we know. */
+        private fun resolve(token: String): JsCapability? {
+            if (token.isEmpty()) return null
+            val lower = token.lowercase()
+            // 旧式裸名
+            entries.firstOrNull { it.jsName == lower }?.let { return it }
+            // 新式带命名空间与版本：取 `.cap.` 之后的名字再对一次
+            if (!lower.contains(CapabilityId.CAP_INFIX)) return null
+            val idPart = lower.substringBefore(CapabilityId.VERSION_SEP)
+            val name = idPart.substringAfter(CapabilityId.CAP_INFIX, "")
+            if (name.isEmpty()) return null
+            // 命名空间必须是保留的那两个之一，否则不允许映射到宿主能力
+            val ns = idPart.substringBefore(CapabilityId.CAP_INFIX, "")
+            if (ns !in CapabilityId.RESERVED_NAMESPACES) return null
+            // 名字里可能还有子路径（dev.turbodl.cap.http）；取最后一段作能力名
+            return entries.firstOrNull { it.jsName == name || name.endsWith("." + it.jsName) }
         }
     }
 }

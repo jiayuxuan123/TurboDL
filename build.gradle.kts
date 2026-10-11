@@ -14,10 +14,21 @@ allprojects {
     //   P13：预算摊薄算法收敛为唯一实现（budgetedIoBufferSize），
     //        App 侧兜底引擎删掉副本改为调用，避免两份实现漂移（OOM 是本项目踩过的坑）。
     //   次要版本号递增（0.2.0.9 → 0.2.1.0）：对外新增了公开 API 与配置字段。
-    version = "0.2.1.0"
+    version = "0.2.2.0"
 }
 
-// 为可作为 SDK 发布的库模块统一启用 maven-publish（发布到 mavenLocal 供 YunGet 等下游按坐标依赖）。
+// 为可作为 SDK 发布的库模块统一启用 maven-publish。
+//
+// ## 为什么有两个坐标（这是发 JitPack 时踩到的实际问题）
+//
+// `dev.turbodl:*` 是**内部坐标**：YunGet 自己与本地开发都靠它，坐标里带版本号后缀，
+// 变更可控。JitPack 却**只认 `com.github.<owner>:<repo>:<module>`**
+// —— 它按仓库坐标校验产物。原先只有 `dev.turbodl`，于是 JitPack 构建出来的包
+// 下游根本 `implementation` 不到（找不到对应坐标）。
+//
+// 所以这里同时发布两套：内部继续用 `dev.turbodl`（不变，避免影响已有构建），
+// 另加一套 JitPack 坐标供外部开发者使用。
+//
 // CLI / demo 是应用示例，不发布。
 subprojects {
     val publishable = setOf(
@@ -33,13 +44,14 @@ subprojects {
         afterEvaluate {
             extensions.configure<org.gradle.api.publish.PublishingExtension>("publishing") {
                 publications {
+                    // 内部坐标：dev.turbodl:<module>:<version>
                     create<org.gradle.api.publish.maven.MavenPublication>("maven") {
                         from(components["java"])
-                        // 坐标：dev.turbodl:<module>:0.1.0
                         artifactId = this@subprojects.name
                     }
                 }
             }
         }
+
     }
 }

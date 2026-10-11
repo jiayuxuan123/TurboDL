@@ -54,6 +54,21 @@ object ExtensionPoints {
         ExtensionPointKey.of("turbo.taskPostHook")
 
     /**
+     * 文件处理器挂载点（P16）。
+     *
+     * ## 命名空间为什么是 `dev.turbodl` 而不是宿主名
+     *
+     * 这个挂载点属于 **TurboDL SDK 的公共契约** —— 任何用这个 SDK 的人都可以
+     * 实现它，不只是云取。写成宿主名（`yung.cap.*`）等于宣布"只有云取认这个点"，
+     * 把宿主概念泄漏进公共接口，那正是"SDK 变成某个应用的专用内核"的开始。
+     *
+     * 约定：SDK 自己的挂载点一律用 `dev.turbodl.cap.*`；宿主若要加自己的挂载点，
+     * 用自己的命名空间（云取是 `yung.cap.*`）。
+     */
+    val FILE_HANDLER: ExtensionPointKey<FileHandler> =
+        ExtensionPointKey.of("dev.turbodl.cap.file.handler")
+
+    /**
      * Protocol declaration extension point.
      *
      * A plugin registers one [ProtocolClaim] per protocol/scheme it can handle ("hls", "magnet",
@@ -134,3 +149,75 @@ fun interface TaskPreHook {
 fun interface TaskPostHook {
     fun afterFinish(request: DownloadRequest, success: Boolean, detail: String?)
 }
+
+/**
+ * 下载完成后的**文件处理器**（P16；设计文档第 4、17 章）。
+ *
+ * ## 与 [TaskPostHook] 的区别
+ *
+ * 这两个看起来都在"下载结束后做事"，但它们拿到的**能力**不同：
+ *
+ *  - [TaskPostHook] 拿到 `(request, success, detail)`：一个**字符串**。
+ *    它适合算校验和、解压、清理网盘临时转存、弹通知 —— 这些都只需要知道"成了没成"。
+ *  - [FileHandler] 拿到一个 [HandledFile]：**宿主已经验过、准备落盘的最终文件**，
+ *    并且带 MIME 与大小。它适合"交给别的 App 处理"：起播放器、导入相册、丢进某个目录。
+ *
+ * 换成 `TaskPostHook` 做播放器要重新解析 MIME、重新拼文件路径、还要自己判断文件是否存在 ——
+ * 那些宿主都已经算好了。把它做成独立挂载点，是为了不让每个处理器插件都重写一遍。
+ *
+ * ## 为什么需要一个"能不能处理"的判断
+ *
+ * [matches] 让宿主**先问再交**：文件类型不对时（处理器只认视频、来了张图片）直接
+ * 返回 false，不做任何事。少了这一步，处理器要么被迫处理一切（收到无关文件），
+ * 要么自己再实现一遍类型判断（和宿主的判断逻辑必然对不上）。
+ *
+ * ## 执行时机与失败语义
+ *
+ * 宿主在**文件落盘之后**调用。处理器抛异常时：**记录并继续**——
+ * 一个播放器打不开，不该让"下载已完成"变成失败，更不该删掉已下好的文件。
+ */
+interface FileHandler {
+
+    /** 这个处理器 id（用于诊断与界面展示）。 */
+    val id: String
+
+    /** 人类可读名。 */
+    val name: String
+
+    /**
+     * 能否处理这个文件。
+     *
+     * @return true 时宿主才会调用 [handle]
+     */
+    fun matches(file: HandledFile): Boolean
+
+    /**
+     * 处理文件。
+     *
+     * @return 给用户看的一句话（会进日志，可能展示在通知里）；不必成功
+     */
+    fun handle(file: HandledFile): String
+}
+
+/**
+ * 交给 [FileHandler] 的文件描述。
+ *
+ * 只有**只读**信息，不给写权限 —— 处理器要做的是"把这个文件交给别的东西"，
+ * 不需要、也不该能改内容。
+ */
+data class HandledFile(
+    /** 任务 id（宿主内部，用于关联与诊断）。 */
+    val taskId: Long,
+    /** 落盘后的绝对路径。 */
+    val absolutePath: String,
+    /** 文件名（不含目录）。 */
+    val fileName: String,
+    /** 字节数；未知为 0。 */
+    val sizeBytes: Long,
+    /** MIME 类型；宿主未能判定时为空串（**不要猜** —— 猜错会让处理器选错）。 */
+    val mimeType: String,
+    /** 扩展名（小写，不含点）；无扩展名时为空串。 */
+    val extension: String,
+    /** 原始下载地址（诊断用，可能含 token —— 记录它时必须脱敏）。 */
+    val sourceUrl: String,
+)

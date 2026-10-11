@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -179,15 +180,35 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     /**
      * 恢复已暂停的任务（断点续传）。
      *
-     * 修复竞态：旧实现 pause 异步 cancelAndJoin，resume 可能在旧 job 真正退出前就启动新 job，
-     * 两个协程短暂并发写同一 chunkDir（分片文件互相覆盖）。现在启动前先 join 旧 job。
+     * ## 竞态：join 必须在 launch 之前**同步**完成
+     *
+     * 原实现把 `jobs.remove(id)?.cancelAndJoin()` 放在 `scope.launch` **内部**，于是：
+     *
+     * ```
+     * resume() → launch(协程尚未被调度) → putIfAbsent 同步执行 → 旧 job 还在表里
+     *          → 返回 false 并 cancel 掉刚 launch 的协程 → 续传永远启动不了
+     * ```
+     *
+     * 那个协程要等调度器给它时间才会跑到 `jobs.remove`，而 `putIfAbsent` 是同步的 ——
+     * 所以「join 旧 job」从来没有在 `putIfAbsent` 之前发生。
+     * 实测（`BuiltinBackendE2ETest`）：`pause` 后 300ms 调 `resume`，
+     * 任务**永远到不了终态**，端到端测试超时 60s。
+     *
+     * 现在顺序是：同步 join 掉旧 job → putIfAbsent 占位 → 再 launch。
+     * 于是 `putIfAbsent` 看到的一定是「没有活动 job」，`resume` 也就能如实返回成功。
      */
     fun resume(id: Long): Boolean {
         val req = requests[id] ?: return false
         completions.putIfAbsent(id, CompletableDeferred())
-        val job = scope.launch {
-            // 先确保旧 job 已彻底退出，避免两个下载协程同时写分片目录。
+
+        // 同步等待旧 job 退出：它会写下 PAUSED 并归还分片目录，之后才允许新 job 接手。
+        // 这里必须用 runBlocking 而不是 launch —— 正确性依赖「join 已经完成」，
+        // 而 launch 做不到同步保证，那正是这个竞态的来源。
+        runBlocking {
             jobs.remove(id)?.let { runCatching { it.cancelAndJoin() } }
+        }
+
+        val job = scope.launch {
             try {
                 awaitSlot(id)
                 if (coroutineContext[Job]?.isActive != true) return@launch
