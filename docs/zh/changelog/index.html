@@ -35,7 +35,14 @@
 <div class="side-tools"><div class="langs"><a href="../../changelog/index.html">English</a><span class="lang-cur">中文</span></div><button class="theme-toggle" type="button" aria-label="切换深色 / 浅色主题" title="切换深色 / 浅色主题"><svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></div>
 </aside>
 <main id="main" class="canvas">
-<section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.1.0</span></h3><p class="small">2026-10-10</p><p class="muted">Three evaluations, each ending with a decision. Two of them contradict
+<section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.2.0</span></h3><p class="small">2026-10-11</p><p class="muted">TurboDL 0.2.2.0
+这一版主要是修了一个会让「继续下载」完全没反应的缺陷，另外补上原生插件（L2）的加载契约和文件处理器挂载点。
+修复：暂停后点「继续」没有任何反应
+`resume()` 原来在协程内部移除并等待旧任务结束，而 `jobs.putIfAbsent` 是紧接着同步执行的。那个协程此时还没被调度，旧任务仍在表里，于是 `resume` 认为「已经有任务在跑」，返回失败并取消刚创建的协程。结果是用户点了继续，任务永远不会到达完成或失败状态。
+现在改成同步等待旧任务结束后再启动新任务。端到端测试覆盖了这条路径：暂停、等待、继续，然后校验最终文件逐字节正确。
+新增
+· **原生插件（L2）的加载契约**：定义插件来源、加载器接口与加载失败分类。引擎侧只定义契约，实际的类加载由宿主实现——引擎是纯 JVM 库，不包含 Android 的 dex 机制。
+· **文件处理器挂…</p><p class="small">16 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.2.0">发布页</a></p></div><div class="card"><h3><span class="mono">v0.2.1.0</span></h3><p class="small">2026-10-10</p><p class="muted">Three evaluations, each ending with a decision. Two of them contradict
 what the code comments used to claim, so the corrections are the substance
 of this release.
 **Segment write buffering** (`bufferedSegmentWrite`, opt-in, default off)
@@ -137,19 +144,12 @@ Android 抛出 `NetworkOnMainThreadException`。该异常会被探活的
 慢启动每次只 `+1`：从初始 4 爬到 128 需要 124 次上调、约 248 个成功分片，中小文件根本爬不到顶。
 改为**按比例上调**（当前值 × 0.5，至少 +1），十余次即到顶；慢启动初始值也从固定 4 改为 `max(4, 设定值/4)`。
 3) 弱网（2.4GHz Wi-Fi）下预热拖慢甚至像卡住
-预热此前按 `min…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc9">发布页</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc8</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-29</p><p class="muted">修复用户反馈的稳定性问题：有时显示在下载但一直不动，连链接探测这一步都没完成；下载忽好忽坏。
-根因（三处无界等待）
-1. **探测无硬超时**：服务器接受连接但迟迟不返回响应头时，connectTimeout(15s)+readTimeout(60s)
-   可叠加到近一分钟，期间界面已显示「下载中」但字节为 0；探测失败还会直接退化为单线程整文件下载。
-2. **无卡死检测**：OkHttp 的 readTimeout 只约束「单次 read 阻塞多久」。若 CDN 涓涓细流
-   （每几十秒吐几字节），read 永不超时，进度几乎不动，任务可挂到无限久。
-3. **预热无界**：连接预热请求没有超时，服务器不响应时会先卡住 60s 才进入正式下载。
-修复（逻辑参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--s…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc8">发布页</a></p></div></div></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
+预热此前按 `min…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc9">发布页</a></p></div></div></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
 </div>
 <footer class="site-foot">
 <div class="wrap">
 <div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">下载</a></li><li><a href="../plugins/index.html">插件</a></li><li><a href="index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../docs/readme/index.html">项目说明</a></li><li><a href="../docs/plugins/index.html">插件开发指南</a></li><li><a href="../docs/convention/index.html">开发规范</a></li><li><a href="../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../docs/manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../legal/third-party/index.html">第三方组件</a></li><li><a href="../legal/privacy/index.html">隐私说明</a></li><li><a href="../legal/terms/index.html">使用条款</a></li><li><a href="../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
-<div class="foot-note"><p>TurboDL v0.2.1.0 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
+<div class="foot-note"><p>TurboDL v0.2.2.0 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
 </div>
 </footer>
 <script src="../../assets/site.js" defer></script>
