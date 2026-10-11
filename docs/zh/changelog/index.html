@@ -28,7 +28,13 @@
 </div>
 </header>
 <main id="main">
-<section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.0.9</span></h3><p class="small">2026-10-10</p><p class="muted">这次改了什么
+<section><h1>更新日志</h1><p class="lead">由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.1.0</span></h3><p class="small">2026-10-10</p><p class="muted">Three evaluations, each ending with a decision. Two of them contradict
+what the code comments used to claim, so the corrections are the substance
+of this release.
+**Segment write buffering** (`bufferedSegmentWrite`, opt-in, default off)
+— measured on loopback, 16 MiB over 128 connections with 64 KiB segments,
+interleaved rounds taking the median: direct 2576 ms vs buffered 2584 ms.
+A 0.3% differen…</p><p class="small">17 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.1.0">发布页</a></p></div><div class="card"><h3><span class="mono">v0.2.0.9</span></h3><p class="small">2026-10-10</p><p class="muted">这次改了什么
 **引擎现在会自己收敛并发，而不是一直往设定值上堆连接。**
 慢启动照旧负责把并发爬到用户设定的线程数；爬到之后新增一层判断——用**任务总吞吐**（一段时间内真正写入的字节数）看这些连接到底有没有换来速度。没有就退回到更低的档位，稳定一段时间后再重新测一次。
 为什么这么做
@@ -131,19 +137,11 @@ Android 抛出 `NetworkOnMainThreadException`。该异常会被探活的
 2. **无卡死检测**：OkHttp 的 readTimeout 只约束「单次 read 阻塞多久」。若 CDN 涓涓细流
    （每几十秒吐几字节），read 永不超时，进度几乎不动，任务可挂到无限久。
 3. **预热无界**：连接预热请求没有超时，服务器不响应时会先卡住 60s 才进入正式下载。
-修复（逻辑参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--s…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc8">发布页</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc7</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-28</p><p class="muted">本预发布汇总两批增强（含 rc6 的预热/慢启动/平滑 ETA）。
-批次1（连接预热 / 慢启动 / 平滑 ETA）
-· **连接预热 / DNS 预解析**（warmUpConnections，默认开）：探测拿到最终 URL 后、正式分片前
-  并发建立若干空连接并解析 DNS，填充连接池，分片启动无需串行等待握手。
-· **慢启动动态上调**（slowStart，默认开）：分片并发从少（默认 min(连接数,4)）逐步爬升到设定值，
-  避免瞬时几十连接冲击服务器/被风控，也避免小文件过度建连。
-· **平滑分片级 ETA**：速率改为 EWMA 平滑，消除多分片并发下 ETA 大范围跳变。
-批次2（HTTP 版本自动协商 / 自定义透传）
-· **HTTP 版本自动协商**（httpVersionPolicy，默认 AUTO）：分片并发走 HTTP/1.1（保证多连接…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc7">发布页</a></p></div></div></section><section><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
+修复（逻辑参考 aria2 `--lowest-speed-limit` 与 curl `--speed-limit/--s…</p><p class="small">5 个文件 · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc8">发布页</a></p></div></div></section><section><h2>完整历史</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">全部发布</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">标签</a></div></section></main>
 <footer class="site-foot">
 <div class="wrap">
 <div class="foot-cols"><div class="foot-col"><h4>项目</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">下载</a></li><li><a href="../plugins/index.html">插件</a></li><li><a href="index.html">更新日志</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">问题反馈</a></li></ul></div><div class="foot-col"><h4>文档</h4><ul><li><a href="../docs/readme/index.html">项目说明</a></li><li><a href="../docs/plugins/index.html">插件开发指南</a></li><li><a href="../docs/convention/index.html">开发规范</a></li><li><a href="../docs/js-plugins/index.html">用 JavaScript 写插件</a></li><li><a href="../docs/js-loader/index.html">JS 加载器架构</a></li><li><a href="../docs/manifest/index.html">清单字段参考</a></li></ul></div><div class="foot-col"><h4>协议与说明</h4><ul><li><a href="../legal/license/index.html">开源协议（MIT）</a></li><li><a href="../legal/third-party/index.html">第三方组件</a></li><li><a href="../legal/privacy/index.html">隐私说明</a></li><li><a href="../legal/terms/index.html">使用条款</a></li><li><a href="../community/index.html">社区</a></li></ul></div><div class="foot-col"><h4>其它语言的文档</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/README.md">English</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
-<div class="foot-note"><p>TurboDL v0.2.0.9 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
+<div class="foot-note"><p>TurboDL v0.2.1.0 · MIT 协议（附插件生态附加条款）· 需要 JVM 17+</p><p>纯 Kotlin/JVM 下载引擎。思路层面的致谢：aria2、XDM、axel、Persepolis、Motrix、ab-download-manager —— 未复制任何源码。</p></div>
 </div>
 </footer>
 <script src="../../assets/site.js" defer></script>
