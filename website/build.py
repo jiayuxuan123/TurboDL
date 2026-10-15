@@ -145,14 +145,15 @@ class Site:
 <meta property="og:url" content="{esc(canon)}">
 <meta property="og:image" content="{esc(og_image)}">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#08090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0a0a0a">
 <link rel="icon" href="{rel(page["dir"], "assets/favicon.svg")}" type="image/svg+xml">
+<link rel="icon" href="{rel(page["dir"], "assets/favicon-32.png")}" sizes="32x32">
 <link rel="apple-touch-icon" href="{rel(page["dir"], "assets/apple-touch-icon.png")}">
-<!-- 主题：在样式表之前定下 data-theme，避免深色偏好下闪一帧白 -->
-<script>try{{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}}catch(e){{}}</script>
-<!-- Pico（classless，MIT）在前，site.css 在后：我们的规则覆盖它 -->
-<link rel="stylesheet" href="{rel(page["dir"], "assets/pico.min.css")}">
+<!-- 入场动效只在 html 有 .js 时才生效：脚本没跑起来，内容照样完整可见。
+     没有主题切换按钮：这一版只有深色一种底色（方向单指定的调色板），
+     放一个切了没反应的开关不如不放。 -->
+<script>document.documentElement.className+=" js";setTimeout(function(){{if(!window.__motionReady){{var n=document.querySelectorAll(".rise, .hl-layer");for(var i=0;i<n.length;i++)n[i].classList.add("in")}}}},2500);</script>
+<!-- 单一样式表：上一版依赖 Pico（classless）再逐条覆盖它，重构后规则全在 site.css 里 -->
 <link rel="stylesheet" href="{rel(page["dir"], "assets/site.css")}">
 </head>
 <body class="{esc(cfg.get('body_class', ''))}">
@@ -160,13 +161,19 @@ class Site:
 """
 
     def header(self, page: dict) -> str:
+        """侧栏：词标 + 四个页面 + 语言/主题工具。
+
+        结构是**左侧常驻侧栏 + 主画布**（开发站的手感来自目录常驻），不是顶部导航条；
+        窄屏时侧栏折成一行、导航收进 .nav-toggle。侧栏有自己的黑底 —— 画布里的章节
+        各自是整幅色场，侧栏不压进那些色场（见 site.css 头部的偏离说明）。
+        """
         cfg = self.cfg
         lang = page["lang"]
         brand_href = rel(page["dir"], self.index["home"].get(lang) or self.index["home"][cfg["default_lang"]])
         nav_items = []
         for key, _labels in cfg["nav"]:
             href = self.href(page, key)
-            active = ' class="active" aria-current="page"' if page["key"] == key else ""
+            active = ' aria-current="page"' if page["key"] == key else ""
             nav_items.append(f'<a href="{href}"{active}>{esc(self.label((key, _labels), lang))}</a>')
         nav = "".join(nav_items)
 
@@ -186,43 +193,27 @@ class Site:
                     links.append(f'<a href="{rel(page["dir"], target)}">{esc(self.label((code, _lab), lang))}</a>')
             switcher = '<div class="langs">' + "".join(links) + "</div>"
 
-        # 主题切换与语言切换都放进 .head-tools，作为**一组**工具贴在导航右侧。
-        # 上一版把它单独留在 nav 外面靠 margin-left:auto 挤过去，看起来像飘在角落、
-        # 不属于任何一组 —— 这是布局上的错位，不是样式问题。
-        tools = (
-            '<div class="head-tools">'
-            + switcher
-            + f'<button class="theme-toggle" type="button" aria-label="{esc(self.ui(lang, "theme"))}" title="{esc(self.ui(lang, "theme"))}">'
-            '<svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
-            '<svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
-            "</button></div>"
-        )
-        # 结构：**左侧固定侧栏 + 主画布**，不是顶部导航条。
-        tools = (
-            '<div class="side-tools">'
-            + switcher
-            + f'<button class="theme-toggle" type="button" aria-label="{esc(self.ui(lang, "theme"))}" title="{esc(self.ui(lang, "theme"))}">'
-            '<svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
-            '<svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
-            "</button></div>"
-        )
+        tools = '<div class="side-tools">' + switcher + "</div>"
         return f"""<div class="app">
-<aside class="side" id="site-nav">
+<aside class="side">
 <div class="side-top">
 <a class="brand" href="{brand_href}"><span class="brand-mark">{cfg['mark_svg']}</span><span class="brand-name">{esc(cfg['name'])}</span></a>
-<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">{esc(self.ui(lang, "menu"))}</button>
+<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="side-nav">{esc(self.ui(lang, "menu"))}</button>
 </div>
-<nav class="side-nav">{nav}</nav>
 {tools}
+<nav class="side-nav" id="side-nav">{nav}</nav>
 </aside>
 <main id="main" class="canvas">
 """
 
     def footer(self, page: dict) -> str:
-        """页脚。链接以 `@` 开头表示"站内页面 key"，渲染时才解析成相对路径。
+        """页脚：一整幅练红场（定向单的 footer-contact-set-large）。
+
+        结构：上面几栏短链接 → 大留白 → **取用的地址本身就是那行大字**
+        （仓库地址，一个能点的链接）→ 底下三行小字（版本与协议、致谢、版权年）。
 
         页脚出现在每一种深度的页面上（`/`、`/zh/legal/privacy/`……），写死的相对路径
-        只会在其中一层对；所以站内链接走 key 解析，站外链接（GitHub 等）照原样输出。
+        只会在其中一层对；所以站内链接走 key 解析（`@` 前缀），站外链接照原样输出。
         """
         cfg = self.cfg
         lang = page["lang"]
@@ -233,14 +224,18 @@ class Site:
                 f'<li><a href="{self.href(page, h[1:]) if h.startswith("@") else h}">{esc(t)}</a></li>'
                 for t, h in links
             )
-            cols.append(f'<div class="foot-col"><h4>{esc(title)}</h4><ul>{items}</ul></div>')
+            cols.append(f'<div><h4>{esc(title)}</h4><ul>{items}</ul></div>')
         cols_html = "".join(cols)
         paras = "".join(f"<p>{p}</p>" for p in cols_cfg["paragraphs"])
+        # 页脚那行大字 = 取用地址本身（一个能点的真实地址，不是标语）。
+        repo_url = cfg.get("repo", "")
+        repo_label = repo_url.split("://", 1)[-1]
         return f"""</main>
 </div>
 <footer class="site-foot">
 <div class="wrap">
-<div class="foot-cols">{cols_html}</div>
+<div class="foot-top">{cols_html}</div>
+<div class="foot-line"><a href="{esc(repo_url)}">{esc(repo_label)}</a></div>
 <div class="foot-note">{paras}</div>
 </div>
 </footer>

@@ -20,3 +20,10 @@ local.properties
 
 # 安全钩子运行时状态（非源码）
 .mimosa/
+
+# 网站构建产物与本地产物
+website/__pycache__/
+__pycache__/
+*.pyc
+# taste-skill 的测量产物（3.6 MB 截图与 report.json）：方向单与设计笔记要留，截图不留
+.taste-skill/inspect*/

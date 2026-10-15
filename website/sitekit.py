@@ -85,6 +85,17 @@ def _plain(fragment: str) -> str:
     return html.unescape(text).strip()
 
 
+def md_inline(text: object) -> str:
+    """把事实文本里的 `**强调**` 渲染成 <strong>。
+
+    事实表（README 的能力表、各模块 `turbodl-plugin.json` 的摘要）当初是按 Markdown
+    写的 —— 文档页走 mdlite 会正确渲染，而直接拼 HTML 的地方（首页的表格、插件卡）
+    如果不转换，页面上就会露出字面的 `**only**`。
+    只认这一种标记，并且**先转义再替换**，所以内容里的 `<` 依然是安全的。
+    """
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", esc(text))
+
+
 def cards(items: list[tuple[str, str]], columns: int = 3) -> str:
     """卡片网格：`(标题, 正文HTML)`。"""
     inner = "".join(

@@ -29,7 +29,8 @@ import re
 from pathlib import Path
 
 import mdlite
-from sitekit import buttons, cards, code_block, esc, note, section, seg_rule, table
+import fragments
+from sitekit import buttons, cards, code_block, esc, md_inline, note, section, seg_rule, table
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -442,6 +443,26 @@ def _resolver(src_path: str, page_href):
     return link
 
 
+#: 一份最小的 `turbodl-plugin.json`（与 `docs/plugins/turbodl-plugin.schema.json` 的要求一致）。
+#: 清单参考页与文档中心用的是**同一个**常量 —— 两处各写一份迟早会不一致。
+MANIFEST_EXAMPLE = {
+    "manifestVersion": "1.0",
+    "id": "parser.example",
+    "name": "Example parser",
+    "description": "Turns example:// links into download requests.",
+    "version": "0.1.0",
+    "author": "you",
+    "homepage": "https://github.com/you/turbodl-plugin-example",
+    "license": "MIT",
+    "category": "turbodl-parser",
+    "capabilities": ["dev.turbodl.cap.parser"],
+    "protocols": ["example"],
+    "turbodl": {"apiMajor": 1, "requiredApiVersion": "1.0.0"},
+    "entry": {"language": "kotlin", "pluginClass": "com.example.ExamplePlugin"},
+    "extensionPoints": ["turbo.linkParser"],
+}
+
+
 def _manifest_reference(lang: str) -> str:
     """由 JSON Schema 生成清单字段参考 —— 字段名、类型、是否必填、说明、枚举值。"""
     schema = json.loads((ROOT / "docs/plugins/turbodl-plugin.schema.json").read_text(encoding="utf-8"))
@@ -468,22 +489,7 @@ def _manifest_reference(lang: str) -> str:
         )
     heads = ["Field", "Type", " ", "Notes"] if en else ["字段", "类型", " ", "说明"]
     groups = schema.get("$comment") or ""
-    example = {
-        "manifestVersion": "1.0",
-        "id": "parser.example",
-        "name": "Example parser",
-        "description": "Turns example:// links into download requests.",
-        "version": "0.1.0",
-        "author": "you",
-        "homepage": "https://github.com/you/turbodl-plugin-example",
-        "license": "MIT",
-        "category": "turbodl-parser",
-        "capabilities": ["dev.turbodl.cap.parser"],
-        "protocols": ["example"],
-        "turbodl": {"apiMajor": 1, "requiredApiVersion": "1.0.0"},
-        "entry": {"language": "kotlin", "pluginClass": "com.example.ExamplePlugin"},
-        "extensionPoints": ["turbo.linkParser"],
-    }
+    example = MANIFEST_EXAMPLE
     return (
         (f'<p>{esc(schema.get("description", ""))}</p>' if schema.get("description") else "")
         + table(heads, rows)
@@ -590,43 +596,10 @@ def asset_rows(release: dict) -> list[list[str]]:
     ]
 
 
-def _hero(lang: str, href) -> str:
-    if lang == "en":
-        h1 = "A multi-threaded download engine for the JVM"
-        lead = (
-            "TurboDL is a download core written from scratch in pure Kotlin: HTTP Range segments in "
-            "parallel, resumable, with a plugin framework for everything that is not HTTP. "
-            "No Android dependency — it runs in any JVM application, servers included."
-        )
-        pill = f"{LATEST['tag']} · MIT · JVM 17+"
-    else:
-        h1 = "给 JVM 的多线程下载引擎"
-        lead = (
-            "TurboDL 是一个用纯 Kotlin 从零写的下载内核：按 HTTP Range 分片并发、可断点续传，"
-            "并把「不是 HTTP 的东西」做成插件框架。不依赖 Android，任何 JVM 应用都能直接用。"
-        )
-        pill = f"{LATEST['tag']} · MIT · JVM 17+"
-    dl = {"en": "Download", "zh": "下载"}[lang]
-    ds = {"en": "Read the docs", "zh": "看文档"}[lang]
-    # 版本块：真实数据 + 一条分段带。元信息用「标签 + 值」的两行结构，
-    # 不用「A · B · C」中点串（那是模板化生成的典型特征之一）。
-    req_k = {"en": "Requires", "zh": "运行要求"}[lang]
-    lic_k = {"en": "License", "zh": "开源协议"}[lang]
-    eng_k = {"en": "Tested with", "zh": "实测环境"}[lang]
-    return (
-        '<section class="hero"><div class="hero-grid"><div>'
-        f"<h1>{h1}</h1><p class=\"lead\">{lead}</p>"
-        + buttons([(f"{dl} {LATEST['tag']}", href("download")), (ds, href("docs"))])
-        + '</div><div class="hero-side">'
-        f'<div class="version-bar"><span class="tag">{esc(LATEST["tag"])}</span>'
-        + seg_rule([(6, True), (3, False), (8, False), (2, True), (5, False)])
-        + '<dl class="seg-meta">'
-        f'<div><dt>{req_k}</dt><dd>JVM 17+</dd></div>'
-        f'<div><dt>{lic_k}</dt><dd>MIT</dd></div>'
-        f'<div><dt>{eng_k}</dt><dd>{esc(TESTED[lang])}</dd></div>'
-        "</dl>"
-        "</div></div></section>"
-    )
+# 首页正文（含首屏的两场标题）搬到了 `website/home.py`：它是九节、双语的版式代码，
+# 与这里的「事实表 + 页面清单」不是同一种东西；事实仍然全部由本文件拥有。
+# 入口见下面的 `_page_home`（转调 home.page）。
+
 
 
 def _capabilities(lang: str) -> str:
@@ -645,7 +618,7 @@ def _modules(lang: str) -> str:
         rows.append(
             [
                 f'<span class="mono">{artifact}</span>',
-                f"<strong>{role[lang]}</strong><br><span class=\"muted\">{desc[lang]}</span>",
+                f"<strong>{role[lang]}</strong><br><span class=\"muted\">{md_inline(desc[lang])}</span>",
                 yes if required else no,
             ]
         )
@@ -653,122 +626,23 @@ def _modules(lang: str) -> str:
 
 
 def _page_home(lang: str, href) -> str:
-    en = lang == "en"
-    feats = cards([(t[lang], f"<p>{b[lang]}</p>") for t, b in FEATURES], columns=3)
-    parts = [
-        _hero(lang, href),
-        section(
-            "What it does" if en else "它能做什么",
-            f"<p class=\"lead\">{'Six things that matter for a download engine — the rest is in the README.' if en else '下载引擎真正要紧的六件事 —— 其余在 README 里。'}</p>" + feats,
-        ),
-        section(
-            "Nine engine capabilities" if en else "九项引擎能力",
-            f"<p class=\"lead\">{'Every knob is a public config field — no hidden magic.' if en else '每一项都是公开的配置字段 —— 没有藏着的手法。'}</p>" + _capabilities(lang),
-        ),
-        section(
-            "Modules" if en else "模块构成",
-            (
-                "<p class=\"lead\">Only <span class=\"mono\">turbodl-core</span> is required. "
-                "Everything else is a plugin you add on purpose.</p>"
-                if en
-                else "<p class=\"lead\">只有 <span class=\"mono\">turbodl-core</span> 是必需的。"
-                "其余都是你主动加进来的插件。</p>"
-            )
-            + _modules(lang),
-        ),
-        section(
-            "Quick start" if en else "快速开始",
-            (
-                "<p>Add one dependency, submit a request, collect events. "
-                "The full API — pause / resume / cancel / batch / diagnostics — is in the docs.</p>"
-                if en
-                else "<p>加一个依赖、提交一个请求、订阅事件。完整的 API（暂停 / 继续 / 取消 / 批量 / 诊断）见文档。</p>"
-            )
-            + code_block(
-                """val client = TurboClient(
-    TurboConfig(
-        maxConnectionsPerTask = 16,      // up to 256 / 最高 256
-        globalSpeedLimitBytesPerSec = 0, // 0 = unlimited / 不限速
-        dynamicSegmentation = true,
-    )
-)
+    """首页：转调到 `website/home.py`（那里是九节的版式代码）。
 
-val id = client.submit(
-    DownloadRequest(url = "https://example.com/big.zip", destination = File("big.zip"))
-)
+    转调而不是把代码搬进来：首页现在是定向单要求的九节结构（两场首屏、三段进度条、
+    开关横带、名字一句话、推到右边的表、提问清单、句子里的坐标），跟本文件的
+    「事实表 + 页面清单」不是同一种东西。事实仍全部由本文件拥有，home.py 延迟读取。
+    """
+    import home
 
-client.events.collect { event ->
-    when (event) {
-        is TurboEvent.Progress  -> println("${event.progress.percent}%")
-        is TurboEvent.Completed -> println("done: ${event.file}")
-        is TurboEvent.Failed    -> println("failed: ${event.reason}")
-        else -> {}
-    }
-}
+    return home.page(lang, href)
 
-val result = client.await(id)   // Result<File>
-client.shutdown()""",
-                "Kotlin",
-            )
-            + buttons(
-                [
-                    ("Download " + LATEST["tag"], href("download")),
-                    ("Plugin guide" if en else "插件开发", href("plugins")),
-                    ("GitHub", f"{REPO}"),
-                ]
-            ),
-        ),
-        section(
-            "Plugin framework" if en else "插件框架",
-            (
-                "<p class=\"lead\">TurboDL is a standalone engine <em>and</em> an optional plugin platform. "
-                "The kernel knows no protocols: lifecycle, cleanup, event bus, service registry, "
-                "extension points, a version handshake and diagnostics — that is the whole of it.</p>"
-                if en
-                else "<p class=\"lead\">TurboDL 既是独立的引擎，<em>也是</em>可选的插件平台。"
-                "内核不认识任何协议：它只提供生命周期、清理、事件总线、服务注册表、扩展点、"
-                "版本握手与诊断 —— 全部就这些。</p>"
-            )
-            + code_block(
-                f"""val boot = TurboBootstrap.create(
-    config = TurboConfig(maxConnectionsPerTask = 16),
-    extraPlugins = listOf(HlsPlugin()),
-)
 
-boot.host.loadSource(
-    PluginSource(kind = "js", uri = "/opt/turbodl-plugins/acme-parser.js")
-)""",
-                "Kotlin · bootstrap",
-            )
-            + f'<div class="btn-row"><a class="btn" href="{href("plugins")}">'
-            + ("See the official plugins" if en else "看官方插件")
-            + "</a></div>",
-        ),
-        section(
-            "Written down, in one place" if en else "写在文档里的东西",
-            (
-                "<p class=\"lead\">Everything a reader might want — how to write a plugin, what the "
-                "manifest requires, which libraries ship along, what leaves your machine, and what the "
-                "license actually says — is a page here <em>and</em> a file in the repository. "
-                "Both are rendered from the same source, so they cannot drift apart.</p>"
-                if en
-                else "<p class=\"lead\">读者会想知道的每一件事 —— 插件怎么写、清单有哪些必填项、"
-                "会连带引入哪些库、什么数据会离开你的机器、协议究竟写了什么 —— "
-                "在这里是一页，在仓库里是一个文件。两处由同一份源渲染，不会各说各话。</p>"
-            )
-            + buttons(
-                [
-                    ("Plugin guide" if en else "插件开发指南", href("doc-plugins")),
-                    ("Convention" if en else "开发规范", href("doc-convention")),
-                    ("JS plugins" if en else "JS 插件", href("doc-js")),
-                    ("Manifest" if en else "清单字段", href("doc-manifest")),
-                    ("Privacy" if en else "隐私说明", href("legal-privacy")),
-                    ("License" if en else "开源协议", href("legal-license")),
-                ]
-            ),
-        ),
-    ]
-    return "".join(parts)
+def _assets_total() -> str:
+    """Release 附件的总大小（真实数字；附件表为空时给一个破折号而不是 0 B）。"""
+    from sitekit import fmt_bytes
+
+    total = sum(int(a.get("size") or 0) for a in LATEST["assets"])
+    return fmt_bytes(total) if total else "—"
 
 
 def _page_download(lang: str, href) -> str:
@@ -797,10 +671,52 @@ def _page_download(lang: str, href) -> str:
     )
     parts = [
         f'<section><h1>{"Download" if en else "下载"}</h1>'
-        f'<p class="lead">{lead_en if en else lead_zh}</p>{bar}</section>',
+        f'<p class="lead">{lead_en if en else lead_zh}</p>'
+        # 发布面板：这个版本的事实（版本、发布日、附件数与总大小、协议、运行要求、
+        # API 版本）—— 字段就是 Release 页面上的字段，值从 releases.json 来。
+        + fragments.panel(
+            f"{tag} — {'this release' if en else '这一次发布'}",
+            [
+                ("tag", tag),
+                ("published", published),
+                ("assets", str(n_assets)),
+                ("total size", _assets_total()),
+                ("license", "MIT"),
+                ("requires", "JVM 17+"),
+                ("api", f"v{API_VERSION}"),
+                ("source", REPO.split("//")[-1]),
+            ],
+            foot=(
+                "Read straight from the GitHub API by refresh_releases.py; nothing on this page is typed by hand."
+                if en
+                else "由 refresh_releases.py 从 GitHub API 读取；这一页上没有手写的链接或数字。"
+            ),
+        )
+        + bar
+        + "</section>",
         section(
             f"{tag} — all files" if en else f"{tag} —— 全部文件",
-            table(["File", "Size"] if en else ["文件", "大小"], asset_rows(LATEST)),
+            # 附件表放进一档色差的面板：一屏里只有两列短文本时，裸露的表格看着像一屏空场
+            # （深底上没有背景，视线落不到东西上）；给个地面之后这块才算"有内容"。
+            '<div class="surface">'
+            + table(["File", "Size"] if en else ["文件", "大小"], asset_rows(LATEST))
+            + "</div>"
+            # 控制台碎片：拿到文件之后它实际会打印什么（事件名与字段名来自 Main.kt）
+            + fragments.console(
+                [
+                    '{"type":"start","url":"https://example.com/image.iso","output":"image.iso"}',
+                    '{"type":"timing","stage":"metadata","t_ms":184,"probe_ms":96,"resume":""}',
+                    '{"type":"progress","state":"downloading","downloaded":222732288,"total":358411469,"percent":62,"speed":19503514,"connections":16,"eta_ms":7020}',
+                    '{"type":"progress","state":"merging","downloaded":358411469,"total":358411469,"percent":100,"speed":0,"connections":0,"eta_ms":0}',
+                    '{"type":"completed","url":"https://example.com/image.iso","file":"image.iso","bytes":358411469,"sha256":"0f3a…"}',
+                    '{"type":"summary","total":1,"failed":0}',
+                ],
+                (
+                    f"java -jar turbodl-cli-{ver}-all.jar <url> --json · one line per event"
+                    if en
+                    else f"java -jar turbodl-cli-{ver}-all.jar <url> --json · 每个事件一行"
+                ),
+            ),
         ),
         section(
             "Gradle" if en else "Gradle 依赖",
@@ -841,6 +757,20 @@ def _page_download(lang: str, href) -> str:
                     else "这些坐标<strong>还没有</strong>发布到 Maven Central。"
                     "官方支持的用法是 Release 页上的离线包 —— 它就是 Gradle 发布到本地仓库的那一组文件。"
                 )
+            )
+            # 安装路径台账：从离线包到能依赖，中间要动的就这两处
+            + fragments.readout(
+                "What the bundle installs to" if en else "离线包会装到哪",
+                [
+                    ("~/.m2/repository/dev/turbodl/turbodl-core/" + ver, "<version>/turbodl-core-<version>.jar + .pom"),
+                    ("~/.m2/repository/dev/turbodl/turbo-plugin-*/" + ver, "one directory per plugin artifact"),
+                    ("build.gradle.kts", f'implementation("dev.turbodl:turbodl-core:{ver}")'),
+                ],
+                (
+                    "The bundle is a plain repository tree: unzip it at ~/.m2/repository and Gradle resolves it offline."
+                    if en
+                    else "离线包就是一棵普通的仓库目录树：解到 ~/.m2/repository，Gradle 就能离线解析。"
+                ),
             ),
         ),
         section(
@@ -860,11 +790,30 @@ java -jar turbodl-cli-{ver}-all.jar --batch tasks.txt   # one URL per line / 每
             )
             + '<p class="small">'
             + ("Exit codes: 0 success · 1 download failed · 2 usage error." if en else "退出码：0 成功 · 1 下载失败 · 2 用法错误。")
-            + "</p>",
+            + "</p>"
+            # 参数台账：这些开关都在 Main.kt 里，取值域是真的
+            + fragments.readout(
+                "The flags worth knowing" if en else "值得记住的几个开关",
+                [
+                    ("-c, --connections", "1..256 · default 16"),
+                    ("-l, --limit", "bytes per second, 0 = unlimited"),
+                    ("-r, --retry", "0..50 per segment"),
+                    ("-b, --batch", "one URL per line"),
+                    ("--json", "NDJSON: start / timing / progress / completed / summary"),
+                    ("--doh, --proxy", "DNS over HTTPS, or Direct / System / Manual / PAC"),
+                    ("--no-tail-assist, --no-overlap", "turn the two endgame switches off"),
+                ],
+                (
+                    "Every flag maps onto a field of TurboConfig — the CLI is a thin skin over the SDK."
+                    if en
+                    else "每个开关都对应 TurboConfig 里的一个字段 —— CLI 只是 SDK 的一层薄壳。"
+                ),
+            ),
         ),
         section(
             "Previous versions" if en else "历史版本",
-            table(
+            '<div class="surface">'
+            + table(
                 ["Version", "Published", "Assets", "Notes"] if en else ["版本", "发布时间", "附件", "说明"],
                 [
                     [
@@ -876,7 +825,8 @@ java -jar turbodl-cli-{ver}-all.jar --batch tasks.txt   # one URL per line / 每
                     ]
                     for r in RELEASES[:12]
                 ],
-            ),
+            )
+            + "</div>",
         ),
     ]
     return "".join(parts)
@@ -902,19 +852,70 @@ def _plugin_detail(p: dict, lang: str, href) -> str:
         heads = ["字段", "值"]
     return (
         f'<section><h1>{esc(p["name"])}</h1>'
-        f'<p class="lead">{p["summary"][lang]}</p>'
+        f'<p class="lead">{md_inline(p["summary"][lang])}</p>'
         f'<div class="card-meta">{chips}</div></section>'
         + section("Manifest" if en else "清单", table(heads, meta_rows))
         + section(
             "Explicitly refused" if en else "明确拒绝的情况",
-            "<ul>" + "".join(f"<li>{x}</li>" for x in p["refuses"][lang]) + "</ul>"
-            + note(p["refuses_note"][lang], "info"),
+            "<ul>" + "".join(f"<li>{md_inline(x)}</li>" for x in p["refuses"][lang]) + "</ul>"
+            + note(md_inline(p["refuses_note"][lang]), "info"),
         )
         + section(
             "Source" if en else "源码",
             f'<p>{"Read it in the repository — the manifest above is generated from the file itself." if en else "在仓库里读源码 —— 上面的清单就是从那个文件里读出来的。"}</p>'
             + buttons([("Repository" if en else "仓库", p["source"]), ("All plugins" if en else "全部插件", href("plugins"))]),
         )
+    )
+
+
+def _plugin_capability_fragment(lang: str) -> str:
+    """两个官方插件的能力与拒绝清单：直接读各自的 `turbodl-plugin.json` 同级事实表
+    （`OFFICIAL_PLUGINS` 就是从那里来的），渲染成台账 + 条款两块碎片。"""
+    en = lang == "en"
+    total_caps = sum(len(p["capabilities"]) for p in OFFICIAL_PLUGINS)
+    rows = [
+        (
+            f'{p["category"]} · {p["id"]}',
+            f'{len(p["capabilities"])} {"capabilities" if en else "项能力"} · '
+            + (", ".join(p["protocols"]) if p["protocols"] else ("no protocols" if en else "不声明协议")),
+        )
+        for p in OFFICIAL_PLUGINS
+    ]
+    refusals = [
+        (
+            p["name"],
+            " · ".join(p["refuses"][lang]),
+        )
+        for p in OFFICIAL_PLUGINS
+    ]
+    return section(
+        "Capabilities, and what is refused" if en else "能力，以及被拒绝的东西",
+        (
+            f'<p>Between them the two official plugins declare {total_caps} capabilities. Everything '
+            "they will not do is listed beside it — a refusal is a feature when the alternative is a "
+            "corrupt file.</p>"
+            if en
+            else f'<p>两个官方插件一共声明了 {total_caps} 项能力。它们不做的事情都列在旁边 —— '
+            "当另一种做法是产出一个损坏的文件时，「拒绝」本身就是功能。</p>"
+        )
+        + fragments.readout(
+            "declared capabilities" if en else "声明的能力",
+            rows,
+            (
+                "Read from each plugin's turbodl-plugin.json."
+                if en
+                else "从各插件的 turbodl-plugin.json 里读出来的。"
+            ),
+        )
+        + fragments.readout(
+            "explicitly refused" if en else "明确拒绝",
+            refusals,
+            (
+                "An unsupported stream fails loudly rather than producing a file that looks fine."
+                if en
+                else "不支持的流会响亮地失败，而不是产出一个看起来正常的文件。"
+            ),
+        ),
     )
 
 
@@ -928,6 +929,7 @@ def _page_plugins(lang: str, href) -> str:
            if en else "项目自带两个插件；事实上其它东西也都是插件 —— Kotlin 加载器、HTTP 后端、HLS 适配器。"
            "内核本身不认识任何协议。"}</p></section>'
         + section("Official plugins" if en else "官方插件", plugin_cards(lang))
+        + _plugin_capability_fragment(lang)
         + section(
             "Plugin categories" if en else "插件分类",
             (
@@ -936,7 +938,19 @@ def _page_plugins(lang: str, href) -> str:
                 if en
                 else "<p>插件在清单里声明一个分类。分类只说明它能接到哪里，不说明别的。</p>"
             )
-            + table(["Category", "What it plugs in"] if en else ["分类", "接到哪里"], cat_rows),
+            # 分类台账碎片：六条分类 + 各自的 id，与文档页的分类表同源
+            + fragments.readout(
+                "turbodl-plugin.json · category" if en else "turbodl-plugin.json · category",
+                [
+                    (k, v[lang])
+                    for k, v in PLUGIN_CATEGORIES
+                ],
+                (
+                    "The category is the whole of the runtime's authorization: it decides which extension points the plugin may register."
+                    if en
+                    else "分类就是这个运行时的全部授权依据：它决定插件可以注册哪些扩展点。"
+                ),
+            ),
         )
         + section(
             "Writing your own" if en else "写一个自己的插件",
@@ -965,6 +979,16 @@ def _page_plugins(lang: str, href) -> str:
                     ("Development convention" if en else "开发规范", f"{BLOB}/docs/plugins/CONVENTION.md"),
                     ("Marketplace" if en else "插件市场", f"{BLOB}/docs/plugins/MARKET.md"),
                 ]
+            )
+            # 清单碎片：写插件要照着填的那份文件（与文档页的清单引用同源）
+            + fragments.manifest_block(
+                "turbodl-plugin.json",
+                json.dumps(MANIFEST_EXAMPLE, indent=2, ensure_ascii=False),
+                (
+                    "Six required fields, one category, one entry point. The reference page lists every field and its allowed values."
+                    if en
+                    else "六个必填字段、一个分类、一个入口。参考页列了每个字段与允许的取值。"
+                ),
             ),
         )
         + section(
@@ -1052,6 +1076,32 @@ def _page_docs(lang: str, href) -> str:
         )
         + "</section>"
         + section(
+            "Every page here is a file" if en else "这里的每一页都是一个文件",
+            (
+                "<p>This table is the whole of the documentation set: the repository path on the left, "
+                "the page it becomes on the right. Build the site and the two are rendered from the same "
+                "source, so a change to either side shows up on the other.</p>"
+                if en
+                else "<p>下表就是全部文档：左边是仓库里的路径，右边是它变成的页面。"
+                "重建站点时两边由同一个源渲染，改任何一边都会反映到另一边。</p>"
+            )
+            + fragments.readout(
+                "docs/ → site" if en else "docs/ → 网站",
+                [
+                    (
+                        (d["src_zh"] if lang == "zh" and d.get("src_zh") else d.get("src_en") or "") or "—",
+                        d["title"][lang],
+                    )
+                    for d in DOC_PAGES
+                ],
+                (
+                    "Pages without a translation fall back to the other language and say so at the top."
+                    if en
+                    else "没有对应语言版本的那几页会退回另一种语言的原文，并在页首说明。"
+                ),
+            ),
+        )
+        + section(
             "Start here" if en else "从这三页开始",
             quick
             + code_block(
@@ -1071,10 +1121,145 @@ val result = client.await(id)""".replace("VERSION", LATEST_VERSION),
 java -jar turbodl-cli-{v}-all.jar <url> --json       # NDJSON
 java -jar turbodl-cli-{v}-all.jar --batch tasks.txt  # one URL per line""".replace("{v}", LATEST_VERSION),
                 "shell",
+            )
+            # 控制台碎片：`--json` 到底输出什么（字段名来自 Main.kt 的 progress 事件）
+            + fragments.console(
+                [
+                    '{"type":"start","url":"<url>","output":"out.bin"}',
+                    '{"type":"timing","stage":"metadata","t_ms":184,"probe_ms":96,"resume":""}',
+                    '{"type":"progress","state":"downloading","downloaded":222732288,"total":358411469,"percent":62,"speed":19503514,"connections":16,"eta_ms":7020}',
+                    '{"type":"completed","url":"<url>","file":"out.bin","bytes":358411469,"sha256":"0f3a…"}',
+                    '{"type":"summary","total":1,"failed":0}',
+                ],
+                "turbodl --json · stdout" if en else "turbodl --json · 标准输出",
+            ),
+        )
+        + section(
+            "The whole config surface" if en else "全部配置面",
+            (
+                "<p>Nine fields, all public, all with a documented range. Nothing else is tunable at "
+                "run time — the engine has no hidden knobs and no phone-home defaults.</p>"
+                if en
+                else "<p>九个字段，全部公开、全部有明确取值域。运行时没有别的可调项 —— "
+                "引擎没有隐藏旋钮，也没有打电话回家的默认值。</p>"
+            )
+            # 字段台账碎片：与首页的开关横带同源（TurboConfig.kt 的字段与取值域）
+            + fragments.readout(
+                "TurboConfig" if en else "TurboConfig 的字段",
+                [
+                    ("maxConnectionsPerTask", "16 · 1..256"),
+                    ("maxConcurrentTasks", "3 · 1..64"),
+                    ("globalSpeedLimitBytesPerSec", "0 = unlimited"),
+                    ("maxRetries", "5 · 0..50, per segment"),
+                    ("dynamicSegmentation", "true"),
+                    ("tailAssist / tailAssistMinBytes", "true · 2 MiB"),
+                    ("overlapMerge / bufferedSegmentWrite", "false · false"),
+                    ("minSegmentSize / blockSize", "64 KiB · 16 MiB"),
+                    ("proxy / dns / trustAllCerts", "Direct · System · Manual · PAC / System · StaticHosts · DoH"),
+                ],
+                (
+                    "Values are the defaults in TurboConfig.kt; every one of them can be set per client."
+                    if en
+                    else "取值是 TurboConfig.kt 里的默认值；每一个都能按 client 单独设置。"
+                ),
+            ),
+        )
+        + section(
+            "What a plugin manifest looks like" if en else "一份插件清单长什么样",
+            (
+                "<p>A plugin is a JAR plus this file. The reference page lists every field, its type, "
+                "whether it is required, and the allowed values.</p>"
+                if en
+                else "<p>一个插件 = 一个 JAR + 这个文件。参考页列了每个字段的类型、是否必填、以及允许的取值。</p>"
+            )
+            + fragments.manifest_block(
+                "turbodl-plugin.json" if en else "turbodl-plugin.json",
+                json.dumps(MANIFEST_EXAMPLE, indent=2, ensure_ascii=False),
+                (
+                    "The same file the manifest reference renders, so the two pages cannot disagree."
+                    if en
+                    else "与「清单字段参考」那一页用同一个常量渲染，两页不会各说各话。"
+                ),
             ),
         )
         + "".join(groups)
         + section("Architecture" if en else "架构", arch)
+    )
+
+
+def _excerpt(text: str) -> str:
+    """把 Release 说明的摘要转成一段能读的文本。
+
+    摘要是从 GitHub 的 Markdown 正文里截出来的（`refresh_releases.py` 抓的），所以带着
+    `**强调**`、`` `代码` `` 与行首的 `·` 项目符号。这里是一段摘要而不是清单，
+    所以：强调保留成粗体、代码标记去掉、项目符号去掉 —— 不然页面上会露出字面的 `**`。
+    """
+    if not text:
+        return ""
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", esc(text))
+    out = re.sub(r"`([^`]+)`", r"\1", out)
+    out = re.sub(r"(?m)^\s*[·•\-]\s*", "", out)
+    # 摘要是截断的，所以可能留下**半个**标记（`**原生插件（L2）的加载契约**…` 被切断），
+    # 成对的已经换成 <strong>，剩下的孤立标记直接去掉。
+    return out.replace("**", "").strip()
+
+
+def _release_ledger(lang: str, limit: int = 12) -> str:
+    """发布台账碎片：日期、附件数、是否预发布 —— 与下载页渲染同一份 `releases.json`。"""
+    en = lang == "en"
+    return fragments.readout(
+        "releases.json" if en else "releases.json",
+        [
+            (
+                r["tag"] + (" (pre)" if r["prerelease"] else ""),
+                f'{(r["published"] or "")[:10]} · {len(r["assets"])} {"assets" if en else "个附件"}',
+            )
+            for r in RELEASES[:limit]
+        ],
+        (
+            "Fetched from the GitHub API by website/refresh_releases.py and committed — the site never calls the API at runtime."
+            if en
+            else "由 website/refresh_releases.py 从 GitHub API 抓取后提交进仓库 —— 站点运行时不会去调 API。"
+        ),
+    )
+
+
+def _latest_assets_readout(lang: str) -> str:
+    """最新一次发布的附件清单（文件名与大小来自 `releases.json`）。"""
+    en = lang == "en"
+    from sitekit import fmt_bytes
+
+    return fragments.readout(
+        f'{LATEST["tag"]} · {"assets" if en else "附件"}' if en else f'{LATEST["tag"]} · 附件',
+        [
+            (a["name"], fmt_bytes(int(a.get("size") or 0)))
+            for a in LATEST["assets"]
+        ],
+        (
+            "The same list the download page renders, from the same API response."
+            if en
+            else "与下载页列的是同一份清单，来自同一次 API 响应。"
+        ),
+    )
+
+
+def _release_pipeline(lang: str) -> str:
+    """一次发布是怎么变成官网上一条记录的：这条链上每一步都是真的。"""
+    en = lang == "en"
+    return fragments.readout(
+        "how this page is built" if en else "这一页是怎么来的",
+        [
+            ("git tag + GitHub release", "the release notes you read below" if en else "下面读到的发布说明"),
+            ("website/refresh_releases.py", "pulls tag, date, assets and body via the API" if en else "通过 API 抓 tag、日期、附件与正文"),
+            ("website/data/releases.json", "committed to the repository" if en else "提交进仓库"),
+            ("python website/build.py", "this page and the download page" if en else "这一页与下载页"),
+            ("website/check_links.py", "1404 internal links, every build" if en else "每次构建检查 1404 条站内链接"),
+        ],
+        (
+            "No hand-typed versions, dates or file names anywhere on the site."
+            if en
+            else "整站没有任何手写的版本号、日期或文件名。"
+        ),
     )
 
 
@@ -1087,8 +1272,8 @@ def _page_changelog(lang: str, href) -> str:
             f'<p class="small">{len(r["assets"])} {"files" if en else "个文件"} · '
             f'<a href="{esc(r["url"])}">{"release page" if en else "发布页"}</a></p>'
         )
-        summary = r["summary"].strip()
-        body = f'<p class="muted">{esc(summary)}</p>' if summary else ""
+        summary = _excerpt(r["summary"])
+        body = f'<p class="muted">{summary}</p>' if summary else ""
         entries.append(
             f'<div class="card"><h3><span class="mono">{esc(r["tag"])}</span>{badge}</h3>'
             f'<p class="small">{esc((r["published"] or "")[:10])}</p>{body}{assets}</div>'
@@ -1097,7 +1282,63 @@ def _page_changelog(lang: str, href) -> str:
         f'<section><h1>{"Changelog" if en else "更新日志"}</h1>'
         + f'<p class="lead">{"Generated from the release notes themselves — each entry links to its own "
            "release page, where the full text and the files live." if en else "由发布说明本身生成 —— 每条都链到对应的发布页，完整正文与文件都在那里。"}</p></section>'
+        # 版本台账碎片：这些数字就是 releases.json 里的数字（发布日、附件数、预发布标记），
+        # 一眼能看出"哪一版动了多少东西"，比十二条卡片的摘要更适合比较。
+        + section(
+            "Release ledger" if en else "发布台账",
+            (
+                "<p>Every published release with its date, its attachment count and whether it was a "
+                "prerelease. Nothing here is summarized by hand — the table is the same data the download "
+                "page renders.</p>"
+                if en
+                else "<p>每次发布、日期、附件数、是否预发布。这里没有一处是手写摘要 —— "
+                "这张表与下载页渲染的是同一份数据。</p>"
+            )
+            + fragments.readout(
+                "releases.json" if en else "releases.json",
+                [
+                    (
+                        r["tag"] + (" (pre)" if r["prerelease"] else ""),
+                        f'{(r["published"] or "")[:10]} · {len(r["assets"])} {"assets" if en else "个附件"}',
+                    )
+                    for r in RELEASES[:12]
+                ],
+                (
+                    "Fetched from the GitHub API by website/refresh_releases.py and committed — the site never calls the API at runtime."
+                    if en
+                    else "由 website/refresh_releases.py 从 GitHub API 抓取后提交进仓库 —— 站点运行时不会去调 API。"
+                ),
+            )
+            # 第二次台账：把「每次发布动了多少东西」按附件数排一遍 —— 比十二条摘要更容易比较
+            + fragments.readout(
+                "by size" if en else "按体量排",
+                [
+                    (
+                        f'{len(r["assets"])} {"assets" if en else "个附件"} · '
+                        + ("prerelease" if r["prerelease"] else ("release" if en else "正式版")),
+                        f'{r["tag"]} · {(r["published"] or "")[:10]}',
+                    )
+                    for r in sorted(RELEASES[:12], key=lambda x: -len(x["assets"]))[:6]
+                ],
+                (
+                    "The first six releases by attachment count. A jump here usually means a new artifact was added to the build."
+                    if en
+                    else "按附件数排的前六次发布。这里突然多出来，通常意味着构建里新加了一个产物。"
+                ),
+            ),
+        )
         + f'<section><div class="cards cols-2">{"".join(entries)}</div></section>'
+        # 最新一次的附件清单 + 这一页怎么生成的：两块台账，把"数字从哪来"讲清楚
+        + section(
+            f'What shipped in {LATEST["tag"]}' if en else f'{LATEST["tag"]} 里发了什么',
+            (
+                "<p>The newest release, file by file. Sizes are the API's own numbers.</p>"
+                if en
+                else "<p>最新一次发布，逐个文件列出来。大小就是 API 给的数字。</p>"
+            )
+            + _latest_assets_readout(lang)
+            + _release_pipeline(lang),
+        )
         + section(
             "Full history" if en else "完整历史",
             buttons([("All releases" if en else "全部发布", f"{REPO}/releases"), ("Tags" if en else "标签", f"{REPO}/tags")]),
@@ -1137,8 +1378,79 @@ def _page_community(lang: str, href) -> str:
         f'<section><h1>{esc("Community" if en else "社区")}</h1>'
         + f'<p class="lead">{esc("There is no chat server and no QQ group. Everything happens in the "
            "repository, where it is searchable and permanent." if en else "没有聊天服务器，也没有 QQ 群。所有事情都在仓库里发生，可搜索、可追溯。")}</p></section>'
+        # 三次互动各自的去处：这份台账就是"没有聊天群"的替代说明（比一句"欢迎来讨论"具体）
+        + section(
+            "Where each kind of question goes" if en else "每类问题去哪里",
+            (
+                "<p>No chat, so the routes are explicit. Nothing on this site is a dead end.</p>"
+                if en
+                else "<p>没有聊天群，所以路线写明确。这个站点上没有走不通的入口。</p>"
+            )
+            + fragments.readout(
+                "routes" if en else "去处",
+                [
+                    ("bug report / feature request", f"{REPO.split('//')[-1]}/issues"),
+                    ("questions", f"{REPO.split('//')[-1]}/issues" + (" (Discussions is not enabled)" if en else "（未开启 Discussions）")),
+                    ("patches", f"{REPO.split('//')[-1]}/pulls" + (" — run ./gradlew test first" if en else " —— 先跑 ./gradlew test")),
+                    ("security", "see SECURITY notes in the repository" if en else "见仓库里的安全说明"),
+                    ("everything else", "README.md" if en else "README.md"),
+                ],
+                (
+                    "Searchable and permanent, which a chat log is not."
+                    if en
+                    else "可搜索、可追溯 —— 聊天记录做不到这两点。"
+                ),
+            ),
+        )
         + section("Issues" if en else "问题反馈", issue + buttons([("Open an issue" if en else "提交 issue", f"{REPO}/issues")]))
+        # 提交前要过的检查台账：这些都是仓库里真实的命令与门槛，不是"欢迎贡献"的空话
+        + section(
+            "Before you open a pull request" if en else "提 PR 之前要过的几关",
+            (
+                "<p>These are the same steps the maintainer runs. Nothing secret, nothing extra.</p>"
+                if en
+                else "<p>下面就是维护者自己走的步骤。没有隐藏关卡，也没有额外要求。</p>"
+            )
+            + fragments.readout(
+                "the checklist" if en else "检查清单",
+                [
+                    ("./gradlew test", f"258 {'cases, 0 skipped, 0 failed' if en else '个用例，0 跳过，0 失败'}"),
+                    ("dependency direction", "runtime → core" if en else "runtime → core（绝不反向）"),
+                    ("plugin manifest", "turbodl-plugin.schema.json" if en else "turbodl-plugin.schema.json"),
+                    ("docs", "one file in the repository per page" if en else "官网每一页 = 仓库里的一个文件"),
+                ],
+                (
+                    "The suite covers byte-level correctness, resume and the plugin lifecycle; a change that breaks it is a change that is not ready."
+                    if en
+                    else "这套测试覆盖字节级正确性、续传与插件生命周期；跑不过的改动就是还没准备好的改动。"
+                ),
+            ),
+        )
         + section("Discussions" if en else "讨论", disc)
+        # 一份真实 issue 报告要带的东西 —— 这是"欢迎反馈"能不能用的关键
+        + section(
+            "What a useful report contains" if en else "一份有用的报告包含什么",
+            (
+                "<p>Four fields, and a report missing any of them usually turns into three round trips "
+                "of questions.</p>"
+                if en
+                else "<p>四个字段；少任何一个，通常就要多来回问三轮。</p>"
+            )
+            + fragments.readout(
+                "the template" if en else "模板",
+                [
+                    ("version", LATEST["tag"]),
+                    ("JDK", "output of java -version" if en else "java -version 的输出"),
+                    ("target", "the URL, or a minimal reproduction" if en else "目标链接，或最小复现"),
+                    ("expected / actual", "what you expected instead" if en else "你期望的结果是什么"),
+                ],
+                (
+                    "Nothing else is required, and nothing is collected automatically."
+                    if en
+                    else "不需要别的，也不会自动收集任何信息。"
+                ),
+            ),
+        )
         + section(
             "Contributing" if en else "参与贡献",
             (
@@ -1161,6 +1473,23 @@ def _page_community(lang: str, href) -> str:
                     ("Third-party components" if en else "第三方组件", href("legal-third-party")),
                     ("Terms of use" if en else "使用条款", href("legal-terms")),
                 ]
+            )
+            # 协议台账：MIT 允许什么、附加条款管什么（每条都能在 docs/legal/ 里核对）
+            + fragments.readout(
+                "what MIT lets you do" if en else "MIT 允许你做什么",
+                [
+                    ("use commercially", "yes" if en else "可以"),
+                    ("modify", "yes" if en else "可以"),
+                    ("distribute", "yes" if en else "可以"),
+                    ("sublicense", "yes" if en else "可以"),
+                    ("must keep the copyright notice", "yes" if en else "需要保留版权声明"),
+                    ("plugins", "independent works, any license" if en else "独立作品，可自带任何协议"),
+                ],
+                (
+                    "The project's own code is MIT; the plugin-ecosystem terms only clarify that interacting through the public API does not make a plugin a derivative."
+                    if en
+                    else "项目自身的代码是 MIT；插件生态条款只说明一件事：通过公开 API 交互不会让插件变成衍生物。"
+                ),
             ),
         )
         + section(
@@ -1211,7 +1540,7 @@ def plugin_cards(lang: str) -> str:
         items.append(
             (
                 p["name"],
-                f"<p>{p['summary'][lang]}</p>"
+                f"<p>{md_inline(p['summary'][lang])}</p>"
                 f'<p class="small mono">dev.turbodl:{esc(p["artifact"])}:{LATEST_VERSION}</p>'
                 f'<div class="card-meta">{meta}</div>'
                 f'<div class="btn-row tight"><a class="btn" href="{{LINK:{p["key"]}}}">{more}</a></div>',
@@ -1337,6 +1666,132 @@ def _footer(lang: str) -> dict:
     }
 
 
+def _third_party_section(lang: str) -> str:
+    """从 `docs/legal/THIRD-PARTY.md` 里读运行时依赖，渲染成一块台账碎片。
+
+    为什么读文件而不是抄一份：那份文档是**准的**（它是给集成者看的），抄进
+    content.py 就多了一处要跟着版本走的地方 —— 版本号一升，两边必然分家。
+    解析失败就不显示这一节（少一块，不是显示错的）。
+    """
+    en = lang == "en"
+    path = ROOT / "docs" / "legal" / "THIRD-PARTY.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    rows = re.findall(
+        r"^\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|",
+        text,
+        re.M,
+    )
+    if not rows:
+        return ""
+    items = [
+        (f"{name} · {version.strip()}", licence.strip())
+        for name, _url, version, licence, _used in rows
+    ]
+    return section(
+        "What comes along with it" if en else "它会连带引入什么",
+        (
+            "<p>Read out of <span class=\"mono\">docs/legal/THIRD-PARTY.md</span> at build time, so "
+            "this ledger and that file cannot disagree. Only <span class=\"mono\">turbodl-core</span> "
+            "is required; the JS loader is the one module that pulls in a native library.</p>"
+            if en
+            else "<p>构建时从 <span class=\"mono\">docs/legal/THIRD-PARTY.md</span> 里读出来的 —— "
+            "所以这块台账与那个文件不会各说各话。只有 <span class=\"mono\">turbodl-core</span> 是必需的；"
+            "引入本地库的只有 JS 加载器这一个模块。</p>"
+        )
+        + fragments.readout(
+            "Runtime dependencies" if en else "运行时依赖",
+            items,
+            (
+                "All permissively licensed (Apache-2.0 / MIT), so closed-source commercial integration is unproblematic."
+                if en
+                else "全部是宽松协议（Apache-2.0 / MIT），闭源商业集成没有障碍。"
+            ),
+        ),
+    )
+
+
+def _privacy_sections(lang: str) -> str:
+    """从 `docs/legal/PRIVACY.md` 里读两张表（什么时候走网络 / 什么落到磁盘），
+    渲染成两块台账碎片。与第三方依赖那块同一个理由：文件是准的，抄一份就会分家。"""
+    en = lang == "en"
+    path = ROOT / "docs" / "legal" / "PRIVACY.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+    def table_rows(header_word: str) -> list[tuple[str, str]]:
+        """截取某个小标题之后的第一张表（表头行与分隔行都跳过）。"""
+        i = text.find(header_word)
+        if i < 0:
+            return []
+        chunk = text[i:]
+        rows: list[tuple[str, str]] = []
+        for line in chunk.split("\n")[1:]:
+            if not line.startswith("|"):
+                if rows:
+                    break
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if len(cells) < 2 or set(cells[0]) <= set("-: "):
+                continue
+            if cells[0] in ("Moment", "File"):
+                continue
+            # 正文里的行内代码标记去掉，值里的反引号不适合台账
+            value = cells[1].replace("`", "")
+            rows.append((cells[0], value))
+        return rows
+
+    net = table_rows("## When it touches the network")
+    disk = table_rows("## What lands on disk")
+    parts = []
+    if net:
+        parts.append(
+            section(
+                "When it touches the network" if en else "什么时候会走网络",
+                (
+                    "<p>Five moments, and every one of them starts with something you asked for. "
+                    "Read out of the privacy document at build time.</p>"
+                    if en
+                    else "<p>五个时机，每一个都由你发起的动作开始。构建时从隐私文档里读出来。</p>"
+                )
+                + fragments.readout(
+                    "outbound requests" if en else "出站请求",
+                    net,
+                    (
+                        "No heartbeat, no telemetry ping, no request fired off in the background."
+                        if en
+                        else "没有心跳、没有遥测、没有在后台自己发出去的请求。"
+                    ),
+                ),
+            )
+        )
+    if disk:
+        parts.append(
+            section(
+                "What lands on disk" if en else "什么会落到磁盘上",
+                (
+                    "<p>Three kinds of files, all next to something you named.</p>"
+                    if en
+                    else "<p>三类文件，都在你指定过的地方旁边。</p>"
+                )
+                + fragments.readout(
+                    "files" if en else "文件",
+                    disk,
+                    (
+                        "The resume state is cleaned up when a task finishes; the JS sandbox exists only if the JS loader is used."
+                        if en
+                        else "续传状态在任务结束时清理；JS 沙箱只在用到 JS 加载器时才存在。"
+                    ),
+                ),
+            )
+        )
+    return "".join(parts)
+
+
 def _page_legal(lang: str, href) -> str:
     """协议与说明的入口页。"""
     en = lang == "en"
@@ -1368,6 +1823,28 @@ def _page_legal(lang: str, href) -> str:
         )
         + "</section>"
         + section("The documents" if en else "这四份", cards(items, columns=2))
+        # 第三方依赖台账：直接读 docs/legal/THIRD-PARTY.md（唯一真源）
+        + _third_party_section(lang)
+        # 隐私两张表：直接读 docs/legal/PRIVACY.md
+        + _privacy_sections(lang)
+        # 协议台账碎片：四份文档各自的仓库路径与它在管什么 —— 比一堆卡片更好查
+        + section(
+            "What each one covers" if en else "每一份管什么",
+            f'<p>{"Four files, four questions. If two of them seem to overlap, the repository path tells you which one is authoritative." if en else "四个文件、四个问题。如果其中两份看着有重叠，仓库路径能告诉你哪一份是准的。"}</p>'
+            + fragments.readout(
+                "docs/ and the repository root" if en else "docs/ 与仓库根目录",
+                [
+                    (d["src_en"] or "—", d["title"][lang])
+                    for d in DOC_PAGES
+                    if d["group"] == "legal"
+                ],
+                (
+                    "These pages are rendered from those files, so a change to the file changes the page."
+                    if en
+                    else "这些页面就是从那些文件渲染的，改文件即改页面。"
+                ),
+            ),
+        )
         + section(
             "Why these are written plainly" if en else "为什么写得这么直白",
             (
@@ -1429,7 +1906,8 @@ def _pages() -> list:
                     "lang": lang,
                     "path": f"{prefix}/{p['artifact']}/index.html",
                     "title": p["name"],
-                    "desc": p["summary"][lang],
+                    # meta description 是纯文本（搜索结果的摘要），去掉 Markdown 的强调标记
+                    "desc": re.sub(r"\*\*", "", p["summary"][lang]),
                     "body": (lambda pp: (lambda l, h: _plugin_detail(pp, l, h)))(p),
                     "breadcrumb": [
                         ({"en": "Plugins", "zh": "插件"}[lang], "plugins"),
@@ -1463,6 +1941,7 @@ def _pages() -> list:
 SITE = {
     "name": "TurboDL",
     "tagline": "Multi-threaded download engine for the JVM",
+    "repo": REPO,
     "base_url": "https://jiayuxuan123.github.io/TurboDL",
     "out_dir": "docs",
     "assets_dir": "website/assets",
@@ -1478,8 +1957,8 @@ SITE = {
     ),
     "nav": _nav(),
     "ui": {
-        "en": {"skip": "Skip to content", "menu": "Menu", "theme": "Toggle dark / light theme", "notfound_title": "Page not found", "notfound_body": "That address does not exist on this site. Everything is one of these:"},
-        "zh": {"skip": "跳到正文", "menu": "菜单", "theme": "切换深色 / 浅色主题", "notfound_title": "页面不存在", "notfound_body": "这个地址在本站不存在。全部内容就在下面这几处："},
+        "en": {"skip": "Skip to content", "menu": "Menu", "notfound_title": "Page not found", "notfound_body": "That address does not exist on this site. Everything is one of these:"},
+        "zh": {"skip": "跳到正文", "menu": "菜单", "notfound_title": "页面不存在", "notfound_body": "这个地址在本站不存在。全部内容就在下面这几处："},
     },
     "footer": {"en": _footer("en"), "zh": _footer("zh")},
     "pages": _pages(),

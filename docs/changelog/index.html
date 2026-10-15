@@ -13,142 +13,144 @@
 <meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/changelog/index.html">
 <meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#08090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0a0a0a">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../assets/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
-<!-- 主题：在样式表之前定下 data-theme，避免深色偏好下闪一帧白 -->
-<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
-<!-- Pico（classless，MIT）在前，site.css 在后：我们的规则覆盖它 -->
-<link rel="stylesheet" href="../assets/pico.min.css">
+<!-- 入场动效只在 html 有 .js 时才生效：脚本没跑起来，内容照样完整可见。
+     没有主题切换按钮：这一版只有深色一种底色（方向单指定的调色板），
+     放一个切了没反应的开关不如不放。 -->
+<script>document.documentElement.className+=" js";setTimeout(function(){if(!window.__motionReady){var n=document.querySelectorAll(".rise, .hl-layer");for(var i=0;i<n.length;i++)n[i].classList.add("in")}},2500);</script>
+<!-- 单一样式表：上一版依赖 Pico（classless）再逐条覆盖它，重构后规则全在 site.css 里 -->
 <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body class="brand-turbodl">
 <a class="skip" href="#main">Skip to content</a>
 <div class="app">
-<aside class="side" id="site-nav">
+<aside class="side">
 <div class="side-top">
 <a class="brand" href="../index.html"><span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span><span class="brand-name">TurboDL</span></a>
-<button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="side-nav">Menu</button>
 </div>
-<nav class="side-nav"><a href="../index.html">Overview</a><a href="../download/index.html">Download</a><a href="../plugins/index.html">Plugins</a><a href="../docs/index.html">Docs</a></nav>
-<div class="side-tools"><div class="langs"><span class="lang-cur">English</span><a href="../zh/changelog/index.html">中文</a></div><button class="theme-toggle" type="button" aria-label="Toggle dark / light theme" title="Toggle dark / light theme"><svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></div>
+<div class="side-tools"><div class="langs"><span class="lang-cur">English</span><a href="../zh/changelog/index.html">中文</a></div></div>
+<nav class="side-nav" id="side-nav"><a href="../index.html">Overview</a><a href="../download/index.html">Download</a><a href="../plugins/index.html">Plugins</a><a href="../docs/index.html">Docs</a></nav>
 </aside>
 <main id="main" class="canvas">
-<section><h1>Changelog</h1><p class="lead">Generated from the release notes themselves — each entry links to its own release page, where the full text and the files live.</p></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.2.0</span></h3><p class="small">2026-10-11</p><p class="muted">TurboDL 0.2.2.0
+<section><h1>Changelog</h1><p class="lead">Generated from the release notes themselves — each entry links to its own release page, where the full text and the files live.</p></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Release ledger</h2><p>Every published release with its date, its attachment count and whether it was a prerelease. Nothing here is summarized by hand — the table is the same data the download page renders.</p><div class="readout" data-ui><p class="readout-title">releases.json</p><div class="readout-body"><div class="readout-row"><span class="readout-key">v0.2.2.0</span><span class="readout-val">2026-10-11 · 16 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.1.0</span><span class="readout-val">2026-10-10 · 17 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.9</span><span class="readout-val">2026-10-10 · 17 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.8</span><span class="readout-val">2026-10-10 · 17 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.7</span><span class="readout-val">2026-10-09 · 17 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.6</span><span class="readout-val">2026-10-08 · 17 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.5</span><span class="readout-val">2026-10-07 · 13 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.4</span><span class="readout-val">2026-09-30 · 13 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.3</span><span class="readout-val">2026-09-29 · 13 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.2</span><span class="readout-val">2026-09-29 · 13 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0.1</span><span class="readout-val">2026-09-29 · 13 assets</span></div><div class="readout-row"><span class="readout-key">v0.2.0-rc9 (pre)</span><span class="readout-val">2026-08-30 · 5 assets</span></div></div><p class="readout-foot">Fetched from the GitHub API by website/refresh_releases.py and committed — the site never calls the API at runtime.</p></div><div class="readout" data-ui><p class="readout-title">by size</p><div class="readout-body"><div class="readout-row"><span class="readout-key">17 assets · release</span><span class="readout-val">v0.2.1.0 · 2026-10-10</span></div><div class="readout-row"><span class="readout-key">17 assets · release</span><span class="readout-val">v0.2.0.9 · 2026-10-10</span></div><div class="readout-row"><span class="readout-key">17 assets · release</span><span class="readout-val">v0.2.0.8 · 2026-10-10</span></div><div class="readout-row"><span class="readout-key">17 assets · release</span><span class="readout-val">v0.2.0.7 · 2026-10-09</span></div><div class="readout-row"><span class="readout-key">17 assets · release</span><span class="readout-val">v0.2.0.6 · 2026-10-08</span></div><div class="readout-row"><span class="readout-key">16 assets · release</span><span class="readout-val">v0.2.2.0 · 2026-10-11</span></div></div><p class="readout-foot">The first six releases by attachment count. A jump here usually means a new artifact was added to the build.</p></div></section><section><div class="cards cols-2"><div class="card"><h3><span class="mono">v0.2.2.0</span></h3><p class="small">2026-10-11</p><p class="muted">TurboDL 0.2.2.0
 这一版主要是修了一个会让「继续下载」完全没反应的缺陷，另外补上原生插件（L2）的加载契约和文件处理器挂载点。
 修复：暂停后点「继续」没有任何反应
-`resume()` 原来在协程内部移除并等待旧任务结束，而 `jobs.putIfAbsent` 是紧接着同步执行的。那个协程此时还没被调度，旧任务仍在表里，于是 `resume` 认为「已经有任务在跑」，返回失败并取消刚创建的协程。结果是用户点了继续，任务永远不会到达完成或失败状态。
+resume() 原来在协程内部移除并等待旧任务结束，而 jobs.putIfAbsent 是紧接着同步执行的。那个协程此时还没被调度，旧任务仍在表里，于是 resume 认为「已经有任务在跑」，返回失败并取消刚创建的协程。结果是用户点了继续，任务永远不会到达完成或失败状态。
 现在改成同步等待旧任务结束后再启动新任务。端到端测试覆盖了这条路径：暂停、等待、继续，然后校验最终文件逐字节正确。
 新增
-· **原生插件（L2）的加载契约**：定义插件来源、加载器接口与加载失败分类。引擎侧只定义契约，实际的类加载由宿主实现——引擎是纯 JVM 库，不包含 Android 的 dex 机制。
-· **文件处理器挂…</p><p class="small">16 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.2.0">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.1.0</span></h3><p class="small">2026-10-10</p><p class="muted">Three evaluations, each ending with a decision. Two of them contradict
+<strong>原生插件（L2）的加载契约</strong>：定义插件来源、加载器接口与加载失败分类。引擎侧只定义契约，实际的类加载由宿主实现——引擎是纯 JVM 库，不包含 Android 的 dex 机制。
+文件处理器挂…</p><p class="small">16 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.2.0">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.1.0</span></h3><p class="small">2026-10-10</p><p class="muted">Three evaluations, each ending with a decision. Two of them contradict
 what the code comments used to claim, so the corrections are the substance
 of this release.
-**Segment write buffering** (`bufferedSegmentWrite`, opt-in, default off)
+<strong>Segment write buffering</strong> (bufferedSegmentWrite, opt-in, default off)
 — measured on loopback, 16 MiB over 128 connections with 64 KiB segments,
 interleaved rounds taking the median: direct 2576 ms vs buffered 2584 ms.
 A 0.3% differen…</p><p class="small">17 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.1.0">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.9</span></h3><p class="small">2026-10-10</p><p class="muted">这次改了什么
-**引擎现在会自己收敛并发，而不是一直往设定值上堆连接。**
-慢启动照旧负责把并发爬到用户设定的线程数；爬到之后新增一层判断——用**任务总吞吐**（一段时间内真正写入的字节数）看这些连接到底有没有换来速度。没有就退回到更低的档位，稳定一段时间后再重新测一次。
+<strong>引擎现在会自己收敛并发，而不是一直往设定值上堆连接。</strong>
+慢启动照旧负责把并发爬到用户设定的线程数；爬到之后新增一层判断——用<strong>任务总吞吐</strong>（一段时间内真正写入的字节数）看这些连接到底有没有换来速度。没有就退回到更低的档位，稳定一段时间后再重新测一次。
 为什么这么做
 实测回环上 16 连接 30.6 MB/s，128 连接只有 6.1 MB/s —— 慢 5 倍。而真实链路上也存在「加连接不再变快」的聚合限速。以前的引擎在这两种情况下都不会自己退回来，用户只能看着速度掉下去。
-关键在于**不能拿「每连接速度低」当降档理由**：有些服务端是按连接限速的（每连接 12KB/s 那种），单连接速度本来就低，但总吞吐 = 单连接 × 连接数，此时加连接依然有效。所以判据只用总吞吐：
+关键在于<strong>不能拿「每连接速度低」当降档理由</strong>：有些服务端是按连接限速的（每连接 12KB/s 那种），单连接速度本来就低，但总吞吐 = 单连接 × 连接数，此时加连接依然有效。所以判据只用总吞吐：
 | 服务端行为 | 引擎的反应 |
 |---|---|
 | 每连接独立限速 | 下探会让吞吐腰…</p><p class="small">17 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.9">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.8</span></h3><p class="small">2026-10-10</p><p class="muted">TurboDL 0.2.0.8：读缓冲改为按并发摊薄
 修的是内存
-真机上出现过 `OutOfMemoryError`：堆 100% 占满（256MiB），崩在 Okio 的 Watchdog 线程上。
-看栈像是网络问题——它只是想关掉一个超时的 socket——但实际是**读缓冲把堆吃光了**。
+真机上出现过 OutOfMemoryError：堆 100% 占满（256MiB），崩在 Okio 的 Watchdog 线程上。
+看栈像是网络问题——它只是想关掉一个超时的 socket——但实际是<strong>读缓冲把堆吃光了</strong>。
 旧实现是「每个在飞连接固定分配 1MB」。这个数看起来不大，乘上连接数就大了，而连接数上限是 256：
-报错里的 `target footprint 268435456` 正是 256MiB，一字节不差。缓冲都是**活对象**
+报错里的 target footprint 268435456 正是 256MiB，一字节不差。缓冲都是<strong>活对象</strong>
 （正被下载协程引用），GC 一个都回收不掉，所以堆是&quot;占满&quot;而不是&quot;垃圾太多&quot;。
 触发条件很普通：线程数调高 + 下载一个大文件。
 改法
-新增 `ioBufferTotalBudgetBytes`（默认 32MB）作为**进程级**预算，单连接缓冲按并发摊开：
+新增 ioBufferTotalBudgetBytes（默认 32MB）作为<strong>进程级</strong>预算，单连接缓冲按并发摊开：
 | 场景 |…</p><p class="small">17 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.8">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.7</span></h3><p class="small">2026-10-09</p><p class="muted">TurboDL 0.2.0.7：插件协议声明 + 脚本预检 + 续传误判修正
 一个插件可以声明多个协议
 插件在清单里声明自己支持哪些协议，引擎在加载时建立「协议 → 插件」索引：
 此前是一个协议一个插件。分成太多插件的问题不在写法上，而在运行上：插件数量一多，加载与切换的开销、以及插件之间的选择冲突都会跟着涨。建立索引之后，按协议找插件是查表，不是每次遍历。
-能力名必须带命名空间（`dev.turbodl.cap.*`），裸字符串会被拒绝。这不是格式洁癖——两个插件声明同名能力时，没有命名空间就无法判断归属，而静默覆盖比直接报错难查得多。
+能力名必须带命名空间（dev.turbodl.cap.*），裸字符串会被拒绝。这不是格式洁癖——两个插件声明同名能力时，没有命名空间就无法判断归属，而静默覆盖比直接报错难查得多。
 脚本预检
-新增 `JsScriptValidator`：只解析、不执行。它把源码包进 `(function(){...})` 让脚本能编译但不运行，然后读出脚本申请了哪些权限、注册了哪些扩展点。
+新增 JsScriptValidator：只解析、不执行。它把源码包进 (function(){...}) 让脚本能编译但不运行，然后读出脚本申请了哪些权限、注册了哪些扩展点。
 这解决的是插件开发里最费时间的一类问题：脚本写错了，装上去…</p><p class="small">17 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.7">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.6</span></h3><p class="small">2026-10-08</p><p class="muted">TurboDL 0.2.0.6：新增 JavaScript 插件加载器（turbo-plugin-js）
----
+--
 新增：用 JavaScript 写 TurboDL 插件
-新模块 `turbo-plugin-js`（`dev.turbodl:turbo-plugin-js:0.2.0.6`）。它是一个
-`PluginLoaderProvider` 实现 —— 内核不认识 JS，Kotlin 加载器也不认识，只有你主动引入这个模块时
+新模块 turbo-plugin-js（dev.turbodl:turbo-plugin-js:0.2.0.6）。它是一个
+PluginLoaderProvider 实现 —— 内核不认识 JS，Kotlin 加载器也不认识，只有你主动引入这个模块时
 QuickJS 才会进入 classpath。
-脚本拿到的是 `host`/`plugin` 两套 ABI，仅此而已：算 URL、拼请求头、生成签名、读写自己的
-沙箱目录、写日志。它**不经手下载数据流**，也不能注册 `DownloadBackend` 或发布宿主服务 ——
+脚本拿到的是 host/plugin 两套 ABI，仅此而已：算 URL、拼请求头、生成签名、读写自己的
+沙箱目录、写日志。它<strong>不经手下载数据流</strong>，也不能注册 DownloadBackend 或发布宿主服务 ——
 这条边界是刻意的，它保证脚本不会变成带宽瓶颈。
 每个脚本一个 QuickJS runt…</p><p class="small">17 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.6">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.5</span></h3><p class="small">2026-10-07</p><p class="muted">TurboDL 0.2.0.5：释放链逐句兜底，避免一次异常截断后续清理
----
+--
 修复：一次异常会截断整条资源释放链
-**根因**：`connectionPool.evictAll()` 不是&quot;清空一个列表&quot;这么无害 ——
-它真的会 close 每条空闲连接的 socket（`RealConnectionPool.evictAll` → `Util.closeQuietly(socket)`）。
-关闭 TLS 连接要把 `close_notify` 告警**写出去**，这是一次网络写。
-而 OkHttp 的 `Util.closeQuietly` **只吞 `IOException`**：`NetworkOnMainThreadException`
-是 `RuntimeException`，会**原样穿透**到调用方。
-**后果**（Android 宿主真实场景）：宿主的 `ViewMod…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.5">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.4</span></h3><p class="small">2026-09-30</p><p class="muted">修复诊断探活在主线程被误报为「链接不可用」；新增出站地址预检
----
+<strong>根因</strong>：connectionPool.evictAll() 不是&quot;清空一个列表&quot;这么无害 ——
+它真的会 close 每条空闲连接的 socket（RealConnectionPool.evictAll → Util.closeQuietly(socket)）。
+关闭 TLS 连接要把 close_notify 告警<strong>写出去</strong>，这是一次网络写。
+而 OkHttp 的 Util.closeQuietly <strong>只吞 IOException</strong>：NetworkOnMainThreadException
+是 RuntimeException，会<strong>原样穿透</strong>到调用方。
+<strong>后果</strong>（Android 宿主真实场景）：宿主的 `ViewMod…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.5">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.4</span></h3><p class="small">2026-09-30</p><p class="muted">修复诊断探活在主线程被误报为「链接不可用」；新增出站地址预检
+--
 修复：诊断探活的线程调度问题
-**现象**：宿主应用在界面线程上调用 `checkReachable` 做诊断预检时，
-Android 抛出 `NetworkOnMainThreadException`。该异常会被探活的
+<strong>现象</strong>：宿主应用在界面线程上调用 checkReachable 做诊断预检时，
+Android 抛出 NetworkOnMainThreadException。该异常会被探活的
 异常处理捕获并转成「指定的链接不可用： NetworkOnMainThreadException: 无法连接 …」
 ——错误文案伪装成了链接问题，与链接本身好坏无关。
-**根因**：`probeAlive` 内部是 OkHttp 的阻塞 `execute()`。是否允许调用
+<strong>根因</strong>：probeAlive 内部是 OkHttp 的阻塞 execute()。是否允许调用
 完全取决于调用方所在的线程，而这一契约没有任何机制保证 —— 界面层
 很容易在主线程协程里直接调用（事实上已经被破坏了）。
-**修复**：
-1. 新增挂起版入口 `checkReachableAsync`：内部强制切换到 IO 调度…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.4">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.3</span></h3><p class="small">2026-09-29</p><p class="muted">新增 DNS 自动择优（含端点延迟可视化）；修复诊断功能不可用
----
+<strong>修复</strong>：
+1. 新增挂起版入口 checkReachableAsync：内部强制切换到 IO 调度…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.4">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.3</span></h3><p class="small">2026-09-29</p><p class="muted">新增 DNS 自动择优（含端点延迟可视化）；修复诊断功能不可用
+--
 新增：DNS 自动模式
-**此前的问题**：DNS 只能二选一 —— 「系统 DNS」或「手动填一个 DoH 地址」。
+<strong>此前的问题</strong>：DNS 只能二选一 —— 「系统 DNS」或「手动填一个 DoH 地址」。
 而用户很难知道哪个 DoH 在当前网络下可用。实测国内网络环境：
-**境外 DoH（Google / Cloudflare）完全不可达，境内 DoH（阿里 / 腾讯）可用**。
+<strong>境外 DoH（Google / Cloudflare）完全不可达，境内 DoH（阿里 / 腾讯）可用</strong>。
 用户往往先填境外那几个知名地址，结果&quot;开了 DoH 反而更慢甚至解析失败&quot;。
-**自动模式**：并发探测全部候选端点，采用**最快给出有效结果**的那个，
+<strong>自动模式</strong>：并发探测全部候选端点，采用<strong>最快给出有效结果</strong>的那个，
 并在之后 10 分钟内固定复用它；选定端点失效或超过有效期时重新择优；
 全部失败则回退系统 DNS。
-候选端点**国内优先**：阿里 → 腾讯 → Google → Cloudflare。
+候选端点<strong>国内优先</strong>：阿里 → 腾讯 → Google → Cloudflare。
 顺序只影响极端情况下的兜底，因为探测是并发的、取最快者。
-**为什么并发探测**：串…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.3">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.2</span></h3><p class="small">2026-09-29</p><p class="muted">HLS 插件安全加固：跨域凭证隔离、强制 HTTPS、逐跳重定向校验
+<strong>为什么并发探测</strong>：串…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.3">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.2</span></h3><p class="small">2026-09-29</p><p class="muted">HLS 插件安全加固：跨域凭证隔离、强制 HTTPS、逐跳重定向校验
 本次改进针对 HLS 下载链路的安全性。设计参考上游 [CYQawa/YunX](https://github.com/CYQawa/YunX)
-的 `HlsRequestPolicy`，并按本引擎的插件契约做了适配。
----
+的 HlsRequestPolicy，并按本引擎的插件契约做了适配。
+--
 修复：跨域请求会携带完整登录凭证
-**问题**：HLS 的播放列表由一个域名提供，但**分片、密钥、`EXT-X-MAP` 初始化段常放在另一个域名**
-（CDN / 对象存储）。原实现把调用方传入的请求头**无差别**附加到每一个请求上 ——
-其中包括网盘直链取播放列表所必需的 `Cookie` / `Authorization` / `Referer`。
+<strong>问题</strong>：HLS 的播放列表由一个域名提供，但<strong>分片、密钥、EXT-X-MAP 初始化段常放在另一个域名</strong>
+（CDN / 对象存储）。原实现把调用方传入的请求头<strong>无差别</strong>附加到每一个请求上 ——
+其中包括网盘直链取播放列表所必需的 Cookie / Authorization / Referer。
 后果是：一次 HLS 下载会把登录凭证发给每一个分片域名。若某个分片域名被劫持，
 或播放列表本身可控（攻击者构造清单诱导客户端），凭证即直接…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.2">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0.1</span></h3><p class="small">2026-09-29</p><p class="muted">引擎调度与合并提速；分片请求携带 If-Range；清理死代码
 本版参考 aria2-next 2.8.3 的实现逐条核实，将其中有实测数据支撑的设计吸收进本引擎。
 全部改动均以本地回环基准度量（服务端精确字节计数，零公网流量），每项均附前后对比。
----
+--
 性能
 测试条件：512MB 文件 / 64 连接 / 每连接限速 4MB/s / 注入 60ms RTT。
 | 指标 | 改前 | 改后 |
 |---|---|---|
-| 16 连接吞吐（相对 aria2-next） | 0.56x | **0.87x** |
-| 64 连接吞吐（相对 aria2-next） | 0.31x | **0.42x** |
-| 合并阶段耗时 | 3.80s | **0.27~1.58s** |
+| 16 连接吞吐（相对 aria2-next） | 0.56x | <strong>0.87x</strong> |
+| 64 连接吞吐（相对 aria2-next） | 0.31x | <strong>0.42x</strong> |
+| 合并阶段耗时 | 3.80s | <strong>0.27~1.58s</strong> |
 慢启动改为时间驱动 + 完成驱动双触发
-**问题**：原实现的并发爬升挂在「每 N 个分片成功」上，而分片时长…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.1">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc9</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-30</p><p class="muted">修复用户实测反馈的三个并发问题。
+<strong>问题</strong>：原实现的并发爬升挂在「每 N 个分片成功」上，而分片时长…</p><p class="small">13 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0.1">release page</a></p></div><div class="card"><h3><span class="mono">v0.2.0-rc9</span> <span class="chip">prerelease</span></h3><p class="small">2026-08-30</p><p class="muted">修复用户实测反馈的三个并发问题。
 1) 速度变快反而显示线程数下降（上报语义错误）
 上报的是「瞬时在飞分片数」，但 worker 完成一个分片到领取下一个之间存在空档。
 速度越快、分片完成越频繁，空档占比越大，采样到的数字反而越小 —— 于是出现「速度上去了、线程数掉下来」。
-改为上报 `min(目标并发, 在飞数 + 队列剩余)`，语义是「当前有多少连接在干活」；
+改为上报 min(目标并发, 在飞数 + 队列剩余)，语义是「当前有多少连接在干活」；
 收尾阶段剩余工作不足时数字下降属正确行为。
 2) 设 128 线程实际远达不到（爬升太慢）
-慢启动每次只 `+1`：从初始 4 爬到 128 需要 124 次上调、约 248 个成功分片，中小文件根本爬不到顶。
-改为**按比例上调**（当前值 × 0.5，至少 +1），十余次即到顶；慢启动初始值也从固定 4 改为 `max(4, 设定值/4)`。
+慢启动每次只 +1：从初始 4 爬到 128 需要 124 次上调、约 248 个成功分片，中小文件根本爬不到顶。
+改为<strong>按比例上调</strong>（当前值 × 0.5，至少 +1），十余次即到顶；慢启动初始值也从固定 4 改为 max(4, 设定值/4)。
 3) 弱网（2.4GHz Wi-Fi）下预热拖慢甚至像卡住
-预热此前按 `min…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc9">release page</a></p></div></div></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Full history</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">All releases</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">Tags</a></div></section></main>
+预热此前按 `min…</p><p class="small">5 files · <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc9">release page</a></p></div></div></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>What shipped in v0.2.2.0</h2><p>The newest release, file by file. Sizes are the API's own numbers.</p><div class="readout" data-ui><p class="readout-title">v0.2.2.0 · assets</p><div class="readout-body"><div class="readout-row"><span class="readout-key">turbo-plugin-bootstrap-0.2.2.0.jar</span><span class="readout-val">9 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-bootstrap-0.2.2.0.module</span><span class="readout-val">3 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-bootstrap-0.2.2.0.pom</span><span class="readout-val">1 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-hls-0.2.2.0.jar</span><span class="readout-val">67 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-hls-0.2.2.0.module</span><span class="readout-val">3 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-hls-0.2.2.0.pom</span><span class="readout-val">2 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-js-0.2.2.0.jar</span><span class="readout-val">211 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-js-0.2.2.0.module</span><span class="readout-val">3 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-js-0.2.2.0.pom</span><span class="readout-val">2 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-runtime-0.2.2.0.jar</span><span class="readout-val">104 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-runtime-0.2.2.0.module</span><span class="readout-val">3 KB</span></div><div class="readout-row"><span class="readout-key">turbo-plugin-runtime-0.2.2.0.pom</span><span class="readout-val">1 KB</span></div><div class="readout-row"><span class="readout-key">turbodl-core-0.2.2.0.jar</span><span class="readout-val">352 KB</span></div><div class="readout-row"><span class="readout-key">turbodl-core-0.2.2.0.module</span><span class="readout-val">3 KB</span></div><div class="readout-row"><span class="readout-key">turbodl-core-0.2.2.0.pom</span><span class="readout-val">1 KB</span></div><div class="readout-row"><span class="readout-key">TurboDL-v0.2.2.0-mavenLocal.zip</span><span class="readout-val">716 KB</span></div></div><p class="readout-foot">The same list the download page renders, from the same API response.</p></div><div class="readout" data-ui><p class="readout-title">how this page is built</p><div class="readout-body"><div class="readout-row"><span class="readout-key">git tag + GitHub release</span><span class="readout-val">the release notes you read below</span></div><div class="readout-row"><span class="readout-key">website/refresh_releases.py</span><span class="readout-val">pulls tag, date, assets and body via the API</span></div><div class="readout-row"><span class="readout-key">website/data/releases.json</span><span class="readout-val">committed to the repository</span></div><div class="readout-row"><span class="readout-key">python website/build.py</span><span class="readout-val">this page and the download page</span></div><div class="readout-row"><span class="readout-key">website/check_links.py</span><span class="readout-val">1404 internal links, every build</span></div></div><p class="readout-foot">No hand-typed versions, dates or file names anywhere on the site.</p></div></section><section><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Full history</h2><div class="btn-row"><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/releases">All releases</a><a class="btn" href="https://github.com/jiayuxuan123/TurboDL/tags">Tags</a></div></section></main>
 </div>
 <footer class="site-foot">
 <div class="wrap">
-<div class="foot-cols"><div class="foot-col"><h4>Project</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">Download</a></li><li><a href="../plugins/index.html">Plugins</a></li><li><a href="index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></div><div class="foot-col"><h4>Documentation</h4><ul><li><a href="../docs/readme/index.html">README</a></li><li><a href="../docs/plugins/index.html">Plugin guide</a></li><li><a href="../docs/convention/index.html">Convention</a></li><li><a href="../docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="../docs/js-loader/index.html">JS loader architecture</a></li><li><a href="../docs/manifest/index.html">Manifest reference</a></li></ul></div><div class="foot-col"><h4>Terms &amp; policies</h4><ul><li><a href="../legal/license/index.html">License (MIT)</a></li><li><a href="../legal/third-party/index.html">Third-party components</a></li><li><a href="../legal/privacy/index.html">Privacy</a></li><li><a href="../legal/terms/index.html">Terms of use</a></li><li><a href="../community/index.html">Community</a></li></ul></div><div class="foot-col"><h4>Docs in other languages</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-top"><div><h4>Project</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="../download/index.html">Download</a></li><li><a href="../plugins/index.html">Plugins</a></li><li><a href="index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></div><div><h4>Documentation</h4><ul><li><a href="../docs/readme/index.html">README</a></li><li><a href="../docs/plugins/index.html">Plugin guide</a></li><li><a href="../docs/convention/index.html">Convention</a></li><li><a href="../docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="../docs/js-loader/index.html">JS loader architecture</a></li><li><a href="../docs/manifest/index.html">Manifest reference</a></li></ul></div><div><h4>Terms &amp; policies</h4><ul><li><a href="../legal/license/index.html">License (MIT)</a></li><li><a href="../legal/third-party/index.html">Third-party components</a></li><li><a href="../legal/privacy/index.html">Privacy</a></li><li><a href="../legal/terms/index.html">Terms of use</a></li><li><a href="../community/index.html">Community</a></li></ul></div><div><h4>Docs in other languages</h4><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
+<div class="foot-line"><a href="https://github.com/jiayuxuan123/TurboDL">github.com/jiayuxuan123/TurboDL</a></div>
 <div class="foot-note"><p>TurboDL v0.2.2.0 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div>
 </div>
 </footer>
