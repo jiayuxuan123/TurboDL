@@ -639,9 +639,17 @@ internal class SegmentScheduler(
                 val progressed = cur > lastBytes
                 lastBytes = cur
                 if (adaptive != null) {
-                    // 自适应开启：并发档位由吞吐控制器唯一决定，旧的比例爬升退位。
+                    // 自适应开启：档位最终由吞吐控制器决定，但**爬升期必须继续爬**。
+                    //
+                    // 【旧实现的死锁】这里原本无条件 `continue`，把爬升整段跳过；
+                    // 控制器则要等 `rampDone = desired >= workers` 才肯离开 WAIT_RAMP。
+                    // 两边互等 ⇒ desired 永远停在 slowStartInit（实测 -c 16 全程 4 路、49s；
+                    // 关掉自适应恢复爬升后 23s）。
                     observeThroughput(nowNanos, queueSize())
                     if (progressed) windowThrottled.set(false)
+                    // 只在控制器尚未开始探测时让爬升工作：一旦开始下探/上探，
+                    // desired 必须保持控制器设的档位，否则它测不到真实档位窗口。
+                    if (progressed && !adaptive.isProbing()) rampUpIfHealthy()
                     continue
                 }
                 if (!config.slowStart) continue
@@ -655,7 +663,20 @@ internal class SegmentScheduler(
             val jobs = List(workers) { idx ->
                 async(ioDispatcher) {
                     if (idx in 1..8) delay(idx * 20L)  // 错峰建连
-                    while (isActive() && !needWholeFallback.get()) {
+                    // 【致命失败即停】`failReason` 一旦有值，说明某个分片已经彻底耗尽重试预算 ——
+                    // 这个任务注定失败，继续跑其余分片毫无意义。
+                    //
+                    // 【为什么必须在这里判】旧实现只在 `jobs.awaitAll()` **之后**才看
+                    // `failReason`，而 worker 的退出条件是「队列空且没有在飞」。可失败分片
+                    // 耗尽后不再入队，其余分片仍会各自走完 `maxRetries` 次指数退避 ——
+                    // 于是失败判定被**串行化**：2 MiB / 128 KiB（16 片）在确定性短读的服务器上
+                    // 要 ~5 分钟才报错，而这 5 分钟里进度条停在 0%（实测：200 秒仍无终态）。
+                    // 用户看到的就是「卡死」。
+                    //
+                    // 所以：一旦判定失败，立刻让所有 worker 退出循环；在飞请求由下面的
+                    // `if (failReason.get() != null) { downloader.cancelCalls(taskId); break }`
+                    // 断掉，`jobs.awaitAll()` 随即返回，错误被准确报给宿主。
+                    while (isActive() && !needWholeFallback.get() && failReason.get() == null) {
                         // 索引自闸门：超出当前目标并发的协程 park（不占许可、随时可复活）。
                         if (idx >= desired.get()) {
                             if (queueEmpty() && inFlight.get() == 0) break
@@ -743,8 +764,14 @@ internal class SegmentScheduler(
                                     } else {
                                         // 短暂退避即可：主要成本在"重新解析地址"，
                                         // 不在等待；退避太长反而拖延新签名的获取。
-                                        delay(backoffMsFor((seg.attempts - 1).coerceAtMost(2)))
-                                        offer(seg)
+                                        // 与 FAILED 分支同一理由：退避要能被"已判定失败"打断。
+                                        val waitMs = backoffMsFor((seg.attempts - 1).coerceAtMost(2))
+                                        var waited = 0L
+                                        while (waited < waitMs && failReason.get() == null && isActive()) {
+                                            delay(200)
+                                            waited += 200
+                                        }
+                                        if (failReason.get() == null && isActive()) offer(seg)
                                     }
                                 }
                                 SegmentResult.THROTTLED -> {
@@ -785,8 +812,16 @@ internal class SegmentScheduler(
                                         // 长退避只会让 worker 干等，表现为"速度上不去、线程数也上不去"
                                         // （用户实报）。故此时退避压到 1s/2s，快速重投。
                                         val maxShift = if (config.backpressureConsecutiveFailures <= 0) 1 else 3
-                                        delay(backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(maxShift)))
-                                        offer(seg)
+                                        // 这一档退避最长可达 60s（maxShift=3 → 1/2/4/8s，但
+                                        // backoffMsFor 的通用上限是 60s）。同样必须能被"已判定失败"
+                                        // 打断，否则一个已经注定失败的任务要白等满整段退避。
+                                        val waitMs = backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(maxShift))
+                                        var waited = 0L
+                                        while (waited < waitMs && failReason.get() == null && isActive()) {
+                                            delay(200)
+                                            waited += 200
+                                        }
+                                        if (failReason.get() == null && isActive()) offer(seg)
                                     }
                                 }
                                 SegmentResult.FAILED -> {
@@ -799,10 +834,21 @@ internal class SegmentScheduler(
                                             null,
                                             "分片 ${seg.start}-${seg.end} 重试 ${seg.attempts} 次仍失败"
                                         )
+                                        // 立刻断开所有在飞请求：否则其它 worker 手里那些
+                                        // 同样卡住的连接还要各等自己的读超时，`awaitAll()` 被拖着。
+                                        downloader.cancelCalls(taskId)
                                     } else {
                                         // 网络类失败也做轻度退避，避免瞬时故障下的密集重投。
-                                        delay(backoffMsFor((seg.attempts - 1).coerceAtMost(3)))
-                                        offer(seg)  // 仅重试该分片
+                                        // 退避期间可能已被判定失败（别的分片耗尽预算），所以要能被
+                                        // 打断：`cancelCalls` 只断 HTTP 调用，不会唤醒这个 delay；
+                                        // 因此这里用 200ms 切片轮询，一旦 failReason 有值就放弃重投。
+                                        val waitMs = backoffMsFor((seg.attempts - 1).coerceAtMost(3))
+                                        var waited = 0L
+                                        while (waited < waitMs && failReason.get() == null && isActive()) {
+                                            delay(200)
+                                            waited += 200
+                                        }
+                                        if (failReason.get() == null && isActive()) offer(seg)
                                     }
                                     if (config.backpressureConsecutiveFailures in 1..n) {
                                         throttleDown(); consecutiveFailures.set(0)

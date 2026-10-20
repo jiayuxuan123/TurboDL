@@ -92,6 +92,19 @@ internal class SegmentDownloader(
      */
     private val resolvedUrlByTask = ConcurrentHashMap<Long, String>()
 
+    /**
+     * 最近一次整文件下载失败的具体原因（按 taskId）。
+     *
+     * [downloadWhole] 的返回值是 `Boolean`，天然丢信息。上层（`BuiltinHttpBackend`）在
+     * `false` 时只能给一句笼统的「服务器不支持 Range、无响应或响应异常」——
+     * 而真正的原因可能是"连接被重置"、"声明长度大于实际"、"读超时"，
+     * 三者对用户意味着完全不同的下一步。这里把原因记下来供上层取用，用完即清。
+     */
+    private val failureByTask = ConcurrentHashMap<Long, String>()
+
+    /** 取出（并清掉）最近一次整文件下载的失败原因；没有则返回 null。 */
+    fun takeWholeError(taskId: Long): String? = failureByTask.remove(taskId)
+
     /** 取本次分片实际应请求的地址：优先用已学习到的终址，否则回落到原始 URL。 */
     private fun urlFor(taskId: Long, original: String): String =
         resolvedUrlByTask[taskId] ?: original
@@ -212,6 +225,19 @@ internal class SegmentDownloader(
         val suggestedFileName: String? = null,
         /** Content-Type（可用于补全扩展名等，纯信息）。 */
         val contentType: String? = null,
+        /**
+         * UA 协商结果：被拦截时换上的那个 User-Agent；未协商（默认 UA 就通）时为 null。
+         *
+         * 见 [UA_FALLBACKS]。非 null 时调用方**必须**把它带进这个任务的后续所有请求
+         * （分片 / 整文件 / 续传指纹），否则协商白做 —— 分片仍会用默认 UA 撞同一堵墙。
+         */
+        val negotiatedUserAgent: String? = null,
+        /**
+         * 探测那一次请求的 HTTP 状态码；请求本身失败（超时/连接不上）时为 0。
+         *
+         * 只用于**判断要不要换 UA**（401/403/HTML 拦截页）与诊断，不参与下载决策。
+         */
+        val statusCode: Int = 0,
     ) {
         /**
          * 续传校验令牌：把「大小 + ETag + Last-Modified」压成一个字符串。
@@ -303,12 +329,17 @@ internal class SegmentDownloader(
         timeoutMs: Long = 0,
         /** Range 头的值。默认 `bytes=0-0`（最小探测）；复探时用 `bytes=0-`。 */
         rangeSpec: String = RANGE_MIN,
+        /** 覆盖 UA（UA 协商用）；null 表示沿用 [headers] 或配置里的默认值。 */
+        userAgentOverride: String? = null,
     ): ProbeResult =
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(url)
                 .header("Range", rangeSpec)
                 .apply { headers.forEach { (k, v) -> header(k, v) } }
+                // 协商用的 UA 要在 headers **之后**设置：headers 里带的那份不生效时，
+                // 这里的覆盖才是这次探测真正发出去的 UA。
+                .apply { if (userAgentOverride != null) header("User-Agent", userAgentOverride) }
                 // identity 在自定义头之后设置，确保总是生效（防止调用方传入 Accept-Encoding: gzip 覆盖）：
                 // 若 gzip 透明解压，实际写入字节会与 Content-Range 不一致 → 大小校验失败。
                 .header("Accept-Encoding", "identity")
@@ -335,13 +366,15 @@ internal class SegmentDownloader(
                                 .let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
                         )
                     if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
-                        return@use ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype)
+                        return@use ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype,
+                            statusCode = resp.code)
                     }
                     when (resp.code) {
                         206 -> {
                             val total = resp.header("Content-Range")
                                 ?.substringAfter('/')?.toLongOrNull()
-                            ProbeResult(total, true, finalUrl, etag, lastMod, suggested, ctype)
+                            ProbeResult(total, true, finalUrl, etag, lastMod, suggested, ctype,
+                                statusCode = resp.code)
                         }
                         200 -> {
                             // 未返回 206：多数为不支持 Range；但若服务器声明 Accept-Ranges: bytes，
@@ -350,9 +383,11 @@ internal class SegmentDownloader(
                             val total = resp.header("Content-Length")?.toLongOrNull()
                             val acceptRanges = resp.header("Accept-Ranges")
                                 .orEmpty().contains("bytes", ignoreCase = true)
-                            ProbeResult(total, acceptRanges, finalUrl, etag, lastMod, suggested, ctype)
+                            ProbeResult(total, acceptRanges, finalUrl, etag, lastMod, suggested, ctype,
+                                statusCode = resp.code)
                         }
-                        else -> ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype)
+                        else -> ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype,
+                            statusCode = resp.code)
                     }
                 }
             } catch (e: CancellationException) {
@@ -364,6 +399,79 @@ internal class SegmentDownloader(
                 handle?.dispose()
             }
         }
+
+    /**
+     * 被拦截时的 UA 候选梯子（**降序尝试，第一个能过就是它**）。
+     *
+     * ## 为什么需要这个（真实网络实测，2026-10-18）
+     *
+     * 国内镜像站的反爬**按 UA 分档**，而且方向与直觉相反：**浏览器 UA 被拦，curl 类 UA 放行**。
+     * 同一条链接、同一个程序，只换 UA：
+     *
+     * | 站点 | 浏览器 UA | curl UA |
+     * |---|---|---|
+     * | 清华 | 403 + HTML | 206，正常下载 |
+     * | 北外 | 403 + HTML | 206 |
+     * | 中科大 | 200 + "Verifying your browser"（JS 挑战页） | 206 |
+     * | 南大 | 被拦 | 206 |
+     *
+     * 而 [TurboConfig.userAgent] 默认就是 Chrome 的浏览器 UA（那是为了应对"只认浏览器 UA"的
+     * CDN 才这么定的）。于是默认配置在这些站上**一个字节都下不了**，而 curl 跑同一链接飞快 ——
+     * 用户看到的"真实网络下怎么比 curl 慢这么多"，根子在这里。
+     *
+     * ## 顺序的依据
+     *
+     * 1. 先保持默认（浏览器 UA）不变 —— 绝大多数 CDN 与网盘直链吃这一套；
+     * 2. 再退到 `curl/x.y.z`：镜像站/开源基础设施最常见的白名单，也是本机 curl 实测能通的；
+     * 3. 最后退到 `aria2/x.y.z`：同样的基础设施类 UA，覆盖把 curl 单独拉黑的情况。
+     *
+     * 换 UA 只影响"我们怎么介绍自己"，不改变请求内容、不带 Cookie、不伪造别的头 ——
+     * 这不是绕过访问控制，而是换一个对方本来就允许的工具身份。
+     */
+    private val uaFallbacks: List<String> = listOf(
+        "curl/8.21.0",
+        "aria2/1.37.0",
+    )
+
+    /**
+     * UA 协商：默认 UA 被拦时，依次换 [uaFallbacks] 重探，**第一个能拿到 Range 的就采用**。
+     *
+     * ## 为什么做在探测阶段
+     *
+     * 拦截在探测那一次请求上就能看出来（403/HTML 挑战页，代价是一次 `bytes=0-0` 的极小请求）。
+     * 若等分片阶段才发现，等于让几十条连接各自撞一遍墙，再逐条重试 —— 既慢又把重试配额烧光。
+     *
+     * ## 只换能确定的
+     *
+     * 只有当探测**明确拿到 HTML（拦截页/挑战页）或 401/403** 时才换 UA。
+     * 超时、连接失败、5xx 一律不换 —— 那些是网络或服务端故障，换 UA 不会好，
+     * 只会白白多打几个请求、拖慢正常的失败路径。
+     *
+     * 用户自己显式指定过 UA（`headers["User-Agent"]`）时**不协商**：那是他的判断，不该被覆盖。
+     */
+    private suspend fun negotiateUserAgent(
+        url: String,
+        headers: Map<String, String>,
+        timeoutMs: Long,
+        initial: ProbeResult,
+    ): ProbeResult {
+        val explicit = headers.keys.any { it.equals("User-Agent", ignoreCase = true) }
+        if (explicit) return initial
+        // 只处理"被拦"这一类：HTML 响应，或授权类的 401/403。
+        val blocked = initial.contentType.orEmpty().contains("text/html", ignoreCase = true) ||
+            initial.statusCode == 401 || initial.statusCode == 403
+        if (!blocked) return initial
+        for (ua in uaFallbacks) {
+            val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN, userAgentOverride = ua)
+            // 换到 UA 之后必须**真的能下**才算数：拿到 Range 支持，或至少不再是 HTML/401/403。
+            val stillBlocked = r.contentType.orEmpty().contains("text/html", ignoreCase = true) ||
+                r.statusCode == 401 || r.statusCode == 403
+            if (!stillBlocked && (r.supportsRange || (r.totalSize ?: -1L) > 0)) {
+                return r.copy(negotiatedUserAgent = ua)
+            }
+        }
+        return initial
+    }
 
     /**
      * 取 [start, start+len) 区间的字节，用于**续传内容指纹校验**（失败/不支持 Range 返回 null）。
@@ -430,16 +538,40 @@ internal class SegmentDownloader(
         retries: Int,
     ): ProbeResult {
         var last = ProbeResult(null, false, url)
+        // UA 协商只做一次（结论对一个域名是稳定的），协商出结果就贯穿整个任务。
+        var negotiated: String? = null
         // `bytes=0-` 复探**全局只做一次** —— 对同一个服务器，它不会改变结论，
         // 每轮重试都复探一次纯属浪费（旧实现在这里白发了一倍请求）。
         var reprobed = false
         repeat(retries + 1) { attempt ->
             // ① 最小探测（bytes=0-0）：代价最低，健康服务器回 206 即可确认支持分片。
-            val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN)
+            // 已协商出 UA 时用它 —— 否则这一轮又会用默认 UA 撞同一堵墙。
+            val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN,
+                userAgentOverride = negotiated)
             last = r
             if (r.supportsRange) return r
 
-            // ② 【快速失败】服务器回的是网页（HTML）→ 这不是"瞬时失败"，是**地址本身不可下载**。
+            // ② 【UA 协商】被拦（HTML 拦截页 / 401 / 403）时换 UA 再探。
+            //
+            // 【为什么必须在"快速失败"之前】真实网络实测：国内镜像站按 UA 分档拦截，
+            // 浏览器 UA 被拦、curl 类 UA 放行。默认 UA 是浏览器 UA，于是默认配置在这些站上
+            // 零字节失败，而 curl 跑同一链接飞快（见 [uaFallbacks] 的表）。
+            // 这里只多花最多 1~2 个 `bytes=0-0` 的极小请求，就能把"完全下不了"变成"正常下载"。
+            if (r.statusCode == 401 || r.statusCode == 403 ||
+                r.contentType.orEmpty().contains("text/html", ignoreCase = true)
+            ) {
+                val n = negotiateUserAgent(url, headers, timeoutMs, r)
+                if (n.negotiatedUserAgent != null) {
+                    negotiated = n.negotiatedUserAgent
+                    last = n
+                    if (n.supportsRange) return n
+                } else {
+                    // 协商没过：维持原有语义 —— HTML 是确定性结论，直接返回让上层报准确原因。
+                    if (r.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r
+                }
+            }
+
+            // ②' 【快速失败】服务器回的是网页（HTML）→ 这不是"瞬时失败"，是**地址本身不可下载**。
             // 重试再多次也还是网页，只会让用户多等好几秒。直接返回，让上层给出准确原因。
             if (r.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r
 
@@ -453,7 +585,10 @@ internal class SegmentDownloader(
             // aria2 的探测正是用 `bytes=0-` 而非 `bytes=0-0`。
             if (!reprobed && (r.totalSize ?: -1L) > 0) {
                 reprobed = true
-                val r2 = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_FROM_START)
+                // 复探**必须**带上协商出的 UA：否则「换 UA 通过了 → 复探又用回默认 UA → 再次被拦」，
+                // 前面那次协商白做，还会把结论误判成"不支持 Range"（真实镜像站上就是这么发生的）。
+                val r2 = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_FROM_START,
+                    userAgentOverride = negotiated)
                 if (r2.supportsRange) return r2
                 if (r2.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r2
                 // 复探仍不支持：保留两次探测中信息更全的一份（大小/元数据）。
@@ -592,7 +727,14 @@ internal class SegmentDownloader(
                             // P12 开关：默认直写（见 TurboConfig.bufferedSegmentWrite 的实测结论）。
                             bufferedWriteProvider(),
                         )
-                        if (existing + written != expected) SegmentResult.FAILED else SegmentResult.OK
+                        if (existing + written != expected) {
+                            // 记录**具体差多少**：这是区分"服务器短读"与"本地写失败"的唯一线索。
+                            // 上层把这条拼进最终错误，用户才知道该重试还是该换源。
+                            failureByTask[taskId] =
+                                "连接提前结束：分片 $start-${start + expected - 1} 只收到 " +
+                                    "$written / ${expected - existing} 字节"
+                            SegmentResult.FAILED
+                        } else SegmentResult.OK
                     }
                     200 -> {
                         // 【P0-2 修复】200 = 服务器忽略/拒绝 Range，body 语义上是「整个资源」。
@@ -628,6 +770,8 @@ internal class SegmentDownloader(
             throw e
         } catch (e: IOException) {
             if (!coroutineContext.isActive) throw CancellationException("canceled", e)
+            // 同上：把 IO 层的原因留给上层拼进最终错误。
+            failureByTask[taskId] = describeIoFailure(e)
             SegmentResult.FAILED
         } finally {
             activeCalls[taskId]?.remove(call)
@@ -644,6 +788,8 @@ internal class SegmentDownloader(
         total: Long,
         onBytes: suspend (Long) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
+        // 每次进入都先清掉上一次的原因，避免把上一轮的错误带给这一轮。
+        failureByTask.remove(taskId)
         val existing = outFile.length()
         // 整文件回退不做断点（避免与 Range 不支持的服务器语义冲突）：从 0 重写
         if (existing > 0) outFile.delete()
@@ -697,17 +843,50 @@ internal class SegmentDownloader(
                         }
                     }
                 }
-                if (total > 0 && written < total) return@use false
+                if (total > 0 && written < total) {
+                    // 没抛异常但字节不够：服务器正常收尾，只是发少了。
+                    failureByTask[taskId] = "连接提前结束：只收到 $written / $total 字节"
+                    return@use false
+                }
                 true
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
             if (!coroutineContext.isActive) throw CancellationException("canceled", e)
+            // 【带回原因】以前这里直接 `false`，上层只能给一句
+            // 「整文件下载失败（服务器不支持 Range、无响应或响应异常）」——
+            // 而真实原因可能是「连接被重置」「读到一半 EOF（声明长度 > 实际）」「超时」。
+            // 这三类对用户意味着完全不同的下一步（重试 / 换源 / 等网络），
+            // 压成同一句话等于把可行动的信息扔掉。
+            failureByTask[taskId] = describeIoFailure(e)
             false
         } finally {
             activeCalls[taskId]?.remove(call)
             handle?.dispose()
+        }
+    }
+
+    /**
+     * 把整文件下载的 IO 异常翻译成一句能行动的话。
+     *
+     * 分类依据（都是实测过的真实形态，见 `_audit/fault_server.py` 的注入端点）：
+     * - `unexpected end of stream` / `EOF` → 服务器声明了长度但提前断开（短读）；
+     * - `Connection reset` / `SocketException` → 连接被中途重置（RST）；
+     * - `timeout` → 读超时（服务器不再发数据）；
+     * - 其余保留原文（`e::class.simpleName: message`），不做无根据的推断。
+     */
+    private fun describeIoFailure(e: IOException): String {
+        val raw = (e.message ?: "").lowercase()
+        val name = e::class.simpleName ?: "IOException"
+        return when {
+            "unexpected end of stream" in raw || "eof" in raw ->
+                "连接被提前关闭：服务器声明的长度与实际发出的字节不符（读到一半就断了）"
+            "connection reset" in raw || "socketexception" in raw || "broken pipe" in raw ->
+                "连接被对端重置"
+            "timeout" in raw || "timed out" in raw ->
+                "读取超时（服务器长时间没有发数据）"
+            else -> "$name: ${e.message ?: "无法读取响应体"}"
         }
     }
 

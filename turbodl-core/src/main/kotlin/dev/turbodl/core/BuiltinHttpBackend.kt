@@ -87,6 +87,18 @@ internal class BuiltinHttpBackend(
         // 否则每个分片连接都重走 302，可能命中不同节点或被拒，表现为“显示下载中但字节/线程不动”。
         val effectiveUrl = probe.resolvedUrl.ifBlank { request.url }
         val supportsRange = probe.supportsRange
+        // ---------- UA 协商结果贯穿整个任务 ----------
+        // 探测阶段若因默认 UA 被拦（403 / HTML 挑战页）换到了别的 UA，这里把它接过去，
+        // **后续每一个请求都用它**：分片、整文件回退、连接预热、续传指纹校验。
+        // 只在探测里换、分片还用默认 UA 的话，等于让几十条连接各自再撞一次墙 ——
+        // 协商就白做了（上一轮实现漏在这里，真机上等于没生效）。
+        //
+        // 用 request.headers 的副本而不是原地改：`DownloadRequest` 是调用方的数据，
+        // 改它会把一次协商泄漏给同一进程里的其它任务。
+        val taskHeaders: Map<String, String> =
+            probe.negotiatedUserAgent?.let { ua ->
+                request.headers.toMutableMap().apply { put("User-Agent", ua) }
+            } ?: request.headers
 
         // ---------- 续传校验（P0-1 修复）----------
         // 思路参考 aria2 的 .aria2 控制文件与 IDM 的续传校验：把「大小+ETag+Last-Modified」
@@ -166,7 +178,7 @@ internal class BuiltinHttpBackend(
             val needFingerprint = hasOldParts && !probeDegraded && !lenChanged &&
                 (weakButResuming || validatorDiffers)
             val decision = if (needFingerprint) {
-                verifyResumeFingerprint(chunkDir, effectiveUrl, request.headers)
+                verifyResumeFingerprint(chunkDir, effectiveUrl, taskHeaders)
             } else {
                 ResumeDecision.NOT_ATTEMPTED
             }
@@ -236,7 +248,7 @@ internal class BuiltinHttpBackend(
                 }
             } else null
             val ok = try {
-                downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
+                downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
                     context.throttle(d)
                     acc += d
                     progressed.set(acc)
@@ -246,9 +258,15 @@ internal class BuiltinHttpBackend(
             } finally {
                 watchdog?.cancel()
             }
-            if (!ok) throw IllegalStateException(
-                "整文件下载失败（服务器不支持 Range、无响应或响应异常）"
-            )
+            if (!ok) {
+                // 优先报**具体原因**（连接被重置 / 声明长度不符 / 读超时），
+                // 只有在拿不到原因时才退回那句笼统的兜底文案。
+                val detail = downloader.takeWholeError(context.taskId)
+                throw IllegalStateException(
+                    if (detail != null) "整文件下载失败：$detail"
+                    else "整文件下载失败（服务器不支持 Range、无响应或响应异常）"
+                )
+            }
             return BackendResult(listOf(outPart), if (total > 0) total else outPart.length())
         }
 
@@ -270,7 +288,7 @@ internal class BuiltinHttpBackend(
             kotlinx.coroutines.CoroutineScope(currentCtx).launch {
                 runCatching {
                     downloader.warmUp(
-                        effectiveUrl, request.headers, warmCount,
+                        effectiveUrl, taskHeaders, warmCount,
                         timeoutMs = context.config.warmUpTimeoutMs,
                         taskId = context.taskId,
                     )
@@ -299,7 +317,7 @@ internal class BuiltinHttpBackend(
             url = effectiveUrl,
             total = total,
             chunkDir = chunkDir,
-            headers = request.headers,
+            headers = taskHeaders,
             connections = connections,
             onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
             onConnections = { live -> liveConnsRef.set(live) },
@@ -359,7 +377,7 @@ internal class BuiltinHttpBackend(
                     // 不能直接整文件回退（会与已有分片混合）。重跑一次调度，让剩余块继续分片下载。
                     val retry = scheduler.run(
                         taskId = context.taskId, url = effectiveUrl, total = total,
-                        chunkDir = chunkDir, headers = request.headers, connections = connections,
+                        chunkDir = chunkDir, headers = taskHeaders, connections = connections,
                                     onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
                         onConnections = { live -> liveConnsRef.set(live) },
                         isActive = { context.isActive() },
@@ -381,7 +399,7 @@ internal class BuiltinHttpBackend(
                 }
                 val outPart = File(chunkDir, "whole.part")
                 var acc = 0L
-                val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, request.headers, total) { d ->
+                val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
                     context.throttle(d)
                     acc += d
                     if (!context.isActive()) return@downloadWhole
@@ -393,7 +411,12 @@ internal class BuiltinHttpBackend(
 
             is SegmentScheduler.Outcome.Failed -> {
                 if (!context.isActive()) throw kotlinx.coroutines.CancellationException("paused")
-                throw IllegalStateException(outcome.reason)
+                // 若是"分片读到的字节不够"这类具体原因，把它接在调度器给的原因后面 ——
+                // 「重试 6 次仍失败」本身不告诉用户为什么失败。
+                val detail = downloader.takeWholeError(context.taskId)
+                throw IllegalStateException(
+                    if (detail != null) "${outcome.reason}（$detail）" else outcome.reason
+                )
             }
         }
     }

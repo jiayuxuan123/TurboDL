@@ -77,6 +77,8 @@ private class Options {
     var noOverlap = false
     /** 单连接停滞多久后中断该连接（毫秒，0=关闭）。 */
     var stallTimeoutMs: Long? = null
+    /** 关闭吞吐自适应（用于 A/B 对照：固定并发测量）。 */
+    var noAdaptive = false
     /** 输出阶段耗时事件（启动段诊断用）。 */
     var timing = false
 }
@@ -132,6 +134,7 @@ fun main(args: Array<String>) {
             "--force-http1" -> opts.httpPolicy = HttpVersionPolicy.FORCE_HTTP1
             "--no-warmup" -> opts.warmUp = false
             "--no-slow-start" -> opts.slowStart = false
+            "--no-adaptive" -> opts.noAdaptive = true
             "--spc" -> opts.segmentsPerConnection = take().toIntOrNull()?.coerceIn(1, 64)
                 ?: usageError("--spc 需为 1..64 的整数")
             "--block-size" -> opts.blockSize = parseSize(take())
@@ -250,6 +253,7 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
             blockSize = opts.blockSize ?: TurboConfig().blockSize,
             minSegmentSize = opts.minSegmentSize ?: TurboConfig().minSegmentSize,
             slowStartInitial = opts.slowStartInitial ?: TurboConfig().slowStartInitial,
+            adaptiveConcurrency = !opts.noAdaptive,
             tailAssist = !opts.noTailAssist,
             overlapMerge = !opts.noOverlap,
             stallTimeoutMs = opts.stallTimeoutMs ?: TurboConfig().stallTimeoutMs,
@@ -393,6 +397,7 @@ private fun printHelp(out: java.io.PrintStream = System.out) {
           --http-policy <模式>       auto|http1|http2（默认 auto：分片走 h1、单流可协商 h2）
           --no-warmup                关闭连接预热
           --no-slow-start            关闭慢启动
+          --no-adaptive              关闭吞吐自适应（固定并发，A/B 对照用）
           --insecure                 忽略 SSL 证书校验
           --connect-timeout <毫秒>   连接超时（默认 15000）
           --timeout <毫秒>           读取超时（默认 60000）
