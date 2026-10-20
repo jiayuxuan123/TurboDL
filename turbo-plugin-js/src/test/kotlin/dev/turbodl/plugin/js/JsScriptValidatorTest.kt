@@ -123,11 +123,14 @@ class JsScriptValidatorTest {
             plugin.requires({ permissions: ['http'] });
             plugin.registerParser({ parse: function () { return null; } });
             plugin.registerTaskPreHook({ run: function (t) { return t; } });
+            plugin.registerProtocol({ scheme: 'acme' });
+            plugin.registerFileHandler({ matches: function () { return false; }, handle: function () { return ''; } });
             plugin.onEvent(function () {});
         """.trimIndent()
         val r = validate(src)
         assertTrue(r.ok, r.syntaxError)
-        assertEquals(listOf("parser", "preHook", "event"), r.registrationKinds)
+        // 顺序与 REGISTRATION_MARKERS 一致（那是"按 ABI 里的注册入口枚举"的顺序，不是脚本里的顺序）。
+        assertEquals(listOf("parser", "preHook", "protocol", "fileHandler", "event"), r.registrationKinds)
     }
 
     @Test

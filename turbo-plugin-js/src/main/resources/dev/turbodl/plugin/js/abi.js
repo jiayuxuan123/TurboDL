@@ -5,6 +5,9 @@
  * This file IS the ABI. Plugins never see a Kotlin object: they see `plugin` (registration) and
  * `host` (capabilities), both of which are plain JS built on top of exactly three primitives that
  * the host binds:
+ * The registration surface is `plugin.registerParser` / `registerTaskPreHook` /
+ * `registerTaskPostHook` / `registerFileHandler` / `registerProtocol`, plus `onEvent` and the
+ * `onInit` / `onDestroy` lifecycle pair; `registerProtocol` is the only one with no callback.
  *
  *   __turbodlCall(path, payloadJson)      -> envelopeJson   // JS -> host capability, coarse-grained
  *   __turbodlRegister(kind, cbId, opts)   -> envelopeJson   // JS -> extension/service registration
@@ -273,8 +276,16 @@
   var lifecycle = { init: null, destroy: null, event: null };
   var requirements = { abiMajor: ABI_MAJOR, permissions: [] };
 
+  /**
+   * Bind the callback (when the kind has one) and hand the registration to the host.
+   *
+   * `fn === null` is for a kind that is a pure declaration with nothing to call back into — a
+   * protocol claim. It still carries an id (`0`, never allocated, never dispatched) because the
+   * host primitive takes one positionally; releasing id 0 later is a no-op, so unload needs no
+   * special case for it.
+   */
   function register(kind, fn, opts) {
-    var id = bind(fn, kind);
+    var id = fn === null ? 0 : bind(fn, kind);
     var data = nativeRegister(kind, id, opts);
     registrations.push({ kind: kind, cb: id, handle: data && data.handle });
     return data;
@@ -336,6 +347,50 @@
   /** Task post-hook: ({request, success, detail}) -> void. */
   plugin.registerTaskPostHook = function (impl) {
     return register("postHook", requireMethod(impl, "afterFinish", "registerTaskPostHook"), optionsFor(impl));
+  };
+
+  /**
+   * Declare that this plugin handles one protocol/scheme: `{ scheme, label?, priority? }`.
+   *
+   * No callback: a claim is pure data (`ProtocolClaim`), so nothing here is invoked later and the
+   * host stores no function for it. The host rejects a missing or malformed `scheme` at
+   * registration time (`validation`) instead of letting the claim be silently dropped when the
+   * scheme index is queried — "loaded fine but declares nothing" is the one outcome an author
+   * cannot debug from the outside.
+   *
+   * A claim grants no routing and no permission; it only answers "who declares this scheme".
+   */
+  plugin.registerProtocol = function (impl) {
+    if (!impl || typeof impl !== "object") throw new Error("registerProtocol expects an object with a scheme");
+    // cbId 0 is the "no callback" placeholder; the host never dispatches it and releasing it is a no-op.
+    return register("protocol", null, optionsFor(impl, { scheme: impl.scheme, label: impl.label }));
+  };
+
+  /**
+   * File handler: `{ id?, name?, priority?, matches(file) -> boolean, handle(file) -> string }`.
+   *
+   * Both methods ride on ONE callback id and are told apart by `payload.op`, because they belong to
+   * one registration: unload releases exactly the callbacks a registration owns, so a second id
+   * would be a second thing to release and a second thing to leak.
+   *
+   * Neither method may fail a download. The host already enforces that (a throw becomes `false` /
+   * a message), but a plugin that throws here still loses the file it was meant to handle — return
+   * `false` from `matches` when unsure, and report problems from `handle` as a string.
+   */
+  plugin.registerFileHandler = function (impl) {
+    if (!impl || typeof impl.matches !== "function" || typeof impl.handle !== "function") {
+      throw new Error("registerFileHandler expects an object with matches() and handle() methods");
+    }
+    var dispatch = function (payload) {
+      var file = payload && payload.file ? payload.file : {};
+      if (payload && payload.op === "matches") return !!impl.matches(file);
+      var out = impl.handle(file);
+      // undefined/null means "no message". String(undefined) would be the literal sentence
+      // "undefined" in the host's log, where the host can say something honest instead — so the
+      // absence is passed through rather than stringified.
+      return out === undefined || out === null ? null : String(out);
+    };
+    return register("fileHandler", dispatch, optionsFor(impl, { id: impl.id, name: impl.name }));
   };
 
   /** Observe engine events: ({type, taskId, ...}) -> void. Read-only by construction. */

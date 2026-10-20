@@ -13,8 +13,9 @@ import dev.turbodl.plugin.runtime.ExtensionPointKey
  * [dev.turbodl.plugin.runtime.PluginLoaderProvider].
  *
  * NOTE: external loaders and shims implement these contracts through the registry. `turbo-plugin-js`
- * bridges `LinkParser` and the two task hooks for scripts; `DOWNLOAD_BACKEND` stays Kotlin-only, and
- * no implementation of it is provided by the runtime itself.
+ * bridges `LinkParser`, the two task hooks, [FileHandler] and [ProtocolClaim] for scripts;
+ * `DOWNLOAD_BACKEND` stays Kotlin-only (the byte/chunk plane is not exposed to scripts), and no
+ * implementation of it is provided by the runtime itself.
  */
 object ExtensionPoints {
 

@@ -160,7 +160,9 @@ __turbodlLog(level, text)            -> void           // 日志快路径（不�
 | `plugin.requires({permissions, abiMajor})` | 声明所需能力；与授予集不满足即加载失败（好于下载到一半被拒） |
 | `plugin.registerParser({ parse(input) {...}, priority? })` | `(string) -> 单个描述符 / 描述符数组 / null` → `LinkParser` |
 | `plugin.registerTaskPreHook({ beforeSubmit(request) {...}, priority? })` | 描述符 → 描述符（返回 `null`/`undefined` 即不改） → `TaskPreHook` |
-| `plugin.registerTaskPostHook({ afterFinish({request, success, detail}) {...}, priority? })` | 只观察 → `TaskPostHook` |
+ | `plugin.registerTaskPostHook({ afterFinish({request, success, detail}) {...}, priority? })` | 只观察 → `TaskPostHook` |
+ | `plugin.registerFileHandler({ matches(file){...}, handle(file){...}, id?, name?, priority? })` | `matches` → Boolean（抛错即 false）；`handle` → 一句话（抛错即"处理失败"的说明） → `FileHandler` |
+ | `plugin.registerProtocol({ scheme, label?, priority? })` | 纯声明，无回调 → `ProtocolClaim`（`scheme` 缺失/非法即注册期 `validation`） |
 | `plugin.onEvent(fn)` | `({type, taskId, ...}) -> void`，只读、不得抛 |
 | `plugin.onInit(fn)` / `plugin.onDestroy(fn)` | 各只能注册一次；`onDestroy` 是唯一允许在 STOPPING 之后进入 JS 的调用 |
 
@@ -179,10 +181,12 @@ __turbodlLog(level, text)            -> void           // 日志快路径（不�
 按 8 线程跑的插件，从日志里根本看不出来。
 
 失败语义按扩展点各自的契约映射，而不是全局抛异常：parser 抛错/返回脏数据 → `null`（下一个 parser
-继续，等同不匹配）；pre-hook 抛错 → 原请求不变；post-hook / 事件监听 → 记日志并吞掉。每条失败都
-带插件 id 与 `code`，「我的 parser 不再命中」是可调试的而非静默的。事件监听是**有界同步观察者**：
-调用同步执行、上界为一次 invocation 预算——慢监听器最多让事件泵停这么久；抛错被隔离，
-绝不会杀死事件泵。
+继续，等同不匹配）；pre-hook 抛错 → 原请求不变；post-hook / 事件监听 → 记日志并吞掉；file handler 的
+`matches` 抛错 → `false`（跳过这个处理器），`handle` 抛错 → 返回一句"处理失败"的说明（挂载点的约定是
+处理器出错不影响已完成的下载，所以异常既不穿透也不改任务状态）；protocol claim 没有调用期，唯一失败面
+是注册期的 `scheme` 校验（`validation`）。每条失败都带插件 id 与 `code`，「我的 parser 不再命中」是
+可调试的而非静默的。事件监听是**有界同步观察者**：调用同步执行、上界为一次 invocation 预算——慢监听器
+最多让事件泵停这么久；抛错被隔离，绝不会杀死事件泵。
 
 优先级取序：`impl.priority`（脚本自报）→ `defaultExtensionPriority`（loader 一次性压低全部 JS）→
 `200`（CONVENTION §6 的 adapter 档）。范围 −10000..10000，越界即 `validation`。同优先级按注册序稳定
@@ -443,7 +447,8 @@ val ids = boot.host.loadSource(
    `plugin.*` / `host.*`（失败转成可 `catch` 的 `Error`，带 `code`）。
 5. **JS 不能注册 `DownloadBackend`，也不能发布宿主 service。** 二者都返回 `unsupported`，这是
    设计上的封闭：chunk/字节面留在 Kotlin，`host.http.downloadToFile` 给脚本的是写完的文件；
-   service 是 Kotlin 对象图。未知注册 kind 是 `validation`。
+   service 是 Kotlin 对象图。`FILE_HANDLER` 与 `PROTOCOL_HANDLER` 是开放的——它们是纯 Kotlin
+   语义（只读文件描述 / 纯数据声明），不碰字节平面。未知注册 kind 是 `validation`。
 6. **没有 JS 标准库。** 不提供 `require`/npm/fetch/Web API。`host.http` 是唯一出网口（复用 TurboDL
    传输），JSON/base64/hex/digest 由 `host.crypto` 提供，其余请用 JS 语言本身。刻意不做推测性 stdlib。
 7. **Android/YunGet 需自行验证原生 ABI。** 绑定自带 linux/mac/windows 库；Android 的 `.so` 由宿主

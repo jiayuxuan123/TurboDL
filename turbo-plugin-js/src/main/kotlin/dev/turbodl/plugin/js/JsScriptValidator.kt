@@ -65,6 +65,8 @@ object JsScriptValidator {
         "registerParser" to "parser",
         "registerTaskPreHook" to "preHook",
         "registerTaskPostHook" to "postHook",
+        "registerProtocol" to "protocol",
+        "registerFileHandler" to "fileHandler",
         "onEvent" to "event",
         "onInit" to "init",
         "onDestroy" to "destroy",

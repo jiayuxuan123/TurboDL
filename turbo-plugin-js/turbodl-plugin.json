@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "id": "loader.js",
   "name": "JavaScript Plugin Loader",
-  "description": "System plugin that loads TurboDL plugins written in JavaScript. Embeds QuickJS (one runtime + context per script), exposes a stable `host`/`plugin` ABI with coarse-grained capabilities (http, crypto, log, storage, env, time, timers), bridges link parsers and task hooks into the ordinary extension points, and enforces an ACTIVE → STOPPING → DRAINING → DISPOSED unload sequence that never closes a runtime while its JavaScript is executing. Implements no concrete cloud or protocol plugin itself.",
+  "description": "System plugin that loads TurboDL plugins written in JavaScript. Embeds QuickJS (one runtime + context per script), exposes a stable `host`/`plugin` ABI with coarse-grained capabilities (http, crypto, log, storage, env, time, timers), bridges link parsers, task hooks, file handlers and protocol claims into the ordinary extension points, and enforces an ACTIVE → STOPPING → DRAINING → DISPOSED unload sequence that never closes a runtime while its JavaScript is executing. Implements no concrete cloud or protocol plugin itself.",
   "version": "1.0.0",
   "author": "TurboDL",
   "homepage": "https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-js",

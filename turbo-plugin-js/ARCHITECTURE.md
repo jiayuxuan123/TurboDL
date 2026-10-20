@@ -65,7 +65,8 @@ turbodl-core  ←  turbo-plugin-runtime  ←  turbo-plugin-js  ←  JS Plugin（
   JS 不再路由、零 runtime 泄漏。
 - 并发卸载：路由流量中卸载实例，调用方零异常（gone → 干净 no-op）。
 - 数据面隔离：`backend`/`service` 注册被 `unsupported` 拒绝（closed-by-design），
-  脚本无法注册 `DownloadBackend`，无法发布宿主 service。
+  脚本无法注册 `DownloadBackend`，无法发布宿主 service。`FILE_HANDLER`（只读文件描述）与
+  `PROTOCOL_HANDLER`（纯数据声明）已开放 —— 二者是纯 Kotlin 语义，不碰字节平面。
 
 ## 4. 关键设计决定（一览）
 
