@@ -16,7 +16,11 @@ allprojects {
     //   次要版本号递增（0.2.0.9 → 0.2.1.0）：对外新增了公开 API 与配置字段。
     //   0.2.3.0：网络健壮性一批（UA 协商、失败收敛、错误归因）；
     //        详见 _audit/网络缺陷_UA拦截与故障注入.md。
-    version = "0.2.3.0"
+    //   0.2.3.1：修两个"开关组合起来才发作"的缺陷：
+    //        overlapMerge + tailAssist 同时开启会写坏文件（长度对、SHA-256 不符）；
+    //        httpVersionPolicy=AUTO 被 forceHttp1 反向覆盖，导致"改成 AUTO"实际
+    //        变成了 FORCE_HTTP2。另补 ConfigConflictTest 钉住这些组合。
+    version = "0.2.3.1"
 }
 
 // 为可作为 SDK 发布的库模块统一启用 maven-publish。

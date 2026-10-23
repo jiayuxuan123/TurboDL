@@ -7,7 +7,7 @@ import os
 import zipfile
 from pathlib import Path
 
-VERSION = "0.2.3.0"
+VERSION = "0.2.3.1"
 MODULES = [
     "turbodl-core",
     "turbo-plugin-runtime",

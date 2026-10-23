@@ -302,7 +302,31 @@ internal class BuiltinHttpBackend(
         // 【下载中预先合并】把已完成分片立刻写进目标文件的临时副本，
         // 让合并 I/O 与网络等待重叠（详见 OverlapMerger 的注释）。
         // 仅在"要写多分片"的场景有意义；关闭时不产生任何额外 I/O。
-        val ov = if (context.config.overlapMerge && total > 0) {
+        // 【与收尾托管的互斥 —— 这是会导致静默文件损坏的组合】
+        //
+        // 收尾托管会把分片 [A,B] 缩短到 [A,M] 并新建 [M+1,B]；而预先合并把
+        // "已完成分片"直接写进目标文件。若原分片在托管生效前已写入超过 M 的字节，
+        // 它的写入会覆盖到 [M+1,B] —— 与接管分片命中**同一区间**，两者来自不同请求
+        // （可能落到不同 CDN 节点），谁后写谁赢。结果是长度校验通过、SHA-256 不符。
+        //
+        // TurboConfig 的文档里记着这个缺陷（当时的结论是"默认关掉 overlapMerge"），
+        // 但代码层面从来没有真正的互斥：只判断了 overlapMerge 自身。
+        // 用户在设置里把两个开关都打开，就会踩中。
+        //
+        // 这里让"托管优先"：只要 tailAssist 开着就禁用预先合并。
+        // 理由是两个开关的**收益不对等** —— 托管消除的是收尾长尾（可能几十秒），
+        // 预先合并省的是 6% 的合并 I/O；用完整性换这点速度不值得。
+        if (context.config.overlapMerge && context.config.tailAssist) {
+            System.err.println(
+                "[TurboDL] overlapMerge 已自动禁用：" +
+                    "与 tailAssist（收尾托管）同时开启会写坏文件",
+            )
+        }
+        val ov = if (
+            context.config.overlapMerge &&
+            !context.config.tailAssist &&
+            total > 0
+        ) {
             OverlapMerger(context.request.destination).apply {
                 reset()
                 expectedSize = total      // 一次性预分配，写入只 seek 不改长度

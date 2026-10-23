@@ -83,6 +83,9 @@ internal object HttpClientFactory {
             HttpVersionPolicy.FORCE_HTTP1 -> false
             HttpVersionPolicy.FORCE_HTTP2 -> true
             HttpVersionPolicy.AUTO -> preference == ProtocolPreference.ALLOW_H2
+            // effectiveHttpVersionPolicy 永不返回 UNSET（它在 getter 里已经解析掉了）。
+            // 这一支只是为了让 when 穷尽；落到这里说明解析逻辑被改坏了，按最保守处理。
+            HttpVersionPolicy.UNSET -> false
         }
 
     fun build(config: TurboConfig, preference: ProtocolPreference): OkHttpClient {

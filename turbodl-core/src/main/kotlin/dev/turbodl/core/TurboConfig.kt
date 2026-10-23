@@ -343,7 +343,7 @@ data class TurboConfig(
      *
      * 为兼容旧版：未显式设置本字段时，若 [forceHttp1]=false 则等同 FORCE_HTTP2，否则为 AUTO。
      */
-    val httpVersionPolicy: HttpVersionPolicy = HttpVersionPolicy.AUTO,
+    val httpVersionPolicy: HttpVersionPolicy = HttpVersionPolicy.UNSET,
 
     /**
      * 每个主机（host）的最大并发分片数。<=0 表示不限（用 [maxConnectionsPerTask]）。
@@ -595,7 +595,9 @@ data class TurboConfig(
      */
     val effectiveHttpVersionPolicy: HttpVersionPolicy
         get() = when (httpVersionPolicy) {
-            HttpVersionPolicy.AUTO -> if (forceHttp1) HttpVersionPolicy.AUTO else HttpVersionPolicy.FORCE_HTTP2
+            // 只有"没设置"时才回落到旧字段；显式选了 AUTO 就尊重 AUTO。
+            HttpVersionPolicy.UNSET ->
+                if (forceHttp1) HttpVersionPolicy.AUTO else HttpVersionPolicy.FORCE_HTTP2
             else -> httpVersionPolicy
         }
 
@@ -649,6 +651,17 @@ data class TurboConfig(
 
 /** HTTP 版本协商策略。 */
 enum class HttpVersionPolicy {
+    /**
+     * 未显式设置（默认值）。此时由旧的 [TurboConfig.forceHttp1] 推导。
+     *
+     * 【为什么需要这个值】此前默认值就是 [AUTO]，于是"显式选了 AUTO"和
+     * "根本没设置"无法区分，只能靠 forceHttp1 兜底 —— 结果是用户把
+     * 「强制 HTTP/1.1」关掉、策略选 AUTO，实际生效的却是 FORCE_HTTP2
+     * （全部链路允许 h2，多线程可能无加速）。选择被另一个开关悄悄改写，
+     * 这类"看起来改了其实没改"的问题极难排查。
+     */
+    UNSET,
+
     /** 分片并发走 HTTP/1.1，探测与整文件单流回退允许 HTTP/2。 */
     AUTO,
 
