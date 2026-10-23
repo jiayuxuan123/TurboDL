@@ -154,8 +154,16 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 completions[id]?.complete(Result.failure(e))
                 setState(id, request, TaskState.CANCELED)
             } catch (e: Exception) {
-                emit(TurboEvent.Failed(id, e.message ?: e.javaClass.simpleName))
-                updateProgress(id) { it.copy(state = TaskState.FAILED, error = e.message) }
+                // 【归因优先】0.2.3.0 让 SegmentDownloader 在分片层记录了"真实原因"
+                // （HTTP 状态码 / 连接被重置 / 只回了半截 body …），因为那里才拿得到
+                // 响应信息，异常冒到这一层时只剩一句泛化的 message（"failed to
+                // connect"），对排查没有任何帮助。
+                // takeWholeError 会**移除**记录，所以必须只调一次并复用结果。
+                val reason = downloader.takeWholeError(id)
+                    ?: e.message
+                    ?: e.javaClass.simpleName
+                emit(TurboEvent.Failed(id, reason))
+                updateProgress(id) { it.copy(state = TaskState.FAILED, error = reason) }
                 completions[id]?.complete(Result.failure(e))
             }
         }
@@ -217,7 +225,15 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             } catch (e: CancellationException) {
                 setState(id, req, TaskState.PAUSED)
             } catch (e: Exception) {
-                emit(TurboEvent.Failed(id, e.message ?: e.javaClass.simpleName))
+                // 同 start()：优先用分片层记录的真实原因
+                emit(
+                    TurboEvent.Failed(
+                        id,
+                        downloader.takeWholeError(id)
+                            ?: e.message
+                            ?: e.javaClass.simpleName,
+                    ),
+                )
                 completions[id]?.complete(Result.failure(e))
             }
         }
