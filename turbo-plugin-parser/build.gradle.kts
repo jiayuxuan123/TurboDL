@@ -16,6 +16,9 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // 端到端注册测试要装进真的 TurboBootstrap，并确认与 HLS 插件共存
+    testImplementation(project(":turbo-plugin-bootstrap"))
+    testImplementation(project(":turbo-plugin-hls"))
 }
 
 kotlin {
