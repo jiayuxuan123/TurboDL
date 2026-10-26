@@ -20,7 +20,11 @@ allprojects {
     //        overlapMerge + tailAssist 同时开启会写坏文件（长度对、SHA-256 不符）；
     //        httpVersionPolicy=AUTO 被 forceHttp1 反向覆盖，导致"改成 AUTO"实际
     //        变成了 FORCE_HTTP2。另补 ConfigConflictTest 钉住这些组合。
-    version = "0.2.3.1"
+    //   0.2.4.0：新增可选模块 turbo-plugin-parser —— 视频平台链接解析（微博/小红书/Pixiv）
+    //        做成**引擎级原生插件**（与 turbo-plugin-hls 同类，不是宿主内置）。
+    //        它只往 LINK_PARSER 注册一个解析器、往 PROTOCOL_HANDLER 每个平台声明一条，
+    //        core 与 runtime 一行未改。
+    version = "0.2.4.0"
 }
 
 // 为可作为 SDK 发布的库模块统一启用 maven-publish。
@@ -43,6 +47,7 @@ subprojects {
         "turbo-plugin-bootstrap",
         "turbo-plugin-hls",
         "turbo-plugin-js",
+        "turbo-plugin-parser",
     )
     if (name in publishable) {
         apply(plugin = "maven-publish")

@@ -132,6 +132,14 @@ A backend owns the protocol; the engine owns state, events, merging and integrit
 See `turbo-plugin-hls` for a complete, non-trivial backend (playlist parsing, AES-128,
 byte-range, explicit rejection of unsupported constructs).
 
+See `turbo-plugin-parser` for a complete, non-trivial **link parser** — the other half of the
+plugin story. It turns Weibo / Xiaohongshu / Pixiv share links into media requests (three
+`PlatformParser` implementations behind one `LinkParser`, plus one `ProtocolClaim` per platform).
+Notable because it shows the awkward part of `LINK_PARSER` honestly: a `DownloadRequest` needs a
+`destination: File`, and a parser runs **before** the host has decided where the file goes. The
+module keeps its public result type (`ParsedPost`) free of any path, and fills a temp-dir
+destination only at the boundary — the host still applies its own path policy afterwards.
+
 ### 5. Install it
 
 ```kotlin
