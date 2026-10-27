@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sitekit import (
+    asset,
+    asset_fingerprint,
     breadcrumb,
     buttons,
     cards,
@@ -44,6 +46,7 @@ from sitekit import (
     note,
     rel,
     section,
+    set_asset_fingerprints,
     table,
     write,
 )
@@ -154,7 +157,7 @@ class Site:
      放一个切了没反应的开关不如不放。 -->
 <script>document.documentElement.className+=" js";setTimeout(function(){{if(!window.__motionReady){{var n=document.querySelectorAll(".rise, .hl-layer");for(var i=0;i<n.length;i++)n[i].classList.add("in")}}}},2500);</script>
 <!-- 单一样式表：上一版依赖 Pico（classless）再逐条覆盖它，重构后规则全在 site.css 里 -->
-<link rel="stylesheet" href="{rel(page["dir"], "assets/site.css")}">
+<link rel="stylesheet" href="{asset(page["dir"], "site.css")}">
 </head>
 <body class="{esc(cfg.get('body_class', ''))}">
 <a class="skip" href="#main">{esc(self.ui(lang, "skip"))}</a>
@@ -224,7 +227,10 @@ class Site:
                 f'<li><a href="{self.href(page, h[1:]) if h.startswith("@") else h}">{esc(t)}</a></li>'
                 for t, h in links
             )
-            cols.append(f'<div><h4>{esc(title)}</h4><ul>{items}</ul></div>')
+            # h2 而不是 h4：页面标题是 h1，页脚区块就是 h2。
+            # 用 h4 会让层级从 h2 直接跳到 h4 —— 屏幕阅读器靠层级判断结构，
+            # 跳级意味着它认为中间少了一层内容。视觉尺寸由 CSS 控制，与层级无关。
+            cols.append(f'<div><h2>{esc(title)}</h2><ul>{items}</ul></div>')
         cols_html = "".join(cols)
         paras = "".join(f"<p>{p}</p>" for p in cols_cfg["paragraphs"])
         # 页脚那行大字 = 取用地址本身（一个能点的真实地址，不是标语）。
@@ -239,7 +245,7 @@ class Site:
 <div class="foot-note">{paras}</div>
 </div>
 </footer>
-<script src="{rel(page["dir"], "assets/site.js")}" defer></script>
+<script src="{asset(page["dir"], "site.js")}" defer></script>
 </body>
 </html>
 """
@@ -343,6 +349,10 @@ class Site:
             write(self.out / rel_path, text)
             written.add(rel_path)
 
+        # 资源指纹要在渲染之前算好：页面里的 <link>/<script> 要引用带指纹的文件名，
+        # 而指纹文件名下的文件也要被复制到输出目录。
+        set_asset_fingerprints(self.assets_dir)
+
         self.out.mkdir(parents=True, exist_ok=True)
         emit(".nojekyll", "")
         for page in self.pages:
@@ -351,7 +361,9 @@ class Site:
         emit("robots.txt", self.robots())
         emit("404.html", self.not_found())
 
-        # 静态资源原样拷贝（图片压缩由 make_assets.py 负责，这里不做二次处理）
+        # 静态资源原样拷贝（图片压缩由 make_assets.py 负责，这里不做二次处理）。
+        # .css/.js 额外写一份**带内容指纹**的文件名：页面引用的是那个名字，
+        # 浏览器 URL 变了缓存自然失效（见 sitekit.asset 的说明）。
         if self.assets_dir.exists():
             for src in sorted(self.assets_dir.rglob("*")):
                 if src.is_file() and not src.name.startswith("."):
@@ -360,6 +372,12 @@ class Site:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dst)
                     written.add(rel_path)
+
+                    fingerprinted = asset_fingerprint(src.name)
+                    if fingerprinted and fingerprinted != src.name:
+                        f_dst = self.out / ("assets/" + fingerprinted)
+                        shutil.copy2(src, f_dst)
+                        written.add("assets/" + fingerprinted)
 
         # 清理上次生成、这次不再有的文件；空目录一并收掉
         for stale in sorted(previous - written):

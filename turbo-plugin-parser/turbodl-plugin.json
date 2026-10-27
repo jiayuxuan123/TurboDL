@@ -1,0 +1,36 @@
+{
+  "manifestVersion": "1.0",
+  "id": "parser.platforms",
+  "name": "Platform Link Parser",
+  "description": "Turns a share link from a video or social platform into concrete download requests. Ships parsers for Weibo (best available MP4 + image sets), Xiaohongshu (watermark-free video + original images) and Pixiv (every page's urls.original). Registers one LinkParser plus one ProtocolClaim per platform; the engine knows nothing about these sites. Holds no credentials — where a platform needs a session it returns null and the host's own account handling takes over.",
+  "version": "1.0.0",
+  "author": "TurboDL",
+  "homepage": "https://github.com/jiayuxuan123/TurboDL/tree/main/turbo-plugin-parser",
+  "license": "MIT",
+  "category": "turbodl-parser",
+  "capabilities": [
+    "dev.turbodl.cap.parser.platforms"
+  ],
+  "protocols": [
+    "weibo",
+    "xhs",
+    "pixiv"
+  ],
+  "turbodl": {
+    "apiMajor": 1,
+    "requiredApiVersion": "1.0.0"
+  },
+  "entry": {
+    "language": "kotlin",
+    "pluginClass": "dev.turbodl.plugin.parser.PlatformParserPlugin"
+  },
+  "artifact": {
+    "type": "maven",
+    "coordinates": "dev.turbodl:turbo-plugin-parser:0.2.4.0"
+  },
+  "extensionPoints": [
+    "turbo.linkParser",
+    "turbo.protocolHandler"
+  ],
+  "services": []
+}

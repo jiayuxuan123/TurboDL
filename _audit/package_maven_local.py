@@ -1,4 +1,4 @@
-"""Package the 0.2.3.0 mavenLocal publication into a release zip.
+"""Package the 0.2.4.0 mavenLocal publication into a release zip.
 
 Mirrors the layout used by build/TurboDL-v0.2.2.0-mavenLocal.zip:
     <module>/<version>/<module>-<version>.{jar,module,pom}
@@ -7,13 +7,14 @@ import os
 import zipfile
 from pathlib import Path
 
-VERSION = "0.2.3.1"
+VERSION = "0.2.4.0"
 MODULES = [
     "turbodl-core",
     "turbo-plugin-runtime",
     "turbo-plugin-js",
     "turbo-plugin-hls",
     "turbo-plugin-bootstrap",
+    "turbo-plugin-parser",
 ]
 M2 = Path.home() / ".m2" / "repository" / "dev" / "turbodl"
 OUT = Path(__file__).resolve().parent.parent / "build" / f"TurboDL-v{VERSION}-mavenLocal.zip"

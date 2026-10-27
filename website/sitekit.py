@@ -36,6 +36,60 @@ def rel(from_dir: str, to_path: str) -> str:
     return "/".join([".."] * len(from_parts) + to_parts) or "."
 
 
+#: 资源文件的内容指纹 → 带指纹的路径。
+#:
+#: **为什么需要它**：样式表与脚本如果一直用同一个 URL，浏览器会一直用缓存里的旧版本。
+#: 线上改完 CSS 重新部署，读者看到的还是旧样式 —— 而且没有任何报错，只是"改了没生效"。
+#: 把内容哈希放进文件名，URL 变了，缓存自然失效。
+#:
+#: 指纹在构建开始时算一次（见 `asset_fingerprints`），不是每次调用都算 ——
+#: 一页要引用几十次资源，每次都读文件算哈希会明显拖慢构建。
+_ASSET_FINGERPRINTS: dict[str, str] = {}
+
+
+def set_asset_fingerprints(assets_dir: Path) -> None:
+    """为 assets/ 下的 .css / .js 算内容指纹（构建开始时调用一次）。"""
+    import hashlib
+
+    _ASSET_FINGERPRINTS.clear()
+    if not assets_dir.is_dir():
+        return
+    for f in sorted(assets_dir.iterdir()):
+        if f.suffix not in (".css", ".js"):
+            continue
+        digest = hashlib.sha256(f.read_bytes()).hexdigest()[:8]
+        _ASSET_FINGERPRINTS[f.name] = f"{f.stem}.{digest}{f.suffix}"
+
+
+def rel(from_dir: str, to_path: str) -> str:
+    """把站点内路径 `to_path` 表达成相对当前页面目录的链接。
+
+    站内链接必须可靠：同一份内容在 `/` 与 `/download/` 两种深度下都要指向对的地方，
+    所以一律用相对路径 —— 这样 project pages（`user.github.io/repo/`）与将来自有域名的
+    根路径都能用，不需要改 base。
+    """
+    from_parts = [p for p in from_dir.split("/") if p]
+    to_parts = [p for p in to_path.split("/") if p]
+    while from_parts and to_parts and from_parts[0] == to_parts[0]:
+        from_parts.pop(0)
+        to_parts.pop(0)
+    return "/".join([".."] * len(from_parts) + to_parts) or "."
+
+
+def asset_fingerprint(name: str) -> str:
+    """资源名 → 带内容指纹的文件名；没登记过就原样返回。"""
+    return _ASSET_FINGERPRINTS.get(name, name)
+
+
+def asset(from_dir: str, name: str) -> str:
+    """引用 assets/ 下的资源，自动带上内容指纹（见 `set_asset_fingerprints`）。
+
+    没登记过的文件原样引用 —— 指纹只对参与缓存的 .css/.js 有意义。
+    """
+    base = _ASSET_FINGERPRINTS.get(name, name)
+    return rel(from_dir, f"assets/{base}")
+
+
 def write(path: Path, text: str) -> None:
     """写文本文件，统一 LF（Git 里不回显成整文件改动）。"""
     path.parent.mkdir(parents=True, exist_ok=True)

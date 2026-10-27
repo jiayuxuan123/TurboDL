@@ -45,7 +45,24 @@ BLOB = f"{REPO}/blob/main"
 #: 本仓库实测的测试数（`./gradlew test`，0 跳过 0 失败）—— 不是估计值。
 TEST_COUNT = 258
 #: 公开 API 版本，来自 turbodl-core 的 ApiVersion.CURRENT。
-API_VERSION = "1.0.0"
+def _read_api_version() -> str:
+    """从 turbodl-core 的 ApiVersion.kt 里读当前公开 API 版本。
+
+    手写的版本号会滞后：源码里的 ApiVersion.CURRENT 升了，站上还写着旧的，
+    而插件是**按站上写的版本号**去判断兼容性 —— 于是文档说的和实际能跑的
+    对不上。唯一来源应该是源码。
+    """
+    import re as _re
+    src = Path(__file__).resolve().parent.parent / "turbodl-core" / "src" / "main" / "kotlin" / "dev" / "turbodl" / "core" / "ApiVersion.kt"
+    try:
+        text = src.read_text(encoding="utf-8")
+    except OSError:
+        return "1.0.0"
+    m = _re.search(r"ApiVersion\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", text)
+    return f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else "1.0.0"
+
+
+API_VERSION = _read_api_version()
 
 # --------------------------------------------------------------------------- #
 # 事实表（双语共用，渲染时按语言挑）
@@ -96,6 +113,15 @@ MODULES = [
         {
             "en": "Loads TurboDL plugins written in JavaScript. Embeds QuickJS — one runtime and one context per script — and exposes a stable `host`/`plugin` ABI with coarse-grained capabilities.",
             "zh": "加载用 JavaScript 写的 TurboDL 插件。内嵌 QuickJS —— 每个脚本一个 runtime 与 context —— 并给脚本一套稳定的 `host`/`plugin` ABI。",
+        },
+        False,
+    ),
+    (
+        "turbo-plugin-parser",
+        {"en": "Platform link parser", "zh": "平台链接解析"},
+        {
+            "en": "Turns a share link into download requests: Weibo (MP4 + image sets), Xiaohongshu (watermark-free video + original images), Pixiv (every page's original). Holds no credentials — where a platform needs a login it returns null and the host's own session handling takes over.",
+            "zh": "把分享链接变成可下载请求：微博（MP4 + 图集）、小红书（无水印视频 + 原图）、Pixiv（每页原图）。**不持有任何凭证** — 平台需要登录时返回 null，由宿主自己的会话处理接手。",
         },
         False,
     ),
@@ -232,6 +258,39 @@ OFFICIAL_PLUGINS = [
         "refuses_note": {
             "en": "A script computes URLs, headers and signatures; it never streams download data. That boundary is what keeps a script from becoming a bandwidth bottleneck.",
             "zh": "脚本负责算 URL、请求头和签名，**从不**经手下载数据流。这条边界正是它不会变成带宽瓶颈的原因。",
+        },
+    },
+    {
+        "key": "plugin-parser",
+        "id": "parser.platforms",
+        "name": "Platform Link Parser",
+        "category": "turbodl-parser",
+        "capabilities": ["dev.turbodl.cap.parser.platforms"],
+        "protocols": ["weibo", "xhs", "pixiv"],
+        "artifact": "turbo-plugin-parser",
+        "manifest": f"{BLOB}/turbo-plugin-parser/turbodl-plugin.json",
+        "source": f"{REPO}/tree/main/turbo-plugin-parser",
+        "summary": {
+            "en": "Turns a share link into download requests: Weibo (best available MP4 + image sets), Xiaohongshu (watermark-free video + original images), Pixiv (every page's `urls.original`). Registers one `LinkParser` plus one `ProtocolClaim` per platform — the engine knows nothing about these three sites.",
+            "zh": "把分享链接变成可下载请求：微博（最高可用清晰度 MP4 + 图集）、小红书（无水印视频 + 原图）、Pixiv（每页 `urls.original`）。注册一个 `LinkParser` 与每个平台一条 `ProtocolClaim` — 引擎对这三个站点一无所知。",
+        },
+        "refuses": {
+            "en": [
+                "Logging in — a platform that needs a session returns null and the host's own account handling takes over",
+                "Pixiv animations (ugoira): a zip plus a frame-timing table needs image processing",
+                "Pixiv novels",
+                "Signed APIs (Douyin, Kuaishou, Bilibili): per-platform signature algorithms stay in the host",
+            ],
+            "zh": [
+                "登录 — 需要会话的平台返回 null，由宿主自己的账号处理接手",
+                "Pixiv 动图（ugoira）：zip + 帧时长表需要图像处理",
+                "Pixiv 小说",
+                "需要签名的接口（抖音 / 快手 / B站）：各自的签名算法仍留在宿主侧",
+            ],
+        },
+        "refuses_note": {
+            "en": "Its result type carries no path: a `DownloadRequest` needs a `destination: File`, but a parser runs before the host has chosen a directory. The temp-dir destination is filled in only at the boundary, so the host still applies its own path policy.",
+            "zh": "它的结果类型**不含任何路径**：`DownloadRequest` 需要 `destination: File`，而解析发生在宿主决定目录之前。临时目录占位只在边界处补上，宿主仍然走自己的路径策略。",
         },
     },
 ]
@@ -745,6 +804,7 @@ def _page_download(lang: str, href) -> str:
     implementation("dev.turbodl:turbo-plugin-bootstrap:{ver}")
     implementation("dev.turbodl:turbo-plugin-hls:{ver}")
     implementation("dev.turbodl:turbo-plugin-js:{ver}")
+    implementation("dev.turbodl:turbo-plugin-parser:{ver}")
 }}""",
                 "build.gradle.kts",
             )

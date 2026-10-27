@@ -9,7 +9,9 @@
  "assets/fonts/sentient-500.woff2",
  "assets/logo-mark.svg",
  "assets/og.png",
+ "assets/site.18af3adb.css",
  "assets/site.css",
+ "assets/site.f26d821e.js",
  "assets/site.js",
  "changelog/index.html",
  "community/index.html",
@@ -31,6 +33,7 @@
  "plugins/index.html",
  "plugins/turbo-plugin-hls/index.html",
  "plugins/turbo-plugin-js/index.html",
+ "plugins/turbo-plugin-parser/index.html",
  "robots.txt",
  "sitemap.xml",
  "zh/changelog/index.html",
@@ -52,5 +55,6 @@
  "zh/legal/third-party/index.html",
  "zh/plugins/index.html",
  "zh/plugins/turbo-plugin-hls/index.html",
- "zh/plugins/turbo-plugin-js/index.html"
+ "zh/plugins/turbo-plugin-js/index.html",
+ "zh/plugins/turbo-plugin-parser/index.html"
 ]
