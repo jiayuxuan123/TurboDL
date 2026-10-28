@@ -191,7 +191,15 @@ code, pre, kbd, samp {
 
 .side-tools { display: flex; align-items: center; gap: 0.75rem; }
 .langs { display: flex; align-items: center; gap: 0.5rem; font-size: var(--t-small); }
-.langs a { color: var(--muted); text-decoration: none; }
+/* min-height: 24px：语言切换是窄屏顶栏里的主要可点目标之一，
+   23px 高在手机上按不中（WCAG 2.5.8 的下限是 24px）。 */
+.langs a {
+  color: var(--muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
 .langs a:hover { color: var(--ink); }
 .lang-cur { color: var(--ink); }
 
@@ -577,7 +585,15 @@ tr:last-child td { border-bottom: 0; }
 /* ---------------------------------------------------------------- 文档页 */
 .doc-head h1 { font-size: var(--t-head); }
 .doc-meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-top: 1.25rem; font-size: var(--t-small); color: var(--muted); }
-.doc-meta a { color: var(--muted); }
+/* 「view on GitHub / raw file」这类小链接只有 16px 高。
+   min-height: 24px 让它们够 WCAG 2.5.8 的最低可点尺寸 ——
+   手机上 16px 高的链接手指经常按不中。视觉上仍是一行次要信息。 */
+.doc-meta a {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
 .doc-meta a:hover { color: var(--ink); }
 /* 文档页两栏：目录 + 正文
    ★ 标记顺序是「目录在前、正文在后」（见 content.py 的 doc_grid），
@@ -631,10 +647,39 @@ code:not(pre code) {
 .toc a:hover { color: var(--ink); }
 .toc .cur span { color: var(--ink); }
 .doc-aside { position: sticky; top: 1.5rem; align-self: start; max-height: calc(100svh - 3rem); overflow-y: auto; }
-.anchor { color: var(--faint); text-decoration: none; margin-left: 0.4rem; }
+/* 标题旁的「#」锚点：窄到 13~21px，是页面上最小的可点目标。
+   给一块 24×24 的透明命中区，并且只在悬停/聚焦时出现 ——
+   触屏没有悬停，所以粗指针设备上常显（否则这个锚点等于不存在）。 */
+.doc-body h2, .doc-body h3, .doc-body h4 { position: relative; }
+.anchor {
+  color: var(--faint);
+  text-decoration: none;
+  margin-left: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.doc-body h2:hover .anchor,
+.doc-body h3:hover .anchor,
+.doc-body h4:hover .anchor,
+.anchor:focus-visible { opacity: 1; }
+@media (pointer: coarse) {
+  .anchor { opacity: 0.55; }
+}
 .crumbs { display: flex; gap: 0.5rem; padding: 1.5rem var(--margin) 0; max-width: var(--wrap); margin-inline: auto; font-size: var(--t-small); color: var(--muted); }
 .crumbs .sep { color: var(--faint); }
-.crumbs a { color: var(--muted); }
+/* 面包屑与语言切换链接只有 23px 高 —— 差 1px 就够不到最低可点尺寸。 */
+.crumbs a, .langs a {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding-block: 2px;
+}
 
 /* ---------------------------------------------------------------- 动效 */
 /* 签名动作：首屏两份标题的错位入场、章节逐件浮现、开关与详情页的反馈。
