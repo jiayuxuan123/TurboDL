@@ -148,7 +148,7 @@ class AuditFixesRegressionTest {
      * 用 `connections=1` + 32KB 文件构造**单块**布局，
      * 以便精确预置一个覆盖全区的旧分片来模拟「上次下载留下的断点」。
      */
-    private fun singleBlockSetup(size: Int): Triple<File, File, String> {
+    private fun singleBlockSetup(size: Int, dest: File): Triple<File, File, String> {
         val workDir = File(System.getProperty("java.io.tmpdir"), "turbodl-audit-b1-${System.nanoTime()}")
         workDir.mkdirs()
         val stableKey = "audit-b1"
@@ -157,8 +157,26 @@ class AuditFixesRegressionTest {
         val chunkDir = File(workDir, safe).apply { mkdirs() }
         // 服务器不提供 ETag/Last-Modified → 弱校验器；探测被跳过时 validator = "len=<size>|weak"
         File(chunkDir, ".validator").writeText("len=$size|weak")
-        // 预置一个覆盖全区的「旧分片」，内容全是垃圾（模拟服务器已换文件后的陈旧数据）
-        File(chunkDir, "seg_0_${size - 1}.part").writeBytes(ByteArray(size) { 0x5A })
+
+        // 预置一段覆盖全区的「旧数据」，内容全是垃圾（模拟服务器已换文件后的陈旧数据）。
+        //
+        // ★ 存储结构已变：过去是预置一个 seg_0_N.part；现在数据写在**目标文件**里、
+        //   进度记在侧车，所以这里按新结构铺一遍（垃圾字节 + 侧车声称"已写完"）。
+        //   断言意图不变：弱校验器被放行时这段陈旧数据会被复用，产出损坏文件。
+        val store = SegmentStore(
+            dest = dest,
+            stateFile = File(chunkDir, "progress.tdlp"),
+            total = size.toLong(),
+        )
+        store.open()
+        try {
+            val pieces = store.buildGrid(size.toLong())
+            store.writeAt(0, ByteArray(size) { 0x5A }, 0, size)
+            pieces.forEach { it.written = it.length }
+            store.persist(pieces)
+        } finally {
+            store.close()
+        }
         return Triple(workDir, chunkDir, stableKey)
     }
 
@@ -167,7 +185,8 @@ class AuditFixesRegressionTest {
         val size = 32 * 1024
         val payload = ByteArray(size) { ((it * 7 + 3) % 241).toByte() }
         val srv = properRangeServer(payload)
-        val (workDir, chunkDir, stableKey) = singleBlockSetup(size)
+        val out = File.createTempFile("b1a", ".bin").apply { deleteOnExit() }
+        val (workDir, chunkDir, stableKey) = singleBlockSetup(size, out)
 
         val client = TurboClient(
             TurboConfig(
@@ -178,7 +197,6 @@ class AuditFixesRegressionTest {
                 trustWeakValidator = false,    // 默认：正确性优先
             )
         )
-        val out = File.createTempFile("b1a", ".bin").apply { deleteOnExit() }
         try {
             val id = client.submit(
                 DownloadRequest(
@@ -213,7 +231,8 @@ class AuditFixesRegressionTest {
         val size = 32 * 1024
         val payload = ByteArray(size) { ((it * 7 + 3) % 241).toByte() }
         val srv = properRangeServer(payload)
-        val (workDir, _, stableKey) = singleBlockSetup(size)
+        val out = File.createTempFile("b1b", ".bin").apply { deleteOnExit() }
+        val (workDir, _, stableKey) = singleBlockSetup(size, out)
 
         val client = TurboClient(
             TurboConfig(
@@ -224,7 +243,6 @@ class AuditFixesRegressionTest {
                 trustWeakValidator = true,     // 省流量优先：接受风险
             )
         )
-        val out = File.createTempFile("b1b", ".bin").apply { deleteOnExit() }
         try {
             val id = client.submit(
                 DownloadRequest(

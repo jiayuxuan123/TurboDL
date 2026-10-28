@@ -52,10 +52,13 @@ internal class BuiltinHttpBackend(
         // 旧实现 20s × 3 次 + 退避 ≈ 最坏 61s 全程阻塞，用户看到的就是“解析卡一分钟”。
         // 现在：调用方已知大小时直接跳过探测；否则单次 6s、最多 1 次重试。
         val knownSize = request.knownSize.takeIf { it > 0 } ?: -1L
-        // 目录里是否已有**可续传**的分片（非空 seg_*.part）。
-        val hasResumableParts = chunkDir.listFiles()?.any { f ->
-            f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
-        } == true
+        // 是否已有**可续传**的进度。
+        //
+        // 旧结构看的是"目录里有没有非空的 seg_*.part"；现在字节直接写在目标文件里，
+        // 进度记在侧车（progress.tdlp）上。这一处只需要回答"要不要为续传而探测"，
+        // 所以看侧车在不在就够 —— 真正的有效性由 SegmentStore.loadOrCreate 判定
+        // （它还会核对总大小与目标文件长度）。
+        val hasResumableParts = File(chunkDir, PROGRESS_FILE).isFile
         // 【续传场景不得跳过探测】跳过探测就拿不到 ETag / Last-Modified，
         // `ProbeResult` 的 validator 会退化成 `len=N|weak`（[SegmentDownloader.ProbeResult.isWeak]），
         // 而下面的续传校验规定"弱校验器不足以支撑安全续传"→ **无条件下丢弃全部旧分片**。
@@ -80,6 +83,16 @@ internal class BuiltinHttpBackend(
         }
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
+
+        // ---------- 分片存储：按偏移直写目标文件 ----------
+        // 侧车跟着分片目录走（该目录由 stableKey 决定，因此多次 submit 复用同一份进度）。
+        // 放在续传校验之前：校验本身要读目标文件里的已写字节做内容指纹。
+        val store = SegmentStore(
+            dest = request.destination,
+            stateFile = File(chunkDir, PROGRESS_FILE),
+            total = total,
+        )
+        store.open()
         val probeMs = System.currentTimeMillis() - probeStartAt
         // 续传判定结果（在下面的续传校验里填写，随后随 Metadata 一起上报给宿主）。
         var resumeNote = ""
@@ -149,7 +162,7 @@ internal class BuiltinHttpBackend(
             // 数据留着，比"删干净从头下"对用户友好得多。
             val probeDegraded = prev.isNotEmpty() && !nowUsable
 
-            // 内容指纹：仅在「弱校验器 + 有旧分片 + 令牌本身没变」时才需要（其余分支已定性）。
+            // 内容指纹：仅在「弱校验器 + 有旧进度 + 令牌本身没变」时才需要（其余分支已定性）。
             // 【三值判定，关键】把"取不到指纹"与"内容确实不同"**分开**：
             //   MATCH        → 保留旧分片（续传可用）
             //   MISMATCH     → 确证内容不同 → 丢弃（安全底线）
@@ -178,19 +191,17 @@ internal class BuiltinHttpBackend(
             val needFingerprint = hasOldParts && !probeDegraded && !lenChanged &&
                 (weakButResuming || validatorDiffers)
             val decision = if (needFingerprint) {
-                verifyResumeFingerprint(chunkDir, effectiveUrl, taskHeaders)
+                verifyResumeFingerprint(store, total, effectiveUrl, taskHeaders)
             } else {
                 ResumeDecision.NOT_ATTEMPTED
             }
 
             val discard = lenChanged || decision == ResumeDecision.MISMATCH
             if (discard) {
-                // 丢弃过期/无法安全校验的分片，从头下（不报错，对用户透明）。
-                // 排除 .validator 自身，避免"删了又写"的脆弱时序。
-                chunkDir.listFiles()?.forEach { f ->
-                    if (f.name != VALIDATOR_FILE) runCatching { f.delete() }
-                }
-                chunkDir.mkdirs()
+                // 丢弃过期/无法安全校验的进度，从头写（不报错，对用户透明）。
+                // 现在只有两样东西要清：侧车进度与目标文件本身。
+                runCatching { File(chunkDir, PROGRESS_FILE).delete() }
+                runCatching { request.destination.delete() }
             }
             resumeNote = "parts=$hasOldParts weak=$weakButResuming lenChanged=$lenChanged " +
                 "validDiff=$validatorDiffers " +
@@ -224,9 +235,39 @@ internal class BuiltinHttpBackend(
             )
         }
 
+        return try {
+            downloadWithStore(context, store, probe, total, supportsRange, effectiveUrl, taskHeaders, chunkDir)
+        } finally {
+            // 通道必须关：Windows 下不关会让目标文件一直被占住，用户挪不走也删不掉。
+            store.close()
+        }
+    }
+
+    /**
+     * 主体：分片直写 / 整文件回退 / 结果解释。
+     *
+     * 从 [download] 拆出来，是为了让那边的 `try/finally` 只负责 store 的生命周期，
+     * 不必把整段下载逻辑再缩进一层。
+     */
+    private suspend fun downloadWithStore(
+        context: BackendContext,
+        store: SegmentStore,
+        probe: SegmentDownloader.ProbeResult,
+        total: Long,
+        supportsRange: Boolean,
+        effectiveUrl: String,
+        taskHeaders: Map<String, String>,
+        chunkDir: File,
+    ): BackendResult {
+        val request = context.request
+        val speedLimiter = SpeedLimiter { context.config.globalSpeedLimitBytesPerSec }
+
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
         if (!supportsRange || total <= 0) {
-            val outPart = File(chunkDir, "whole.part")
+            // 【本版变化】整文件单流也**直接写目标文件**，不再写 whole.part 再合并：
+            // 少一次全量拷贝，也少一个"下载完成但还在拷文件"的阶段。
+            val outPart = request.destination
+            outPart.parentFile?.mkdirs()
             var acc = 0L
             // 卡死守护：整文件单流路径也需要（否则服务器接受连接但不吐字节时，
             // 会一路阻塞到 readTimeout 甚至反复重试，表现为“显示下载中但永远不动”）。
@@ -282,9 +323,7 @@ internal class BuiltinHttpBackend(
                 context.config.warmUpConnectionCount.takeIf { it > 0 } ?: connections,
                 context.config.warmUpMaxParallel,
             ).coerceAtLeast(1)
-            // 关键：预热**不得阻塞下载开始**。旧实现会等到预热全部完成（最坏 8s）才开工，
-            // 叠加在探测之后就是用户感知到的“解析很慢”。现在后台异步跑：
-            // 分片立即开始，预热建好的连接会自然进连接池被后续分片复用。
+            // 关键：预热**不得阻塞下载开始**。分片立即开始，预热建好的连接会自然进连接池被复用。
             kotlinx.coroutines.CoroutineScope(currentCtx).launch {
                 runCatching {
                     downloader.warmUp(
@@ -299,129 +338,37 @@ internal class BuiltinHttpBackend(
         val scheduler = SegmentScheduler(downloader, context.config, speedLimiter)
         // 真实并发数由调度器回报（而非直接用配置值），UI 才能看到实际跑满多少线程。
         val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(connections)
-        // 【下载中预先合并】把已完成分片立刻写进目标文件的临时副本，
-        // 让合并 I/O 与网络等待重叠（详见 OverlapMerger 的注释）。
-        // 仅在"要写多分片"的场景有意义；关闭时不产生任何额外 I/O。
-        // 【与收尾托管的互斥 —— 这是会导致静默文件损坏的组合】
-        //
-        // 收尾托管会把分片 [A,B] 缩短到 [A,M] 并新建 [M+1,B]；而预先合并把
-        // "已完成分片"直接写进目标文件。若原分片在托管生效前已写入超过 M 的字节，
-        // 它的写入会覆盖到 [M+1,B] —— 与接管分片命中**同一区间**，两者来自不同请求
-        // （可能落到不同 CDN 节点），谁后写谁赢。结果是长度校验通过、SHA-256 不符。
-        //
-        // TurboConfig 的文档里记着这个缺陷（当时的结论是"默认关掉 overlapMerge"），
-        // 但代码层面从来没有真正的互斥：只判断了 overlapMerge 自身。
-        // 用户在设置里把两个开关都打开，就会踩中。
-        //
-        // 这里让"托管优先"：只要 tailAssist 开着就禁用预先合并。
-        // 理由是两个开关的**收益不对等** —— 托管消除的是收尾长尾（可能几十秒），
-        // 预先合并省的是 6% 的合并 I/O；用完整性换这点速度不值得。
-        if (context.config.overlapMerge && context.config.tailAssist) {
-            System.err.println(
-                "[TurboDL] overlapMerge 已自动禁用：" +
-                    "与 tailAssist（收尾托管）同时开启会写坏文件",
-            )
-        }
-        val ov = if (
-            context.config.overlapMerge &&
-            !context.config.tailAssist &&
-            total > 0
-        ) {
-            OverlapMerger(context.request.destination).apply {
-                reset()
-                expectedSize = total      // 一次性预分配，写入只 seek 不改长度
-            }
-        } else null
-        // 显式声明为 suspend 函数类型：直接写 `(suspend (Long, File) -> Unit)?` 在
-        // 局部变量位置会触发 Kotlin 的类型推断问题，故用具名 lambda + 显式类型标注。
-        val onSegDone: suspend (Long, File) -> Unit = { start, file -> ov?.onSegmentDone(start, file) }
 
         val outcome = scheduler.run(
             taskId = context.taskId,
             url = effectiveUrl,
             total = total,
-            chunkDir = chunkDir,
+            store = store,
             headers = taskHeaders,
             connections = connections,
             onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
             onConnections = { live -> liveConnsRef.set(live) },
             isActive = { context.isActive() },
-            onSegmentDone = onSegDone,
             ifRange = probe.strongIfRange,
         )
 
         return when (outcome) {
             is SegmentScheduler.Outcome.Completed -> {
-                // 【预先合并命中】若临时副本已完整，直接发布它，省掉收尾那次全量合并。
-                //
-                // 注意：**不能**用 `mergedBytes >= total` 作为前置条件来短路 publish()——
-                // 写线程是异步的，下载结束时队列里通常还有大量分片没写完
-                // （实测 enqueued=251 / dequeued=62）。那样会导致 publish() 从不被调用、
-                // 数据永远不全，预合并形同虚设。
-                // 正确做法：总是让 publish() 去等队列排空，由它自己判定完整性；
-                // 并把全部分片交给它，用于补齐写线程可能还差的一两个尾部块。
-                val published = if (ov != null && total > 0) {
-                    val allParts = scheduler.finalParts(chunkDir).associateBy { f ->
-                        f.name.removePrefix("seg_").substringBefore('_').toLongOrNull() ?: -1L
-                    }
-                    ov.publish(total, allParts)
-                } else false
-                if (System.getenv("TURBODL_DEBUG_OVERLAP") == "1") {
-                    System.err.println(
-                        "[overlap] enabled=${ov != null} mergedBytes=${ov?.mergedBytes()} total=$total " +
-                            "failed=${ov?.hasFailed()} published=$published " +
-                            "tempExists=${ov?.tempFile?.isFile} tempLen=${ov?.tempFile?.length()} " +
-                            "stats=${ov?.debugStats()}"
-                    )
-                }
-                if (published) {
-                    BackendResult(listOf(context.request.destination), total)
-                } else {
-                    runCatching { ov?.shutdown() }
-                    runCatching { ov?.tempFile?.delete() }
-                    BackendResult(scheduler.finalParts(chunkDir), total, scheduler.partStarts(chunkDir))
-                }
+                // 数据从第一片起就写在目标文件里 —— 没有合并阶段，直接发布。
+                BackendResult(listOf(request.destination), total)
             }
 
             is SegmentScheduler.Outcome.NeedWholeFallback -> {
-                // Range 反复被忽略才会走到这里（单次偶发已在调度器重试层容忍）。
-                // 保留已完成的分片，只删那些不完整/部分写入的，避免几百 MB 进度瞬间丢失后从 0 单流重下。
-                // 但若本来就一个完整分片都没有（total 很小或服务器从头就不支持 Range），则直接整文件单流。
-                val keptComplete = chunkDir.listFiles { f ->
-                    f.name.startsWith("seg_") && f.name.endsWith(".part")
-                }?.any { f ->
-                    val name = f.name.removePrefix("seg_").removeSuffix(".part")
-                    val s = name.substringBefore('_').toLongOrNull()
-                    val e = name.substringAfter('_').toLongOrNull()
-                    s != null && e != null && f.length() >= (e - s + 1)
-                } ?: false
+                // Range 反复被忽略：只能整文件单流。
+                //
+                // 直写模式下"保留已完成分片"不再成立 —— 整文件下载会从 0 覆盖整个文件，
+                // 与已写入的片段混合只会得到无意义的结果。所以这里清空进度重来。
+                // （旧实现能保留，是因为它写的是互相独立的临时文件；那是另一套结构的红利，
+                //   而它付出的代价是高并发下的 57 倍 I/O，见 SegmentStore 的实测表。）
+                runCatching { File(chunkDir, PROGRESS_FILE).delete() }
+                store.reset()
 
-                if (keptComplete) {
-                    // 有已完成分片：仍按分片模式完成（调度器下次会跳过已完成块），
-                    // 不能直接整文件回退（会与已有分片混合）。重跑一次调度，让剩余块继续分片下载。
-                    val retry = scheduler.run(
-                        taskId = context.taskId, url = effectiveUrl, total = total,
-                        chunkDir = chunkDir, headers = taskHeaders, connections = connections,
-                                    onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
-                        onConnections = { live -> liveConnsRef.set(live) },
-                        isActive = { context.isActive() },
-                        ifRange = probe.strongIfRange,
-                    )
-                    if (retry is SegmentScheduler.Outcome.Completed) {
-                        return BackendResult(scheduler.finalParts(chunkDir), total, scheduler.partStarts(chunkDir))
-                    }
-                    // 仍不行：清空重新整文件下（兼容真不支持 Range 的服务器）。
-                }
-                // 【P0-3 修复】deleteRecursively 会连 .validator 一起删掉，
-                // 导致整文件回退后目录里没有任何「这一版文件是谁」的标记 ——
-                // 下次进入本函数时 prev 为空，校验全部退化为「无信息」，续传逻辑被永久绕过。
-                // 故先快照，重建目录后补写回去。
-                val validatorSnapshot = probe.validator
-                chunkDir.deleteRecursively(); chunkDir.mkdirs()
-                if (validatorSnapshot.isNotEmpty()) {
-                    runCatching { File(chunkDir, VALIDATOR_FILE).writeText(validatorSnapshot) }
-                }
-                val outPart = File(chunkDir, "whole.part")
+                val outPart = request.destination
                 var acc = 0L
                 val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
                     context.throttle(d)
@@ -437,10 +384,12 @@ internal class BuiltinHttpBackend(
                 if (!context.isActive()) throw kotlinx.coroutines.CancellationException("paused")
                 // 若是"分片读到的字节不够"这类具体原因，把它接在调度器给的原因后面 ——
                 // 「重试 6 次仍失败」本身不告诉用户为什么失败。
+                // 调度器如今会把**出事那一片自己的**原因带在 reason 里（见 Segment.lastFailure），
+                // 只有它还缺细节时才补任务级原因 —— 否则会出现两层括号，
+                // 且可能把别的分片的原因（单槽 race）贴到真正失败的分片后面。
                 val detail = downloader.takeWholeError(context.taskId)
-                throw IllegalStateException(
-                    if (detail != null) "${outcome.reason}（$detail）" else outcome.reason
-                )
+                val suffix = if (detail != null && !outcome.reason.contains('（')) "（$detail）" else ""
+                throw IllegalStateException(outcome.reason + suffix)
             }
         }
     }
@@ -448,9 +397,9 @@ internal class BuiltinHttpBackend(
     /**
      * 弱校验器续传的**内容指纹校验**（三值返回）。
      *
-     * 取「起始位置最小且非空的 `seg_*.part`」的前 [FINGERPRINT_BYTES] 字节，
-     * 向服务器请求**同一区间**并逐字节比对：
-     *  - [ResumeDecision.MATCH]        → 旧分片确实属于当前版本 → 保留（续传可用）
+     * 取「起始位置最小且已写入 > 0」的分片，从**目标文件**的对应偏移读前
+     * [FINGERPRINT_BYTES] 字节，向服务器请求同一区间并逐字节比对：
+     *  - [ResumeDecision.MATCH]        → 旧数据确实属于当前版本 → 保留（续传可用）
      *  - [ResumeDecision.MISMATCH]     → 拿到了字节但内容不同 → 丢弃（安全底线）
      *  - [ResumeDecision.UNVERIFIABLE] → 没拿到字节（状态码异常/请求失败/无可读分片）→ **保留**
      *
@@ -461,39 +410,28 @@ internal class BuiltinHttpBackend(
      * 成本：一次 64KB 的 Range 请求（相比整包重下可忽略）。
      */
     private suspend fun verifyResumeFingerprint(
-        chunkDir: File,
+        store: SegmentStore,
+        total: Long,
         url: String,
         headers: Map<String, String>,
     ): ResumeDecision {
-        val parts = chunkDir.listFiles { f ->
-            f.isFile && f.name.startsWith("seg_") && f.name.endsWith(".part") && f.length() > 0
-        } ?: return ResumeDecision.UNVERIFIABLE
+        val pieces = store.peek(total) ?: return ResumeDecision.UNVERIFIABLE
         // 依次尝试最多 2 个候选分片（一个 CDN 节点偶发异常不该否掉整个续传）。
-        val candidates = parts
-            .sortedBy { parseSegStart(it.name) ?: Long.MAX_VALUE }
+        val candidates = pieces
+            .filter { it.written > 0 }
+            .sortedBy { it.start }
             .take(2)
         if (candidates.isEmpty()) return ResumeDecision.UNVERIFIABLE
 
         var gotBytes = false
-        for (part in candidates) {
-            val start = parseSegStart(part.name) ?: continue
-            val len = minOf(FINGERPRINT_BYTES.toLong(), part.length()).toInt()
+        for (piece in candidates) {
+            val len = minOf(FINGERPRINT_BYTES.toLong(), piece.written).toInt()
             if (len <= 0) continue
-            val local = runCatching {
-                val buf = ByteArray(len)
-                part.inputStream().use { ins ->
-                    var off = 0
-                    while (off < len) {
-                        val n = ins.read(buf, off, len - off)
-                        if (n <= 0) break
-                        off += n
-                    }
-                    if (off < len) return@runCatching null
-                }
-                buf
-            }.getOrNull() ?: continue
+            val local = runCatching { store.readAt(piece.start, len) }.getOrNull() ?: continue
+            if (local.size < len) continue
 
-            val remote = downloader.fetchPrefix(url, headers, start, len, timeoutMs = 10_000) ?: continue
+            val remote = downloader.fetchPrefix(url, headers, piece.start, len, timeoutMs = 10_000)
+                ?: continue
             if (remote.size < len) continue
             gotBytes = true
             if (remote.copyOf(len).contentEquals(local)) return ResumeDecision.MATCH
@@ -512,6 +450,14 @@ internal class BuiltinHttpBackend(
     private companion object {
         /** 续传校验标记文件名。 */
         const val VALIDATOR_FILE = ".validator"
+
+        /**
+         * 分片进度侧车文件名（放在分片目录里）。
+         *
+         * 内容体量很小（几百片约十几 KB），记录每个分片的 start/end/written。
+         * 它的存在即代表"这个任务有可续传进度"，见 `hasResumableParts`。
+         */
+        const val PROGRESS_FILE = "progress.tdlp"
 
         /** 续传内容指纹长度：64KB 足以区分不同文件，又不至于成为负担。 */
         const val FINGERPRINT_BYTES = 64 * 1024

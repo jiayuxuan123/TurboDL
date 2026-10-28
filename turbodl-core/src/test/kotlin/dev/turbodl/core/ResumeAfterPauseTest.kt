@@ -98,8 +98,27 @@ class ResumeAfterPauseTest {
         return File(workDir, safe)
     }
 
-    private fun onDiskBytes(dir: File): Long =
-        dir.listFiles()?.filter { it.isFile && it.name.startsWith("seg_") }?.sumOf { it.length() } ?: 0L
+    /**
+     * 「已落盘」的字节数。
+     *
+     * ★ 存储结构变了：过去每个分片一个 `seg_*.part`，量一下文件长度即可；
+     *   现在字节直接写在目标文件里、进度记在侧车，所以这里读侧车里的写入量。
+     *   **断言意图不变**：暂停后必须真的有进度落盘，续传必须从它接着走。
+     */
+    private fun onDiskBytes(stateFile: File, dest: File, total: Long): Long {
+        if (!stateFile.isFile) return 0L
+        val store = SegmentStore(dest = dest, stateFile = stateFile, total = total)
+        return store.peek(total)?.sumOf { it.written } ?: 0L
+    }
+
+    /** 侧车里记录的分片数（用于"多少个分片有进度"这类观察）。 */
+    private fun pieceCount(stateFile: File, dest: File, total: Long): Int {
+        if (!stateFile.isFile) return 0
+        val store = SegmentStore(dest = dest, stateFile = stateFile, total = total)
+        return store.peek(total)?.count { it.written > 0 } ?: 0
+    }
+
+    private fun progressFileOf(chunkDir: File) = File(chunkDir, "progress.tdlp")
 
     /** 等到任务状态真的变成 PAUSED —— 固定 sleep 会掩盖竞态（上一版测试就是在"下完之后"才去量的）。 */
     private suspend fun waitForPaused(client: TurboClient, id: Long) {
@@ -144,7 +163,7 @@ class ResumeAfterPauseTest {
             client.pause(id1)
             waitForPaused(client, id1)
 
-            val onDisk = onDiskBytes(chunkDir)
+            val onDisk = onDiskBytes(progressFileOf(chunkDir), out, size.toLong())
             val servedFirst = srv.served.get()
             assertTrue(onDisk > 0, "暂停后分片目录里应当有已下载的分片（onDisk=$onDisk）")
 
@@ -215,7 +234,7 @@ class ResumeAfterPauseTest {
             val reported = client.progress.value[id]?.downloadedBytes ?: 0L
             client.pause(id)
             waitForPaused(client, id)
-            val onDisk = onDiskBytes(chunkDir)
+            val onDisk = onDiskBytes(progressFileOf(chunkDir), out, size.toLong())
             val parts = chunkDir.listFiles()?.count { it.name.startsWith("seg_") } ?: 0
             println(
                 "[resume-gap] 连接=$connections 上报=$reported 落盘=$onDisk 差=${reported - onDisk} " +
@@ -261,7 +280,7 @@ class ResumeAfterPauseTest {
             waitUntil(client, id1, size / 4L)
             client.pause(id1)
             waitForPaused(client, id1)
-            val onDisk = onDiskBytes(chunkDir)
+            val onDisk = onDiskBytes(progressFileOf(chunkDir), out, size.toLong())
             assertTrue(onDisk > 0, "暂停后应当有分片落盘（onDisk=$onDisk）")
             srv.served.set(0)
             val id2 = client.submit(DownloadRequest(url = url, destination = out, stableKey = stableKey))

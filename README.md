@@ -12,7 +12,10 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 
 ## Features
 
-- **Multi-threaded segmented download**: HTTP Range parallel segments, connection reuse (HTTP/2 multiplexing + keep-alive).
+- **Multi-threaded segmented download**: HTTP Range parallel segments written **directly into the destination file at their offsets** (positional writes), connection reuse (HTTP/2 multiplexing + keep-alive).
+- **No merge phase**: segments are not separate temp files that get concatenated afterwards. Measured on one disk, 16 MB: creating 512 segment files costs 627 ms while writing the same bytes positionally into one file costs 11 ms — 57x. On loopback this took 128-connection throughput from 20 MB/s to 88 MB/s, and it no longer degrades as connection count rises. There is also no "stuck at 99 %" step, because nothing is left to assemble.
+- **Progress survives crashes without inflated claims**: a small sidecar records each segment's written byte count, and it is always persisted *after* the data lands. A crash can only lose the seconds since the last flush, and re-downloading that range is idempotent.
+- **Failure attribution without collateral damage**: every segment keeps its own last error, and a request cancelled because *another* segment exhausted its retries does not consume the cancelled segment's retry budget. A single flaky connection therefore neither fails the task nor produces a misleading "retry N times failed (Canceled)" message.
 - **Dynamic segmentation**: fine-grained pre-splitting + work stealing, so slow connections don't drag down the whole transfer and the "last segment finishing on a single thread" long tail is eliminated (IDM/XDM idea).
 - **Sequential segment priority**: earlier segments are downloaded first, enabling progressive preview/playback (axel/Persepolis idea).
 - **Robust fallback & retry**:

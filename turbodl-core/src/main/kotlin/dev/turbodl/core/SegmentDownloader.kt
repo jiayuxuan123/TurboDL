@@ -102,6 +102,37 @@ internal class SegmentDownloader(
      */
     private val failureByTask = ConcurrentHashMap<Long, String>()
 
+    /**
+     * 服务器给出的 `Retry-After`（毫秒，按 taskId）。
+     *
+     * 429/503 常常带这个头（RFC 9110 §10.2.3），值是"建议等多久"或一个 HTTP 日期。
+     * 忽略它只能用盲目的指数退避：等太短会继续被拒（白烧重试预算），等太长则白白拖慢。
+     * aria2 与 curl 都读这个头，这里对齐。
+     */
+    private val retryAfterByTask = ConcurrentHashMap<Long, Long>()
+
+    /** 取出（并清掉）服务器建议的重试等待；没有则返回 null。 */
+    fun takeRetryAfterMs(taskId: Long): Long? = retryAfterByTask.remove(taskId)
+
+    /**
+     * 解析 `Retry-After`：既支持秒数，也支持 HTTP 日期。
+     *
+     * @return 毫秒（已夹到 [0, 120s]）；无法解析返回 null。
+     */
+    private fun parseRetryAfter(value: String?): Long? {
+        val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        raw.toLongOrNull()?.let { secs ->
+            // 秒数形式：0 是合法的（"立刻重试"）。
+            return (secs * 1000L).coerceIn(0L, MAX_RETRY_AFTER_MS)
+        }
+        val date = runCatching {
+            java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+                .parse(raw, java.time.Instant::from)
+        }.getOrNull() ?: return null
+        val delta = date.toEpochMilli() - System.currentTimeMillis()
+        return delta.coerceIn(0L, MAX_RETRY_AFTER_MS)
+    }
+
     /** 取出（并清掉）最近一次整文件下载的失败原因；没有则返回 null。 */
     fun takeWholeError(taskId: Long): String? = failureByTask.remove(taskId)
 
@@ -152,6 +183,10 @@ internal class SegmentDownloader(
          * 而且每个在飞分片都会占一份，所以它同样受内存预算的约束。
          */
         private const val WRITE_BUFFER_BYTES = 64 * 1024
+
+        /** `Retry-After` 的上限：超过两分钟就不值得干等，宁可退避重投（可能换到别的节点）。 */
+        private const val MAX_RETRY_AFTER_MS = 120_000L
+
     }
 
     /**
@@ -609,6 +644,233 @@ internal class SegmentDownloader(
             if (attempt < retries) delay(500L * (1L shl attempt))
         }
         return last
+    }
+
+    /**
+     * 下载一个分片并**按偏移直接写进目标文件**（不建临时分片文件）。
+     *
+     * 与 [downloadSegment] 的区别只有"写到哪里"：
+     *  - 旧路径：写 `seg_x_y.part`，下完还要 [PartMerger] 合并一遍；
+     *  - 本方法：调用方给一个 [writeAt]，直接落到目标文件的绝对偏移上。
+     *
+     * 为什么这件事值得单独一个方法（实测数据见 [SegmentStore] 的注释）：
+     * 16MB 切 512 片时，仅"创建 512 个文件"就要 627ms，而同样数据按偏移写一个文件只要 11ms。
+     * 高并发下这部分**就是**全部耗时，网络根本没成为限制。
+     *
+     * @param alreadyWritten 该分片已完成的字节数（来自进度记录）
+     * @param writeAt (绝对偏移, 缓冲, 起始, 长度) -> 实际写入字节数
+     * @param buffer 调用方复用的读缓冲 —— 每个分片新建一个 1MB 数组在高并发下是纯 GC 负担
+     * @param onProgress 每写入一段回调（用于更新进度记录与总进度），参数是**本次新增**字节数
+     */
+    suspend fun downloadSegmentInto(
+        taskId: Long,
+        url: String,
+        pieceStart: Long,
+        endProvider: () -> Long,
+        alreadyWritten: Long,
+        writeAt: (position: Long, buf: ByteArray, off: Int, len: Int) -> Int,
+        headers: Map<String, String>,
+        onProgress: suspend (newlyWritten: Long, totalWritten: Long) -> Unit,
+        buffer: ByteArray,
+        ifRange: String? = null,
+        /** 请求发出后把句柄交给调用方（卡死守护据此"只掐这一条"）。 */
+        onCallStarted: ((okhttp3.Call) -> Unit)? = null,
+        /**
+         * 本次尝试**自己的**失败原因（可选）。
+         *
+         * 【为什么必须单独回报】`failureByTask` 是任务级的**单槽**：128 条连接同时失败时，
+         * 它只会留下最后写进去的那一条。实测后果是错误信息指错人：
+         * 「分片 8978432-9043967 重试 6 次仍失败（IOException: Canceled）」——
+         * 那个 "Canceled" 其实是**别的**分片被连坐打断时写进去的，
+         * 耗尽重试的那一片真正的原因是读超时。调用方拿到本回调后，
+         * 就能把"这一片自己的原因"记在分片身上，最终报告才说的是实话。
+         */
+        onFailure: ((String) -> Unit)? = null,
+        /**
+         * 直接缓冲区写入口（可选）。给了就走零拷贝路径，没给回落到 [writeAt]。
+         *
+         * 之所以做成可选而不是必选：调用方（插件后端）可能只有 `File` 层面的写能力。
+         */
+        writeBufferAt: ((position: Long, src: java.nio.ByteBuffer) -> Int)? = null,
+        directBuffer: java.nio.ByteBuffer? = null,
+    ): SegmentResult {
+        fun reportFailure(reason: String) {
+            failureByTask[taskId] = reason
+            onFailure?.invoke(reason)
+        }
+        var end = endProvider()
+        var expected = end - pieceStart + 1
+        var done = alreadyWritten.coerceAtLeast(0)
+        if (done >= expected) return SegmentResult.OK
+        val from = pieceStart + done
+
+        val target = urlFor(taskId, url)
+        val req = Request.Builder()
+            .url(target)
+            .header("Range", "bytes=$from-$end")
+            .apply { if (!ifRange.isNullOrBlank()) header("If-Range", ifRange) }
+            .apply { headers.forEach { (k, v) -> header(k, v) } }
+            .header("Accept-Encoding", "identity")
+            .get().build()
+        val call = client.newCall(req)
+        activeCalls.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(call)
+        onCallStarted?.invoke(call)
+        val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+        return try {
+            call.execute().use { resp ->
+                if (resp.isSuccessful || resp.code == 416) {
+                    val finalUrl = resp.request.url.toString()
+                    if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
+                }
+                if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
+                    forgetResolvedUrl(taskId)
+                    return@use SegmentResult.FAILED
+                }
+                when (val code = resp.code) {
+                    429, 503 -> {
+                        // 服务器说了"多久之后再来"就听它的：盲目退避要么继续被拒，要么白等。
+                        parseRetryAfter(resp.header("Retry-After"))
+                            ?.let { retryAfterByTask[taskId] = it }
+                        SegmentResult.THROTTLED
+                    }
+                    206 -> {
+                        val crStart = parseContentRangeStart(resp.header("Content-Range"))
+                        if (crStart != null && crStart != from) return@use SegmentResult.RANGE_IGNORED
+                        val body = resp.body ?: return@use SegmentResult.FAILED
+                        // 收尾托管可能已缩短区间：以**当前**末端为准，多读到的丢弃。
+                        end = endProvider()
+                        expected = end - pieceStart + 1
+                        if (done >= expected) return@use SegmentResult.OK
+                        val written = if (writeBufferAt != null && directBuffer != null) {
+                            copyToStoreDirect(
+                                body.byteStream(), pieceStart, done, expected - done,
+                                writeBufferAt, directBuffer, onProgress,
+                            )
+                        } else {
+                            require(buffer.isNotEmpty()) {
+                                "既没有 writeBufferAt 也没有读缓冲：无法写入"
+                            }
+                            copyToStore(
+                                body.byteStream(), pieceStart, done, expected - done,
+                                writeAt, buffer, onProgress,
+                            )
+                        }
+                        // done 必须跟着实际写入量推进：调用方靠它更新进度记录。
+                        done += written
+                        if (done < expected) {
+                            // `done` 已由 copyToStore 的 onProgress 推进到实际写入位置。
+                            reportFailure(
+                                "连接提前结束：分片 $pieceStart-${pieceStart + expected - 1} 只收到 " +
+                                    "$written / ${expected - alreadyWritten} 字节"
+                            )
+                            SegmentResult.FAILED
+                        } else SegmentResult.OK
+                    }
+                    200 -> SegmentResult.RANGE_IGNORED
+                    416 -> SegmentResult.OK
+                    else -> {
+                        if (code == 401 || code == 403 || code == 410) {
+                            forgetResolvedUrl(taskId)
+                            SegmentResult.AUTH_EXPIRED
+                        } else if (code in 500..599) {
+                            SegmentResult.THROTTLED
+                        } else {
+                            SegmentResult.FAILED
+                        }
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            if (!coroutineContext.isActive) throw CancellationException("canceled", e)
+            reportFailure(describeIoFailure(e))
+            SegmentResult.FAILED
+        } finally {
+            activeCalls[taskId]?.remove(call)
+            handle?.dispose()
+        }
+    }
+
+    /**
+     * 读 socket → 按偏移写目标文件。
+     *
+     * @return 本次新写入的字节数
+     */
+    /**
+     * 读 socket → 按偏移写目标文件（**直接缓冲区**路径，省一次整块拷贝）。
+     *
+     * `Channels.newChannel(InputStream)` 会把 socket 的字节直接读进 [ByteBuffer]，
+     * 然后 [writeBufferAt] 把同一个缓冲区写给 FileChannel。中间不产生 `byte[]`，
+     * 也不触发 `FileChannel` 对堆缓冲的"复制到临时直接缓冲"。
+     */
+    private suspend fun copyToStoreDirect(
+        input: java.io.InputStream,
+        pieceStart: Long,
+        alreadyDone: Long,
+        expected: Long,
+        writeBufferAt: (position: Long, src: java.nio.ByteBuffer) -> Int,
+        buffer: java.nio.ByteBuffer,
+        onProgress: suspend (newlyWritten: Long, totalWritten: Long) -> Unit,
+    ): Long {
+        val src = java.nio.channels.Channels.newChannel(input)
+        var written = 0L
+        var totalWritten = alreadyDone
+        while (true) {
+            buffer.clear()
+            val n = src.read(buffer)
+            if (n <= 0) break
+            buffer.flip()
+            val allow = min(n.toLong(), expected - written)
+            if (allow <= 0) break
+            buffer.limit((buffer.position() + allow).toInt())
+            var pos = pieceStart + alreadyDone + written
+            while (buffer.hasRemaining()) {
+                val w = writeBufferAt(pos, buffer)
+                if (w <= 0) return written
+                pos += w
+            }
+            written += allow
+            totalWritten += allow
+            onProgress(allow, totalWritten)
+            if (written >= expected) break
+        }
+        return written
+    }
+
+    private suspend fun copyToStore(
+        input: java.io.InputStream,
+        pieceStart: Long,
+        alreadyDone: Long,
+        expected: Long,
+        writeAt: (position: Long, buf: ByteArray, off: Int, len: Int) -> Int,
+        buffer: ByteArray,
+        onProgress: suspend (newlyWritten: Long, totalWritten: Long) -> Unit,
+    ): Long {
+        var written = 0L
+        var totalWritten = alreadyDone
+        while (true) {
+            val n = input.read(buffer)
+            if (n <= 0) break
+            val allow = min(n.toLong(), expected - written)
+            if (allow <= 0) break
+            // 分段写：writeAt 可能一次没写完（理论上位置写会写满，但不假设）。
+            var off = 0
+            var left = allow.toInt()
+            var pos = pieceStart + alreadyDone + written
+            while (left > 0) {
+                val w = writeAt(pos, buffer, off, left)
+                if (w <= 0) return written
+                off += w
+                left -= w
+                pos += w
+            }
+            written += allow
+            totalWritten += allow
+            onProgress(allow, totalWritten)
+            if (written >= expected) break
+        }
+        return written
     }
 
     /**

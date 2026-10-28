@@ -93,14 +93,30 @@ class ResumeProbeTest {
         const val KEY = "resume-probe-task"
     }
 
-    /** 铺好「上一次下载留下的一个完整分片 + 匹配的校验器」，返回待下载文件。 */
-    private fun stageOldPart(payload: ByteArray, validator: String): Pair<File, File> {
+    /**
+     * 铺好「上一次下载留下的第一个分片 + 匹配的校验器」，返回 (workDir, chunkDir)。
+     *
+     * ★ 存储结构已变：数据写在**目标文件**里、进度记在侧车，不再是 `seg_*.part`。
+     *   所以这里要连目标文件一起铺（否则引擎会判定"文件不够长 → 进度失效"）。
+     */
+    private fun stageOldPart(payload: ByteArray, validator: String, dest: File): Pair<File, File> {
         val workDir = File(System.getProperty("java.io.tmpdir"), "turbodl-resume-${System.nanoTime()}")
         workDir.mkdirs()
         val safe = "key_" + KEY.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }.joinToString("")
         val chunkDir = File(workDir, safe).apply { mkdirs() }
-        File(chunkDir, "seg_0_${BLOCK - 1}.part").writeBytes(payload.copyOfRange(0, BLOCK))
         File(chunkDir, ".validator").writeText(validator)
+
+        val store = SegmentStore(dest = dest, stateFile = File(chunkDir, "progress.tdlp"), total = SIZE.toLong())
+        store.open()
+        try {
+            val pieces = store.buildGrid(BLOCK.toLong())
+            val head = payload.copyOfRange(0, BLOCK)
+            store.writeAt(0, head, 0, head.size)
+            pieces.first().written = head.size.toLong()
+            store.persist(pieces)
+        } finally {
+            store.close()
+        }
         return workDir to chunkDir
     }
 
@@ -116,13 +132,14 @@ class ResumeProbeTest {
     fun `known size resume reuses old part when server offers a strong validator`() = runBlocking {
         val payload = ByteArray(SIZE) { ((it * 17 + 9) % 256).toByte() }
         val srv = RangeServer(payload, etag = "\"v1\"")
+        val out = File.createTempFile("resume-out", ".bin").apply { deleteOnExit() }
         // 与 probe 将算出的 validator 完全一致（强校验器 → 无 weak 标记）
         val (workDir, _) = stageOldPart(
             payload,
             "len=$SIZE|etag=\"v1\"|lm=Wed, 21 Oct 2026 07:28:00 GMT",
+            out,
         )
         val client = TurboClient(cfg(workDir))
-        val out = File.createTempFile("resume-out", ".bin").apply { deleteOnExit() }
         try {
             val id = client.submit(
                 DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
@@ -148,9 +165,9 @@ class ResumeProbeTest {
         val payload = ByteArray(SIZE) { ((it * 23 + 4) % 256).toByte() }
         // 服务器**不给** ETag / Last-Modified → 只能拿到弱校验器（夸克等网盘 CDN 的典型行为）。
         val srv = RangeServer(payload, etag = null, lastModified = null)
-        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak")
-        val client = TurboClient(cfg(workDir))
         val out = File.createTempFile("resume-out2", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak", out)
+        val client = TurboClient(cfg(workDir))
         try {
             val id = client.submit(
                 DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
@@ -180,9 +197,9 @@ class ResumeProbeTest {
         // 表现为"暂停后仍然从头下载"。
         val payload = ByteArray(SIZE) { ((it * 53 + 6) % 256).toByte() }
         val srv = RangeServer(payload, etag = null, lastModified = null, rejectSmallRanges = true)
-        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak")
-        val client = TurboClient(cfg(workDir))
         val out = File.createTempFile("resume-out4", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak", out)
+        val client = TurboClient(cfg(workDir))
         try {
             val id = client.submit(
                 DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
@@ -210,9 +227,9 @@ class ResumeProbeTest {
         val fresh = ByteArray(SIZE) { ((it * 91 + 77) % 256).toByte() }     // 新文件：同大小、不同内容
         val srv = RangeServer(fresh, etag = null, lastModified = null)
         // 目录里放的是**旧文件**的分片
-        val (workDir, _) = stageOldPart(stale, "len=$SIZE|weak")
-        val client = TurboClient(cfg(workDir))
         val out = File.createTempFile("resume-out3", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(stale, "len=$SIZE|weak", out)
+        val client = TurboClient(cfg(workDir))
         try {
             val id = client.submit(
                 DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong())
