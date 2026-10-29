@@ -68,6 +68,30 @@ class DownloadStabilityTest {
 
         fun stop() = server.stop(0)
 
+        /**
+         * 分块慢发：本机回环太快，整段一次写完时"中途暂停"经常来不及发生 ——
+         * 测试要测的是"续传后立刻满并发"，可文件却已经下完了，并发自然是 0。
+         * 按 64KB/25ms 的节奏发，保证暂停一定落在传输中间。
+         */
+        fun okSlow(ex: HttpExchange, s: Int, end: Int, chunk: Int = 64 * 1024, pauseMs: Long = 25) {
+            val len = end - s + 1
+            ex.responseHeaders.add("Content-Type", "application/octet-stream")
+            ex.responseHeaders.add("Accept-Ranges", "bytes")
+            ex.responseHeaders.add("Content-Range", "bytes $s-$end/${body.size}")
+            ex.sendResponseHeaders(206, len.toLong())
+            var off = s
+            val limit = s + len
+            runCatching {
+                while (off < limit) {
+                    val n = minOf(chunk, limit - off)
+                    ex.responseBody.write(body, off, n)
+                    ex.responseBody.flush()
+                    off += n
+                    Thread.sleep(pauseMs)
+                }
+            }
+        }
+
         /** 正常回一段 206。 */
         fun ok(ex: HttpExchange, s: Int, end: Int) {
             val len = end - s + 1
@@ -240,9 +264,8 @@ class DownloadStabilityTest {
         val data = payload(37)
         lateinit var srv: Prog
         srv = Prog(data) { _, ex, s, end ->
-            // 每个响应慢一点，让并发能被采样到
-            Thread.sleep(15)
-            srv.ok(ex, s, end)
+            // 慢发：保证"暂停"落在传输中间，否则本机回环会在暂停前就下完。
+            srv.okSlow(ex, s, end)
         }
         val dir = workDir("faststart")
         val key = "k-fast"

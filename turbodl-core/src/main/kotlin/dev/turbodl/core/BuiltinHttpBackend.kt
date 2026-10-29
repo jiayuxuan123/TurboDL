@@ -94,8 +94,8 @@ internal class BuiltinHttpBackend(
         )
         store.open()
         val probeMs = System.currentTimeMillis() - probeStartAt
-        // 续传判定结果（在下面的续传校验里填写，随后随 Metadata 一起上报给宿主）。
-        var resumeNote = ""
+        // 续传判定结果（由 prepareResume 填写，随后随 Metadata 一起上报给宿主）。
+        var resumeNote: String
         // 关键：后续分片/整文件下载均使用重定向后的最终 URL（如网盘原始链 302→CDN 临时直链）。
         // 否则每个分片连接都重走 302，可能命中不同节点或被拒，表现为“显示下载中但字节/线程不动”。
         val effectiveUrl = probe.resolvedUrl.ifBlank { request.url }
@@ -135,91 +135,17 @@ internal class BuiltinHttpBackend(
         //    这样既保住"防同大小不同内容静默损坏"的安全底线，又让续传真正可用。
         //  - 强校验器变化 → 丢弃旧分片（原行为）；
         //  - validator 必须在**任何分片写入之前**落盘；now 为空时清掉旧文件而非留着。
-        run {
-            val marker = File(chunkDir, VALIDATOR_FILE)
-            val now = probe.validator
-            val prev = runCatching { if (marker.isFile) marker.readText().trim() else "" }.getOrDefault("")
-
-            // 【⛔ 真实事故，2026-09-28】这里曾把「探测失败」误判成「内容已变」并删光分片：
-            //
-            //   夸克直链失效（超 3 小时）→ 探测拿不到 totalSize/etag/lastModified
-            //   → `now = "weak"`（残缺令牌）
-            //   → 旧值 `prev = "len=1447815647|weak"` 与之不等
-            //   → `changed = true` → **删掉用户已下的 32 个分片 / 14.75MB**
-            //
-            // 判据错在把两个不同的量当成一回事：
-            //   · "服务器确实换了文件"（确证）—— 该删；
-            //   · "探测没拿到信息"（**无法取证**）—— 绝不能删，否则就是拿失败当证据。
-            //
-            // 因此 `changed` 现在**要求 `now` 本身是完整可用的令牌**：
-            // 至少要含 `len=` 或 `etag=`/`lm=` 之一；只有 `weak` 或空串一律不算"变了"。
-            val nowUsable = now.contains("len=") || now.contains("etag=") || now.contains("lm=")
-            val weakButResuming = probe.isWeak && !context.config.trustWeakValidator
-            val hasOldParts = hasResumableParts
-
-            // 探测失败（令牌残缺）时：保留旧分片，但**不假装能续传** ——
-            // 让本次下载以可读原因失败（大概率是链接过期），用户重新解析链接即可继续。
-            // 数据留着，比"删干净从头下"对用户友好得多。
-            val probeDegraded = prev.isNotEmpty() && !nowUsable
-
-            // 内容指纹：仅在「弱校验器 + 有旧进度 + 令牌本身没变」时才需要（其余分支已定性）。
-            // 【三值判定，关键】把"取不到指纹"与"内容确实不同"**分开**：
-            //   MATCH        → 保留旧分片（续传可用）
-            //   MISMATCH     → 确证内容不同 → 丢弃（安全底线）
-            //   UNVERIFIABLE → 取不到（状态码异常/请求失败/无可读分片）→ **保留**
-            // 旧写法把后两者混为一谈，于是"一次指纹请求没成功"就丢掉用户已下载的 GB 级数据 ——
-            // 用户实报的"暂停还是从头下"极可能就是这一支。
-            // 【⛔ 2026-10-09 用户实报「点暂停有时进度归零重下、有时又正常」——就是这一支】
-            //
-            // 旧判据是 `changed = prev != now && nowUsable`：只要令牌**不完全相同**就认定"文件变了"→ 清空分片
-            // 从头下。但夸克这类直链挂在多节点 CDN 后面，**每次续传可能落到不同节点、拿到不同的
-            // ETag/Last-Modified**，长度却完全一致。于是同一份文件被反复判定为"变了"：
-            // 续传时命中就正常，没命中就从头下 —— 表现就是"时好时坏、进度条回到最初"。
-            //
-            // 正确的三层判据（按证据强度）：
-            //   · **长度变了** → 确证换了文件 → 丢弃（唯一可以直接丢弃的证据）；
-            //   · 长度一致但令牌不同 → 不足以定性 → 交**内容指纹**逐字节裁决（真正的安全底线）；
-            //   · 弱校验器 → 同样交内容指纹；
-            //   · 探测拿不到有效令牌（probeDegraded）→ 无法取证 → **保留**。
-            val lenOf = fun(s: String): String? =
-                Regex("""(?:^|\|)len=(\d+)""").find(s)?.groupValues?.get(1)
-            val prevLen = lenOf(prev)
-            val nowLen = lenOf(now)
-            val lenChanged = prevLen != null && nowLen != null && prevLen != nowLen
-            val validatorDiffers = prev.isNotEmpty() && prev != now && nowUsable && !lenChanged
-
-            val needFingerprint = hasOldParts && !probeDegraded && !lenChanged &&
-                (weakButResuming || validatorDiffers)
-            val decision = if (needFingerprint) {
-                verifyResumeFingerprint(store, total, effectiveUrl, taskHeaders)
-            } else {
-                ResumeDecision.NOT_ATTEMPTED
-            }
-
-            val discard = lenChanged || decision == ResumeDecision.MISMATCH
-            if (discard) {
-                // 丢弃过期/无法安全校验的进度，从头写（不报错，对用户透明）。
-                // 现在只有两样东西要清：侧车进度与目标文件本身。
-                runCatching { File(chunkDir, PROGRESS_FILE).delete() }
-                runCatching { request.destination.delete() }
-            }
-            resumeNote = "parts=$hasOldParts weak=$weakButResuming lenChanged=$lenChanged " +
-                "validDiff=$validatorDiffers " +
-                "print=$decision discard=$discard" +
-                if (probeDegraded) " probeDegraded=true(探测失效,已保留旧分片)" else ""
-
-            // 时序：validator 必须先于任何分片写入落盘。
-            // 【不能覆盖成残缺值】probeDegraded 时 `now="weak"` 之类是**没有信息**，
-            // 用它盖掉 `len=1447815647|weak` 会把"文件多大"这个已知事实也丢掉 ——
-            // 下次探测再失败就又变成 changed。故此时**保留旧令牌不动**。
-            runCatching {
-                when {
-                    probeDegraded -> Unit          // 保留旧令牌（现状更完整）
-                    now.isEmpty() -> marker.delete() // 探测明确「无校验器」：清掉残留，避免下次误比
-                    else -> marker.writeText(now)
-                }
-            }
-        }
+        resumeNote = prepareResume(
+            chunkDir = chunkDir,
+            probe = probe,
+            store = store,
+            total = total,
+            effectiveUrl = effectiveUrl,
+            taskHeaders = taskHeaders,
+            destination = request.destination,
+            hasOldParts = hasResumableParts,
+            trustWeakValidator = context.config.trustWeakValidator,
+        )
 
         // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
         // - probeMs   ：探测耗时（大=探测慢；≈0 跳过探测而首字节慢=慢在首连接）
@@ -241,6 +167,113 @@ internal class BuiltinHttpBackend(
             // 通道必须关：Windows 下不关会让目标文件一直被占住，用户挪不走也删不掉。
             store.close()
         }
+    }
+
+    /**
+     * 续传校验：判定旧进度还能不能接着用，并落盘这次的有效令牌。
+     *
+     * 从 [download] 拆出来，是因为它是这个后端里分支最多的一段；它只需要几个输入、
+     * 产出一句可读的判定说明，拆开后 [download] 的主线只剩
+     * 「探测 → 建存储 → 校验续传 → 交给主体」四步。
+     *
+     * @return 判定说明（`parts=… weak=… lenChanged=… validDiff=… print=… discard=…`），
+     *         由调用方随 Metadata 上报，用来回答"断点续传为什么没生效"。
+     */
+    private suspend fun prepareResume(
+        chunkDir: File,
+        probe: SegmentDownloader.ProbeResult,
+        store: SegmentStore,
+        total: Long,
+        effectiveUrl: String,
+        taskHeaders: Map<String, String>,
+        destination: File,
+        hasOldParts: Boolean,
+        trustWeakValidator: Boolean,
+    ): String {
+        val marker = File(chunkDir, VALIDATOR_FILE)
+        val now = probe.validator
+        val prev = runCatching { if (marker.isFile) marker.readText().trim() else "" }.getOrDefault("")
+
+        // 【⛔ 真实事故，2026-09-28】这里曾把「探测失败」误判成「内容已变」并删光分片：
+        //
+        //   夸克直链失效（超 3 小时）→ 探测拿不到 totalSize/etag/lastModified
+        //   → `now = "weak"`（残缺令牌）
+        //   → 旧值 `prev = "len=1447815647|weak"` 与之不等
+        //   → `changed = true` → **删掉用户已下的 32 个分片 / 14.75MB**
+        //
+        // 判据错在把两个不同的量当成一回事：
+        //   · "服务器确实换了文件"（确证）—— 该删；
+        //   · "探测没拿到信息"（**无法取证**）—— 绝不能删，否则就是拿失败当证据。
+        //
+        // 因此 `changed` 现在**要求 `now` 本身是完整可用的令牌**：
+        // 至少要含 `len=` 或 `etag=`/`lm=` 之一；只有 `weak` 或空串一律不算"变了"。
+        val nowUsable = now.contains("len=") || now.contains("etag=") || now.contains("lm=")
+        val weakButResuming = probe.isWeak && !trustWeakValidator
+        // hasOldParts 由调用方传入
+
+        // 探测失败（令牌残缺）时：保留旧分片，但**不假装能续传** ——
+        // 让本次下载以可读原因失败（大概率是链接过期），用户重新解析链接即可继续。
+        // 数据留着，比"删干净从头下"对用户友好得多。
+        val probeDegraded = prev.isNotEmpty() && !nowUsable
+
+        // 内容指纹：仅在「弱校验器 + 有旧进度 + 令牌本身没变」时才需要（其余分支已定性）。
+        // 【三值判定，关键】把"取不到指纹"与"内容确实不同"**分开**：
+        //   MATCH        → 保留旧分片（续传可用）
+        //   MISMATCH     → 确证内容不同 → 丢弃（安全底线）
+        //   UNVERIFIABLE → 取不到（状态码异常/请求失败/无可读分片）→ **保留**
+        // 旧写法把后两者混为一谈，于是"一次指纹请求没成功"就丢掉用户已下载的 GB 级数据 ——
+        // 用户实报的"暂停还是从头下"极可能就是这一支。
+        // 【⛔ 2026-10-09 用户实报「点暂停有时进度归零重下、有时又正常」——就是这一支】
+        //
+        // 旧判据是 `changed = prev != now && nowUsable`：只要令牌**不完全相同**就认定"文件变了"→ 清空分片
+        // 从头下。但夸克这类直链挂在多节点 CDN 后面，**每次续传可能落到不同节点、拿到不同的
+        // ETag/Last-Modified**，长度却完全一致。于是同一份文件被反复判定为"变了"：
+        // 续传时命中就正常，没命中就从头下 —— 表现就是"时好时坏、进度条回到最初"。
+        //
+        // 正确的三层判据（按证据强度）：
+        //   · **长度变了** → 确证换了文件 → 丢弃（唯一可以直接丢弃的证据）；
+        //   · 长度一致但令牌不同 → 不足以定性 → 交**内容指纹**逐字节裁决（真正的安全底线）；
+        //   · 弱校验器 → 同样交内容指纹；
+        //   · 探测拿不到有效令牌（probeDegraded）→ 无法取证 → **保留**。
+        val lenOf = fun(s: String): String? =
+            Regex("""(?:^|\|)len=(\d+)""").find(s)?.groupValues?.get(1)
+        val prevLen = lenOf(prev)
+        val nowLen = lenOf(now)
+        val lenChanged = prevLen != null && nowLen != null && prevLen != nowLen
+        val validatorDiffers = prev.isNotEmpty() && prev != now && nowUsable && !lenChanged
+
+        val needFingerprint = hasOldParts && !probeDegraded && !lenChanged &&
+            (weakButResuming || validatorDiffers)
+        val decision = if (needFingerprint) {
+            verifyResumeFingerprint(store, total, effectiveUrl, taskHeaders)
+        } else {
+            ResumeDecision.NOT_ATTEMPTED
+        }
+
+        val discard = lenChanged || decision == ResumeDecision.MISMATCH
+        if (discard) {
+            // 丢弃过期/无法安全校验的进度，从头写（不报错，对用户透明）。
+            // 现在只有两样东西要清：侧车进度与目标文件本身。
+            runCatching { File(chunkDir, PROGRESS_FILE).delete() }
+            runCatching { destination.delete() }
+        }
+        val note = "parts=$hasOldParts weak=$weakButResuming lenChanged=$lenChanged " +
+            "validDiff=$validatorDiffers " +
+            "print=$decision discard=$discard" +
+            if (probeDegraded) " probeDegraded=true(探测失效,已保留旧分片)" else ""
+
+        // 时序：validator 必须先于任何分片写入落盘。
+        // 【不能覆盖成残缺值】probeDegraded 时 `now="weak"` 之类是**没有信息**，
+        // 用它盖掉 `len=1447815647|weak` 会把"文件多大"这个已知事实也丢掉 ——
+        // 下次探测再失败就又变成 changed。故此时**保留旧令牌不动**。
+        runCatching {
+            when {
+                probeDegraded -> Unit          // 保留旧令牌（现状更完整）
+                now.isEmpty() -> marker.delete() // 探测明确「无校验器」：清掉残留，避免下次误比
+                else -> marker.writeText(now)
+            }
+        }
+        return note
     }
 
     /**
@@ -442,10 +475,6 @@ internal class BuiltinHttpBackend(
 
     /** 续传指纹校验的判定结果（见 [verifyResumeFingerprint]）。 */
     private enum class ResumeDecision { MATCH, MISMATCH, UNVERIFIABLE, NOT_ATTEMPTED }
-
-    /** 从 `seg_{start}_{end}.part` 解析 start。 */
-    private fun parseSegStart(name: String): Long? =
-        name.removePrefix("seg_").substringBefore('_').toLongOrNull()
 
     private companion object {
         /** 续传校验标记文件名。 */
