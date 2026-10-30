@@ -15,6 +15,14 @@ import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+class BenchHTTPServer(ThreadingHTTPServer):
+    # The stdlib default backlog is 5. A 128/256-connection burst then gets
+    # refused by the kernel and looks like "server backpressure", corrupting the
+    # concurrency benchmark before the client sends a single Range request.
+    request_queue_size = 512
+    daemon_threads = True
+
 PAYLOAD = b""
 RATE_KB = 0
 
@@ -93,8 +101,7 @@ def main():
     PAYLOAD = (block * reps)[:total]
     RATE_KB = a.rate
 
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    srv.daemon_threads = True
+    srv = BenchHTTPServer(("127.0.0.1", a.port), Handler)
     print(f"[bench] {a.size}MB @ 127.0.0.1:{a.port} 每连接限速={a.rate or '不限'}KB/s", flush=True)
     srv.serve_forever()
 

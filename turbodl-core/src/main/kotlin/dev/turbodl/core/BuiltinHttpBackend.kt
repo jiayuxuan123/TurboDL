@@ -344,6 +344,11 @@ internal class BuiltinHttpBackend(
             return BackendResult(listOf(outPart), if (total > 0) total else outPart.length())
         }
 
+        // Reserve the logical length once before parallel positional writes.
+        // Repeated EOF extension is serialized by the filesystem and becomes a
+        // measurable bottleneck when 128/256 connections all write new ranges.
+        store.ensureLength()
+
         val connections = (request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
 
         // 连接预热 / DNS 预解析：正式分片前先对解析后的最终 URL 建好若干连接（并解析 DNS），

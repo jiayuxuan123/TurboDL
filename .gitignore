@@ -27,3 +27,6 @@ __pycache__/
 *.pyc
 # taste-skill 的测量产物（3.6 MB 截图与 report.json）：方向单与设计笔记要留，截图不留
 .taste-skill/inspect*/
+_bench/results/
+_bench/runs/
+.playwright-cli/

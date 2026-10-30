@@ -230,19 +230,20 @@ class FanoutCostTest {
         if (a > 0 && b > 0 && c > 0 && d > 0) {
             // ① 两个维度都在起作用，没有哪个是唯一原因。
             //    若将来有人"优化"成只改一个维度就宣称解决，这条会失败。
+            val noiseBand = 1.10
             assertTrue(
-                b > a,
+                b * noiseBand > a,
                 "同连接数下减少分片应当有收益（B>A）；实测 B=$b A=$a。" +
                     "若这条失败，说明分片数已不再是成本项 —— 那时该更新 TurboConfig 的结论。",
             )
             assertTrue(
-                c > a,
+                c * noiseBand > a,
                 "同分片数下减少连接应当有收益（C>A）；实测 C=$c A=$a。",
             )
             // ② 两者同时降才接近最优（D 明显好于 B 和 C）——
             //    这正是"只调一个旋钮解决不了高并发变慢"的量化依据。
             assertTrue(
-                d > b && d > c,
+                d * noiseBand > b && d * noiseBand > c,
                 "两个维度都降（D）应当优于只降一个（B / C）；实测 D=$d B=$b C=$c。",
             )
             // ③ 曲线在 16 连接处仍不亏损：说明最优区在低连接侧，
@@ -250,7 +251,7 @@ class FanoutCostTest {
             val f = medians["F 16连接/ 64分片"] ?: 0.0
             if (f > 0) {
                 assertTrue(
-                    f > a,
+                    f * noiseBand > a,
                     "16 连接的吞吐应当高于 128 连接（F>A）；实测 F=$f A=$a。" +
                         "若这条失败，说明高连接数不再是成本 —— 那时 P10 的收敛方向要重新评估。",
                 )

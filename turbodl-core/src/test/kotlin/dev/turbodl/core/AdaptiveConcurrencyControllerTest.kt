@@ -145,4 +145,39 @@ class AdaptiveConcurrencyControllerTest {
         assertTrue(level >= 4, "档位不得降到 4 以下，实际 $level")
         assertTrue(c.acceptedLevel >= 4, "已接受档位不得低于下限，实际 ${c.acceptedLevel}")
     }
+
+    @Test
+    fun `upward mode scales while throughput improves and stops at a plateau`() {
+        val c = AdaptiveConcurrencyController(
+            maximumConcurrency = 64,
+            initialConcurrency = 8,
+            probeDownFirst = false,
+            holdWindowsAfterReject = 4,
+        )
+
+        c.observe(100_000.0, rampDone = true, concurrencyLimit = 64)
+        val firstProbe = feed(c, 100_000.0, limit = 64, windows = 3)
+        assertEquals(16, firstProbe.target, "吞吐有余量时应从 8 上探到 16")
+
+        val accepted = feed(c, 200_000.0, limit = 64, windows = 3)
+        assertEquals(32, accepted.target, "吞吐翻倍后应继续上探到 32")
+
+        val plateau = feed(c, 200_000.0, limit = 64, windows = 3)
+        assertEquals(16, plateau.target, "没有吞吐增益时必须退回最后有效档位")
+        assertEquals(16, plateau.suggestedCeiling)
+        assertEquals(16, c.acceptedLevel)
+    }
+
+    @Test
+    fun `upward mode resumes probing upward after backpressure reset`() {
+        val c = AdaptiveConcurrencyController(
+            maximumConcurrency = 64,
+            initialConcurrency = 8,
+            probeDownFirst = false,
+        )
+        c.resetTo(8)
+        c.observe(100_000.0, rampDone = true, concurrencyLimit = 64)
+        val decision = feed(c, 100_000.0, limit = 64, windows = 3)
+        assertEquals(16, decision.target, "背压恢复后应从低档重新向上寻找吞吐")
+    }
 }

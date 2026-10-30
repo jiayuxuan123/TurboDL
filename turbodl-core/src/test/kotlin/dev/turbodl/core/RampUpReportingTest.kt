@@ -76,6 +76,7 @@ class RampUpReportingTest {
                 maxConnectionsPerTask = connections,
                 maxConcurrentTasks = 1,
                 slowStart = true,
+                adaptiveConcurrency = false,
                 warmUpConnections = false,
                 progressIntervalMs = 0,   // 关闭节流：本用例专测爬升，需要密集采样
             )
@@ -115,6 +116,7 @@ class RampUpReportingTest {
                 maxConnectionsPerTask = connections,
                 maxConcurrentTasks = 1,
                 slowStart = false,          // 直接全开，专测上报语义
+                adaptiveConcurrency = false,
                 warmUpConnections = false,
                 progressIntervalMs = 0,   // 关闭节流：需要密集采样才能统计占比
             )

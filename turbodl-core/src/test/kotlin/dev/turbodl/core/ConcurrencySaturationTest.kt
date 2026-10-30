@@ -80,6 +80,8 @@ class ConcurrencySaturationTest {
             TurboConfig(
                 maxConnectionsPerTask = connections,
                 maxConcurrentTasks = 1,
+                slowStart = false,
+                adaptiveConcurrency = false,
             )
         )
         val out = File.createTempFile("sat", ".bin").apply { deleteOnExit() }
@@ -112,7 +114,12 @@ class ConcurrencySaturationTest {
         val connections = 32
 
         val client = TurboClient(
-            TurboConfig(maxConnectionsPerTask = connections, maxConcurrentTasks = 1)
+            TurboConfig(
+                maxConnectionsPerTask = connections,
+                maxConcurrentTasks = 1,
+                slowStart = false,
+                adaptiveConcurrency = false,
+            )
         )
         val out = File.createTempFile("sat-small", ".bin").apply { deleteOnExit() }
         try {

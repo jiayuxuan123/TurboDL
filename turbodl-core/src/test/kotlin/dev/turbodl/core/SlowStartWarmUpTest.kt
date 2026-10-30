@@ -79,6 +79,7 @@ class SlowStartWarmUpTest {
                 maxConnectionsPerTask = connections,
                 maxConcurrentTasks = 1,
                 slowStart = true,
+                adaptiveConcurrency = false,
                 slowStartInitial = 4,
                 warmUpConnections = true,
             )
@@ -107,6 +108,7 @@ class SlowStartWarmUpTest {
                 maxConnectionsPerTask = connections,
                 maxConcurrentTasks = 1,
                 slowStart = false,
+                adaptiveConcurrency = false,
                 warmUpConnections = false,
             )
         )

@@ -150,4 +150,25 @@ class SegmentStoreTest {
             s.close()
         }
     }
+
+    @Test
+    fun `预留长度只做一次且不覆盖已有数据`() {
+        val dir = tmpDir("reserve")
+        val dest = File(dir, "out.bin")
+        val s = store(dir, 4096)
+        s.open()
+        try {
+            val first = ByteArray(128) { 9 }
+            s.writeAt(0, first, 0, first.size)
+            s.ensureLength()
+            assertEquals(4096L, dest.length())
+
+            // A second call must be a no-op and must not disturb positional writes.
+            s.ensureLength()
+            val got = s.readAt(0, first.size)
+            assertTrue(got.contentEquals(first), "预留长度不得覆盖已经写入的字节")
+        } finally {
+            s.close()
+        }
+    }
 }

@@ -22,7 +22,7 @@ import kotlin.math.min
  * - **下探**：探到当前档位的一半；总吞吐保留基线的 [KEEP_RATIO]（90%）以上 → 接受并继续下探；
  *   掉得更多 → 拒绝、恢复原档并进入持有期。
  * - **恢复**：持有期结束后重新测基线再探（网络条件会变），所以不会永久锁死在某一档。
- * - 反向（向上）只在「当前档位低于上限」时才探，且要求吞吐至少提升 [GAIN_RATIO]（10%）。
+ * - 反向（向上）只在「当前档位低于上限」时才探，且要求吞吐至少提升 [GAIN_RATIO]（30%）。
  *
  * ## 与背压的关系
  *
@@ -50,6 +50,7 @@ internal class AdaptiveConcurrencyController(
      */
     private val minimumConcurrency: Int = min(maximumConcurrency, 4),
     private val requiredSamples: Int = 2,
+    private val upwardSamples: Int = 3,
     private val holdWindowsAfterReject: Int = 16,
     private val holdWindowsAfterAccept: Int = 4,
 ) {
@@ -66,8 +67,9 @@ internal class AdaptiveConcurrencyController(
     private enum class Phase { WAIT_RAMP, BASELINE, PROBE, HOLD }
     private enum class Direction { DOWN, UP }
 
+    private val initialDirection = if (probeDownFirst) Direction.DOWN else Direction.UP
     private var phase = Phase.WAIT_RAMP
-    private var direction = if (probeDownFirst) Direction.DOWN else Direction.UP
+    private var direction = initialDirection
     private var level = initialConcurrency.coerceIn(1, maximumConcurrency)
     private var baseline = 0.0
     private var probeLevel = 0
@@ -86,7 +88,8 @@ internal class AdaptiveConcurrencyController(
 
     init {
         require(maximumConcurrency >= 1)
-        require(requiredSamples > 0 && holdWindowsAfterReject > 0 && holdWindowsAfterAccept >= 0)
+        require(requiredSamples > 0 && upwardSamples > 0)
+        require(holdWindowsAfterReject > 0 && holdWindowsAfterAccept >= 0)
     }
 
     /** 当前认为合适的档位（等于「已接受的并发上限」）。 */
@@ -101,7 +104,7 @@ internal class AdaptiveConcurrencyController(
     fun resetTo(concurrency: Int) {
         level = concurrency.coerceIn(1, maximumConcurrency)
         phase = Phase.WAIT_RAMP
-        direction = Direction.DOWN
+        direction = initialDirection
         baseline = 0.0
         probeLevel = 0
         samples.clear()
@@ -144,7 +147,8 @@ internal class AdaptiveConcurrencyController(
 
             Phase.BASELINE -> {
                 samples += throughput
-                if (samples.size < requiredSamples) return Decision()
+                val needed = if (initialDirection == Direction.UP) upwardSamples else requiredSamples
+                if (samples.size < needed) return Decision()
                 baseline = median(samples)
                 samples.clear()
                 return beginProbe(cap)
@@ -152,7 +156,8 @@ internal class AdaptiveConcurrencyController(
 
             Phase.PROBE -> {
                 samples += throughput
-                if (samples.size < requiredSamples) return Decision()
+                val needed = if (initialDirection == Direction.UP) upwardSamples else requiredSamples
+                if (samples.size < needed) return Decision()
                 val measured = median(samples)
                 samples.clear()
                 val worthwhile = when (direction) {
@@ -189,6 +194,31 @@ internal class AdaptiveConcurrencyController(
     }
 
     private fun beginProbe(cap: Int): Decision {
+        // Upward mode is throughput-seeking, not resource-minimising. Once it reaches
+        // the current ceiling, stay there until the ceiling/network changes; probing
+        // back down would periodically halve a per-connection-limited download even
+        // though the extra connections were the entire source of its speed.
+        if (initialDirection == Direction.UP) {
+            if (level >= cap) {
+                phase = Phase.HOLD
+                hold = holdWindowsAfterAccept
+                probeLevel = 0
+                return Decision()
+            }
+            direction = Direction.UP
+            val next = min(cap, level * 2)
+            if (next <= level) {
+                phase = Phase.HOLD
+                hold = holdWindowsAfterAccept
+                probeLevel = 0
+                return Decision()
+            }
+            probeLevel = next
+            phase = Phase.PROBE
+            samples.clear()
+            return Decision(target = next, probing = true)
+        }
+
         // 方向失效时翻转：到顶不能再上探，触底不能再下探。
         if (direction == Direction.UP && level >= cap) direction = Direction.DOWN
         if (direction == Direction.DOWN && level <= minimumConcurrency) direction = Direction.UP
@@ -228,7 +258,11 @@ internal class AdaptiveConcurrencyController(
         /** 下探时至少要保住基线的这个比例，才认为「少一半连接没有损失」。 */
         const val KEEP_RATIO = 0.90
 
-        /** 上探时总吞吐至少要提升这个比例，才认为「多一倍连接确实有用」。 */
-        const val GAIN_RATIO = 1.10
+        /**
+         * Upward probing requires a 1.3x aggregate gain. Doubling connections on a
+         * per-connection-limited link easily clears this; noisy CDN/aggregate caps
+         * do not. This also matches the product-level "1.3x or do not raise" rule.
+         */
+        const val GAIN_RATIO = 1.30
     }
 }

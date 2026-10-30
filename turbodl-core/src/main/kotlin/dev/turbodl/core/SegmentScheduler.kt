@@ -1,6 +1,7 @@
 package dev.turbodl.core
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -92,7 +93,16 @@ internal class SegmentScheduler(
         const val PARK_POLL_MS = 80L
 
         /** 吞吐自适应的窗口长度；两个稳定窗口合并后交给候选档控制器。 */
-        const val ADAPTIVE_SAMPLE_INTERVAL_MS = 750L
+        const val ADAPTIVE_SAMPLE_INTERVAL_MS = 500L
+
+        /**
+         * 自适应模式的起始并发。
+         *
+         * 8 与 AB Download Manager 的默认线程数一致，也是多数 CDN 的安全区间。
+         * 30% 以上的提升会触发下一次翻倍；没有提升就停在这里，不再先冲到
+         * 128/256 再花时间降回来。
+         */
+        const val ADAPTIVE_INITIAL_CONNECTIONS = 8
 
         /**
          * 判定窗口有效时，「在飞连接数相对目标并发」的最低比例。
@@ -272,6 +282,7 @@ internal class SegmentScheduler(
         // 表现为“设 64 线程却只跑 16 / 速度骤降”。这里仅当 >0 时限幅。
         val hostCap = config.maxConnectionsPerHost.takeIf { it > 0 } ?: Int.MAX_VALUE
         val workers = connections.coerceIn(1, 256).coerceAtMost(hostCap).coerceAtLeast(1)
+        val debugScheduler = System.getenv("TURBODL_DEBUG_SCHED") == "1"
 
         // ---------- 专用阻塞 IO 调度器（关键吞吐修正）----------
         // Dispatchers.IO 的默认并行度是 max(64, CPU 核数)。分片下载是**阻塞式** socket read，
@@ -281,13 +292,33 @@ internal class SegmentScheduler(
         // 并行度 = workers + 少量余量（给守护/回调用）。
         val ioDispatcher = Dispatchers.IO.limitedParallelism(workers + 4)
 
+        val adaptiveEnabled =
+            config.adaptiveConcurrency && config.globalSpeedLimitBytesPerSec <= 0
+        /**
+         * Initial grid width.
+         *
+         * Adaptive mode must not pre-split for the *requested ceiling*. A request
+         * for 256 connections that settles at 8 used to produce 1024 tiny files
+         * and then process them through 8 workers -- all the request/state cost
+         * with none of the parallelism. Start from the conservative concurrency
+         * and grow the grid later only if measured throughput justifies it.
+         */
+        val gridConcurrency = if (adaptiveEnabled) {
+            min(
+                workers,
+                config.slowStartInitial.takeIf { it > 0 }
+                    ?: min(workers, ADAPTIVE_INITIAL_CONNECTIONS),
+            )
+        } else {
+            workers
+        }
 
         // ---------- 块大小：按「连接数」反推，保证固定 N 线程全部跑满 ----------
         // 上限 maxSegmentsPerTask（默认 128，**0 = 不限**）：块数不再随连接数无限膨胀
         // （原因、实测与"收益尚未可靠量化"的警告见 TurboConfig.maxSegmentsPerTask）。
         val segCap = if (config.maxSegmentsPerTask <= 0) Long.MAX_VALUE
         else config.maxSegmentsPerTask.toLong()
-        val targetSegments = (workers.toLong() *
+        val targetSegments = (gridConcurrency.toLong() *
             config.segmentsPerConnection.coerceIn(1, 64).toLong())
             .coerceAtMost(segCap)
         val effBlock = run {
@@ -295,7 +326,7 @@ internal class SegmentScheduler(
             // 二者取"上限优先"是为了让 `minSegmentSize > blockSize` 这种组合仍能表达
             // （对齐 aria2/Motrix 的 20MB 分片需要它），而不会让下限压倒上限。
             val hardCap = max(1L, config.blockSize)
-            val softFloor = min(config.minSegmentSize, max(1L, total / workers))
+            val softFloor = min(config.minSegmentSize, max(1L, total / gridConcurrency))
                 .coerceAtMost(hardCap)
             val byConnections = if (targetSegments > 0) total / targetSegments else total
             byConnections.coerceIn(1L, hardCap).coerceAtLeast(softFloor)
@@ -325,7 +356,7 @@ internal class SegmentScheduler(
         // 旧实现每个分片新建一个 ByteArray（最高 1MB）：512 片就是 512 次大数组分配，
         // 高并发下纯属 GC 负担。这里按并发数一次性分配，总量仍受 effectiveIoBufferSize 约束。
         val readBufferSize = config.effectiveIoBufferSize(workers)
-        val buffers = List(workers) { ByteArray(readBufferSize) }
+        val buffers = arrayOfNulls<ByteArray>(workers)
 
         /** 进度落盘节流。 */
         var lastPersistAt = 0L
@@ -372,6 +403,15 @@ internal class SegmentScheduler(
         val resuming = allSegments.any { it.written > 0 }
         val slowStartInit = when {
             !config.slowStart -> workers
+            // 自适应模式从保守档起跑，再由实测吞吐决定是否继续翻倍。
+            // 不能先冲到用户上限再往下探：128 路在回环上可能在控制器拿到第一个
+            // 有效窗口前就把吞吐打崩，用户看到的就是“线程越多反而越慢”。
+            adaptiveEnabled ->
+                min(
+                    workers,
+                    config.slowStartInitial.takeIf { it > 0 }
+                        ?: min(workers, ADAPTIVE_INITIAL_CONNECTIONS),
+                )
             resuming -> workers                       // 续传：直接到顶
             config.slowStartInitial > 0 -> min(config.slowStartInitial, workers)
             // 默认初始值随设定并发缩放（至少 4）：固定 4 在 128 连接下起点太低，
@@ -380,14 +420,19 @@ internal class SegmentScheduler(
         }
         /** 动态目标并发（慢启动从 slowStartInit 升、背压时降；自适应时由控制器定档）。 */
         val desired = AtomicInteger(slowStartInit)
+        /**
+         * Lazily start worker coroutines only when the scheduler actually raises
+         * the target concurrency. A request for c=256 used to allocate and run
+         * 256 parked workers even when adaptation correctly chose 8; the idle
+         * workers then polluted the very benchmark they were meant to improve.
+         */
+        var ensureWorkersStarted: (Int) -> Unit = {}
 
         /** 用户级总限速会人为封顶吞吐，因此该任务不启用吞吐学习。 */
-        val adaptive = if (
-            config.adaptiveConcurrency && config.globalSpeedLimitBytesPerSec <= 0
-        ) AdaptiveConcurrencyController(
+        val adaptive = if (adaptiveEnabled) AdaptiveConcurrencyController(
             maximumConcurrency = workers,
-            initialConcurrency = workers,
-            probeDownFirst = true,
+            initialConcurrency = slowStartInit,
+            probeDownFirst = false,
         ) else null
         val throughputLock = Any()
         var throughputWindowBytes = 0L
@@ -533,19 +578,29 @@ internal class SegmentScheduler(
                 }
                 val decision = adaptive.observe(
                     throughput = throughput,
-                    // ★ 不能写成 `desired >= workers`：背压把天花板压到 1 时 desired 也停在 1，
-                    //   这个条件永远不成立 → 控制器永远停在 WAIT_RAMP → 不学习也不恢复。
-                    //   "爬升结束"的正确含义是「已经到达当前允许的上限」，而不是「到达用户设定值」。
-                    rampDone = desired.get() >= min(workers, ceiling.get()),
+                    // 合格窗口本身就意味着 desired 在本窗口内保持稳定；控制器现在负责
+                    // 从起始档向上探测，因此不能再用“到达用户上限”作为学习前提。
+                    rampDone = true,
                     concurrencyLimit = min(workers, ceiling.get()),
                 )
+                if (debugScheduler) {
+                    println(
+                        "[sched] throughput=${"%.2f".format(throughput / 1_048_576)}MB/s " +
+                            "desired=${desired.get()} active=${activeConns.get()} " +
+                            "target=${decision.target} ceiling=${min(workers, ceiling.get())}",
+                    )
+                }
                 decision.suggestedCeiling?.let { suggested ->
                     // 这是控制器的"选择"，不是服务器的强制 —— 清掉背压标记，
                     // 免得恢复逻辑把它又抬回去，跟控制器自己的结论打架。
                     ceilingCutByBackpressure.set(false)
                     ceiling.updateAndGet { current -> min(current, suggested) }
                 }
-                decision.target?.let { desired.set(it.coerceIn(1, ceiling.get())) }
+                decision.target?.let {
+                    val target = it.coerceIn(1, ceiling.get())
+                    desired.set(target)
+                    ensureWorkersStarted(target)
+                }
                 if (decision.target != null || decision.suggestedCeiling != null) {
                     reportConns()
                     throughputWindowBytes = 0L
@@ -680,7 +735,8 @@ internal class SegmentScheduler(
             (1_000L shl attempt.coerceIn(0, 10)).coerceAtMost(60_000L)
 
         /**
-         * 背压下调：乘性减半（不低于 1）。仅调整目标整数，被 park 的协程自然让出。
+         * 背压下调：乘性减半，但不低于 4（用户上限本身小于 4 时取上限）。
+         * 仅调整目标整数，被 park 的协程自然让出。
          *
          * 【为什么要按时间限流】
          * 服务器过载时往往**成批**返回 429/503：32 条连接同时开门，可能一次收到 20 多个 503。
@@ -697,7 +753,8 @@ internal class SegmentScheduler(
             if (now - lastThrottleDownAt < BACKPRESSURE_MIN_INTERVAL_MS) return
             lastThrottleDownAt = now
             val cur = desired.get()
-            val target = max(1, cur / 2)
+            val floor = min(workers, 4)
+            val target = max(floor, cur / 2)
             if (target < cur) {
                 desired.set(target)
                 // 429/503 背压高于吞吐学习：清掉旧基线，不能让自适应立即爬回被拒档位。
@@ -728,44 +785,37 @@ internal class SegmentScheduler(
          * 尽快跑满并发的场景。现由 [rampLoop] 每 [RAMP_INTERVAL_MS] 调用一次：
          * 窗口内有成功且未限流 → 上调一档。爬满时间与分片大小解耦。
          */
+        fun recoverCeilingIfDue(cap: Int) {
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - lastCeilingRaiseAt < recoverIntervalMs) return
+            lastCeilingRaiseAt = nowMs
+            recoverIntervalMs = min(recoverIntervalMs * 2, MAX_RECOVER_INTERVAL_MS)
+            val step = if (cap * 2 <= workers) cap else cap + 1
+            val next = min(workers, max(cap + 1, step))
+            ceiling.set(next)
+            if (next >= workers) ceilingCutByBackpressure.set(false)
+        }
+
         fun rampUpIfHealthy() {
-            if (desired.get() >= workers) return
             if (windowThrottled.get()) return                 // 窗口内被限流过：先稳住
-            // 【与吞吐自适应互斥】控制器正在下探/上探时，desired 必须保持它设的档位 ——
-            // 否则这里会立刻把并发推回设定值，控制器永远测不到真实的低档窗口（实测表现为特性"不生效"）。
-            if (adaptive?.isProbing() == true) return
             val cur = desired.get()
             val cap = ceiling.get()
-            if (cur >= cap) {
-                // 已稳定在学到的天花板：试探能否再高一点。
-                //
-                // 【必须能恢复 —— 这里曾经是一处死锁】
-                // 背压（429/503）会把 desired 与 ceiling **一起**压到 1，而恢复路径有三条，
-                // 当时全被堵死：
-                //   · 本函数在 `cur >= cap` 分支里对自适应开启的情况直接 return；
-                //   · 自适应控制器要等 `rampDone = desired >= workers` 才肯工作，
-                //     而 desired=1 永远不满足 → 它永远停在 WAIT_RAMP；
-                //   · 于是连接数卡在 1，再也回不来。
-                // 实测（真实网络，Cloudflare，`-c 16`）：全程 `conns=1`，32MB 跑了 50 秒；
-                // 关掉自适应后同样文件 16 连接稳定跑满。
-                //
-                // 现在的恢复策略：健康窗口里把天花板**按比例抬回**（至少 +1），
-                // 最快每 CEILING_RECOVER_INTERVAL_MS 抬一次。抬高后如果服务器真的不干，
-                // 下一次 429/503 会把天花板再压回去 —— 代价就是那一次拒绝，与 +1 试探同价。
+
+            // 自适应开启时，desired 只能由控制器按实测吞吐调整。
+            // 以前这里仍会按 100ms 一档把 16 直接冲到 128/256，控制器还没来得及测
+            // 16 路的基线，链路已经被高并发打崩。这里只保留“背压后的天花板恢复”，
+            // 其余爬升全部交给 AdaptiveConcurrencyController。
+            if (adaptive != null) {
                 if (cap < workers && ceilingCutByBackpressure.get()) {
-                    val nowMs = System.currentTimeMillis()
-                    // 恢复间隔**递增**：第一次 1s、然后 2s、4s…封顶 8s。
-                    // 固定的 5s 在短任务里根本来不及恢复（用户看到的就是"一直 1 个线程"），
-                    // 而固定 1s 又会在长期限速的服务器上反复撞墙。递增同时满足两头。
-                    if (nowMs - lastCeilingRaiseAt >= recoverIntervalMs) {
-                        lastCeilingRaiseAt = nowMs
-                        recoverIntervalMs = min(recoverIntervalMs * 2, MAX_RECOVER_INTERVAL_MS)
-                        // 已被压到低位时按比例翻倍（1→2→4→8→16），否则 +1，避免冲过头。
-                        val step = if (cap * 2 <= workers) cap else cap + 1
-                        val next = min(workers, max(cap + 1, step))
-                        ceiling.set(next)
-                        if (next >= workers) ceilingCutByBackpressure.set(false)
-                    }
+                    recoverCeilingIfDue(cap)
+                }
+                return
+            }
+
+            if (cur >= workers) return
+            if (cur >= cap) {
+                if (cap < workers && ceilingCutByBackpressure.get()) {
+                    recoverCeilingIfDue(cap)
                 }
                 return
             }
@@ -773,6 +823,7 @@ internal class SegmentScheduler(
             val step = max(1, (cur * RAMP_UP_FACTOR).toInt())
             val next = min(min(workers, cap), cur + step)
             desired.set(next)
+            ensureWorkersStarted(next)
             reportConns()
         }
 
@@ -824,7 +875,11 @@ internal class SegmentScheduler(
 
         val ok = try {
             val jobs = List(workers) { idx ->
-                async(ioDispatcher) {
+                async(ioDispatcher, start = CoroutineStart.LAZY) {
+                    val workerBuffer = buffers[idx] ?: ByteArray(readBufferSize).also {
+                        buffers[idx] = it
+                    }
+                    if (debugScheduler) println("[sched] worker idx=$idx entered")
                     if (idx in 1..8) delay(idx * 20L)  // 错峰建连
                     // 【致命失败即停】`failReason` 一旦有值，说明某个分片已经彻底耗尽重试预算 ——
                     // 这个任务注定失败，继续跑其余分片毫无意义。
@@ -898,7 +953,7 @@ internal class SegmentScheduler(
                                 // 缓冲按 worker 复用：本任务同时跑 workers 个分片，
                                 // 每个都按 worker 私有缓冲分配，总量仍受 ioBufferTotalBudgetBytes 约束
                                 // （256 连接 × 1MB = 256MB = Android 默认整堆，2026-10-10 真机 OOM 事故）。
-                                buffer = buffers[idx],
+                                buffer = workerBuffer,
                                 ifRange = ifRange,
                             )
                             when (res) {
@@ -1063,7 +1118,101 @@ internal class SegmentScheduler(
                     }
                 }
             }
-            jobs.awaitAll()
+            val startedWorkers = java.util.concurrent.atomic.AtomicIntegerArray(workers)
+            fun ensureSegmentSupply(targetWorkers: Int) {
+                if (targetWorkers <= gridConcurrency) return
+                val targetCount = min(
+                    segCap,
+                    (targetWorkers.toLong() *
+                        config.segmentsPerConnection.coerceIn(1, 64).toLong()),
+                )
+                var added = 0
+                synchronized(pendingLock) {
+                    val queued = pending.toMutableList()
+                    pending.clear()
+                    var incomplete = segmentList.count { !it.complete }
+                    while (incomplete < targetCount) {
+                        var bestIndex = -1
+                        var bestRemaining = 0L
+                        for (i in queued.indices) {
+                            val candidate = queued[i]
+                            if (candidate.complete) continue
+                            val remaining = candidate.remaining
+                            if (remaining > bestRemaining) {
+                                bestRemaining = remaining
+                                bestIndex = i
+                            }
+                        }
+                        if (bestIndex < 0) break
+                        val seg = queued[bestIndex]
+                        val from = seg.start + seg.written
+                        val remaining = seg.end - from + 1
+                        val minPiece = max(config.minSegmentSize, TAIL_ALIGN)
+                        if (remaining < 2 * minPiece) break
+                        val exactHalf = remaining / 2
+                        val firstLen = (exactHalf / TAIL_ALIGN) * TAIL_ALIGN
+                        if (firstLen < minPiece || remaining - firstLen < minPiece) break
+                        val splitEnd = from + firstLen - 1
+                        val oldEnd = seg.end
+                        seg.end = splitEnd
+                        val suffix = Segment(SegmentStore.Piece(splitEnd + 1, oldEnd))
+                        queued += suffix
+                        segmentList.add(suffix)
+                        incomplete++
+                        added++
+                    }
+                    queued.sortBy { it.start }
+                    pending.addAll(queued)
+                }
+                if (added > 0) persistProgress(force = true)
+                if (debugScheduler && (added > 0 || targetWorkers > gridConcurrency)) {
+                    println(
+                        "[sched] segment supply targetWorkers=$targetWorkers targetCount=$targetCount " +
+                            "added=$added incomplete=${segmentList.count { !it.complete }} pending=${queueSize()}",
+                    )
+                }
+            }
+
+            ensureWorkersStarted = { target ->
+                ensureSegmentSupply(target)
+                val count = min(workers, target.coerceAtLeast(0))
+                for (idx in 0 until count) {
+                    if (startedWorkers.compareAndSet(idx, 0, 1)) {
+                        val begun = jobs[idx].start()
+                        if (debugScheduler && idx >= gridConcurrency) {
+                            println(
+                                "[sched] start idx=$idx begun=$begun active=${jobs[idx].isActive} " +
+                                    "completed=${jobs[idx].isCompleted} cancelled=${jobs[idx].isCancelled}",
+                            )
+                        }
+                    }
+                }
+                if (debugScheduler) {
+                    println(
+                        "[sched] start workers target=$target requested=$workers " +
+                            "desired=${desired.get()} " +
+                            "started=${(0 until workers).count { startedWorkers.get(it) == 1 }}",
+                    )
+                }
+            }
+            // Ramp loop may already have raised desired before the lazy list was
+            // constructed; start to the current target instead of the stale initial.
+            ensureWorkersStarted(desired.get())
+
+            // Wait for every worker that actually started. The controller may start
+            // more workers while the first ones are draining, so a one-shot snapshot
+            // would return too early. Never call await() on an unstarted lazy job:
+            // that auto-starts it and recreates the c=256 idle-worker tax.
+            while (true) {
+                val activeJobs = jobs.filterIndexed { idx, job ->
+                    startedWorkers.get(idx) == 1 && !job.isCompleted
+                }
+                if (activeJobs.isEmpty()) break
+                activeJobs.awaitAll()
+            }
+            jobs.forEachIndexed { idx, job ->
+                if (startedWorkers.get(idx) == 0) runCatching { job.cancel() }
+            }
             true
         } catch (e: CancellationException) {
             throw e

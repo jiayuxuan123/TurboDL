@@ -98,6 +98,30 @@ internal class SegmentStore(
         channel = r.channel
     }
 
+    /**
+     * Ensure the destination has its final logical length before concurrent writes.
+     *
+     * Extending a file is a metadata operation that serializes inside the OS.
+     * With 128/256 positional writers, every Range that lands beyond the current
+     * EOF can contend on that same lock. Reserving the last byte once turns the
+     * transfer phase into pure positional writes and avoids repeated file-growth
+     * stalls. A one-byte positional write is used instead of `setLength(total)`
+     * because it does not force filesystems to materialize a large zero-filled
+     * allocation up front; the unwritten regions remain holes until their
+     * segments arrive.
+     */
+    fun ensureLength() {
+        if (total <= 0 || dest.length() >= total) return
+        val ch = channel ?: error("SegmentStore 未 open()")
+        val marker = ByteBuffer.wrap(byteArrayOf(0))
+        var position = total - 1
+        while (marker.hasRemaining()) {
+            val n = ch.write(marker, position)
+            if (n <= 0) throw java.io.IOException("无法预留目标文件长度：$total")
+            position += n
+        }
+    }
+
     fun close() {
         // 先关线程通道，再关照句柄。
         while (true) {
