@@ -59,6 +59,30 @@ def mark_svg(color: str, size: int = 32) -> str:
 '''
 
 
+def turbodl_mark_svg(signal: str = "#c8ff4a", cyan: str = "#62e7e7", background: str | None = None) -> str:
+    """TurboDL 专用标记：三块不等长分片汇入一条下行指令。"""
+    bg = f'<rect width="40" height="40" fill="{background}"/>' if background else ""
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-label="TurboDL">
+  {bg}
+  <path d="M7 8h7v9H7zM16 8h7v15h-7zM25 8h8v6h-8z" fill="{signal}"/>
+  <path d="M7 25h18M20 18v17M14 29l6 6 6-6" fill="none" stroke="{cyan}" stroke-width="2"/>
+  <path d="M7 20h8" stroke="{signal}" stroke-width="2"/>
+</svg>
+'''
+
+
+def draw_turbodl_mark(d: ImageDraw.ImageDraw, ox: int, oy: int, s: float, signal: str, cyan: str) -> None:
+    """PIL counterpart of `turbodl_mark_svg` for favicon fallbacks."""
+    d.rectangle([ox + 7 * s, oy + 8 * s, ox + 14 * s, oy + 17 * s], fill=signal)
+    d.rectangle([ox + 16 * s, oy + 8 * s, ox + 23 * s, oy + 23 * s], fill=signal)
+    d.rectangle([ox + 25 * s, oy + 8 * s, ox + 33 * s, oy + 14 * s], fill=signal)
+    d.line([(ox + 7 * s, oy + 20 * s), (ox + 15 * s, oy + 20 * s)], fill=signal, width=max(2, int(2 * s)))
+    d.line([(ox + 7 * s, oy + 25 * s), (ox + 25 * s, oy + 25 * s)], fill=cyan, width=max(2, int(2 * s)))
+    d.line([(ox + 20 * s, oy + 18 * s), (ox + 20 * s, oy + 35 * s)], fill=cyan, width=max(2, int(2 * s)))
+    d.line([(ox + 14 * s, oy + 29 * s), (ox + 20 * s, oy + 35 * s)], fill=cyan, width=max(2, int(2 * s)))
+    d.line([(ox + 26 * s, oy + 29 * s), (ox + 20 * s, oy + 35 * s)], fill=cyan, width=max(2, int(2 * s)))
+
+
 def draw_mark(d: ImageDraw.ImageDraw, ox: int, oy: int, s: float, color: str) -> None:
     """把 [mark_svg] 的同一几何用 PIL 画出来（用于需要栅格的场合）。"""
     w = max(2, int(2.3 * s))
@@ -81,38 +105,54 @@ def draw_mark(d: ImageDraw.ImageDraw, ox: int, oy: int, s: float, color: str) ->
 
 def build_turbodl() -> list[str]:
     made = []
-    ink = "#14181f"
-    accent = "#2f6fed"
+    ink = "#eef3ed"
+    muted = "#9ba9a1"
+    signal = "#c8ff4a"
+    cyan = "#62e7e7"
+    bg = "#090c0b"
 
-    (OUT / "logo-mark.svg").write_text(mark_svg(accent), encoding="utf-8")
-    (OUT / "favicon.svg").write_text(mark_svg(accent), encoding="utf-8")
+    (OUT / "logo-mark.svg").write_text(
+        turbodl_mark_svg(signal, cyan).replace("  \n", "\n"), encoding="utf-8"
+    )
+    (OUT / "favicon.svg").write_text(
+        turbodl_mark_svg(signal, cyan, bg).replace("  \n", "\n"), encoding="utf-8"
+    )
     made += ["logo-mark.svg", "favicon.svg"]
 
     # 矢量首选的现代做法；再给两个栅格兜底（Safari / 旧 Android 浏览器）
     for size, name in ((180, "apple-touch-icon.png"), (32, "favicon-32.png")):
-        img = Image.new("RGB", (size, size), "#ffffff")
+        img = Image.new("RGB", (size, size), bg)
         d = ImageDraw.Draw(img)
-        s = size / 32.0
-        draw_mark(d, 0, int(-1.5 * s), s * 1.02, accent)
+        s = size / 40.0
+        draw_turbodl_mark(d, 0, 0, s, signal, cyan)
         img.save(OUT / name, "PNG", optimize=True)
         made.append(name)
 
-    # OG 大图：真实标语 + 真实版本占位（版本由 make_assets 的调用方通过参数给出时覆盖）
-    img = Image.new("RGB", (1200, 630), "#ffffff")
+    # OG 大图：同一套传输工程台视觉，版本号来自已提交的 Release 数据。
+    import json
+
+    release = json.loads((HERE / "data" / "releases.json").read_text(encoding="utf-8"))["latest"]["tag"]
+    img = Image.new("RGB", (1200, 630), bg)
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, 1200, 8], fill=accent)
-    draw_mark(d, 92, 96, 3.4, accent)
-    d.text((232, 104), "TurboDL", font=font(58), fill=ink)
-    d.text((94, 250), "Multi-threaded download engine for the JVM", font=font(46), fill=ink)
+    for x in range(0, 1201, 32):
+        d.line([(x, 0), (x, 630)], fill="#111713", width=1)
+    for y in range(0, 631, 32):
+        d.line([(0, y), (1200, y)], fill="#111713", width=1)
+    d.rectangle([0, 0, 1200, 8], fill=signal)
+    draw_turbodl_mark(d, 92, 82, 2.9, signal, cyan)
+    d.text((236, 96), "TurboDL", font=font(62), fill=ink)
+    d.text((96, 226), "Many hands, one file.", font=font(62), fill=ink)
+    d.text((96, 304), "Segmented HTTP download engine for the JVM", font=font(34), fill=muted)
+    d.text((96, 374), "Range probe  /  16 shards  /  byte-level verification", font=font(27), fill=cyan)
+    d.text((96, 462), f"{release}   ·   JVM 17+   ·   MIT", font=font(28), fill=signal)
+    d.line([(96, 520), (1104, 520)], fill="#354139", width=1)
+    d.text((96, 548), "github.com/jiayuxuan123/TurboDL", font=font(26), fill=muted)
     d.text(
-        (94, 322),
-        "Resume · Adaptive concurrency · Plugin framework",
-        font=font(32),
-        fill="#5a6472",
+        (830, 548),
+        "TRANSMISSION BENCH",
+        font=font(20),
+        fill=signal,
     )
-    d.text((94, 430), "Kotlin / JVM 17+   ·   MIT", font=font(28), fill="#8b95a5")
-    d.line([(94, 500), (1106, 500)], fill="#e3e7ee", width=2)
-    d.text((94, 526), "github.com/jiayuxuan123/TurboDL", font=font(26), fill=accent)
     img.save(OUT / "og.png", "PNG", optimize=True)
     made.append("og.png")
     return made

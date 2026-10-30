@@ -140,6 +140,7 @@ class Site:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(full_title)}</title>
 <meta name="description" content="{esc(desc)}">
+<meta name="color-scheme" content="dark">
 <link rel="canonical" href="{esc(canon)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="{esc(cfg['name'])}">
@@ -147,37 +148,44 @@ class Site:
 <meta property="og:description" content="{esc(desc)}">
 <meta property="og:url" content="{esc(canon)}">
 <meta property="og:image" content="{esc(og_image)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{esc(cfg['tagline'])}">
+<meta property="og:locale" content="{'zh_CN' if lang == 'zh' else 'en_US'}">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#0a0a0a">
+<meta name="twitter:title" content="{esc(full_title)}">
+<meta name="twitter:description" content="{esc(desc)}">
+<meta name="twitter:image" content="{esc(og_image)}">
+<meta name="theme-color" content="#090c0b">
 <link rel="icon" href="{rel(page["dir"], "assets/favicon.svg")}" type="image/svg+xml">
 <link rel="icon" href="{rel(page["dir"], "assets/favicon-32.png")}" sizes="32x32">
 <link rel="apple-touch-icon" href="{rel(page["dir"], "assets/apple-touch-icon.png")}">
-<!-- 入场动效只在 html 有 .js 时才生效：脚本没跑起来，内容照样完整可见。
-     没有主题切换按钮：这一版只有深色一种底色（方向单指定的调色板），
-     放一个切了没反应的开关不如不放。 -->
-<script>document.documentElement.className+=" js";setTimeout(function(){{if(!window.__motionReady){{var n=document.querySelectorAll(".rise, .hl-layer");for(var i=0;i<n.length;i++)n[i].classList.add("in")}}}},2500);</script>
-<!-- 单一样式表：上一版依赖 Pico（classless）再逐条覆盖它，重构后规则全在 site.css 里 -->
+<script>document.documentElement.className+=" js";setTimeout(function(){{if(!window.__motionReady){{document.documentElement.classList.add("motion-ready");var n=document.querySelectorAll(".rise");for(var i=0;i<n.length;i++)n[i].classList.add("in")}}}},2200);</script>
 <link rel="stylesheet" href="{asset(page["dir"], "site.css")}">
 </head>
-<body class="{esc(cfg.get('body_class', ''))}">
+<body class="{esc(cfg.get('body_class', ''))} page-{esc(page['key'])}" data-page="{esc(page['key'])}">
 <a class="skip" href="#main">{esc(self.ui(lang, "skip"))}</a>
 """
 
     def header(self, page: dict) -> str:
-        """侧栏：词标 + 四个页面 + 语言/主题工具。
+        """工程导轨与遥测顶栏。
 
-        结构是**左侧常驻侧栏 + 主画布**（开发站的手感来自目录常驻），不是顶部导航条；
-        窄屏时侧栏折成一行、导航收进 .nav-toggle。侧栏有自己的黑底 —— 画布里的章节
-        各自是整幅色场，侧栏不压进那些色场（见 site.css 头部的偏离说明）。
+        桌面端是一条固定的传输控制导轨，窄屏折成顶栏加抽屉。主画布顶部始终显示
+        当前发布、API 版本与测试数，它们都来自生成器的真实配置，不做装饰性假数据。
         """
         cfg = self.cfg
         lang = page["lang"]
         brand_href = rel(page["dir"], self.index["home"].get(lang) or self.index["home"][cfg["default_lang"]])
         nav_items = []
-        for key, _labels in cfg["nav"]:
+        for index, (key, _labels) in enumerate(cfg["nav"], start=1):
             href = self.href(page, key)
             active = ' aria-current="page"' if page["key"] == key else ""
-            nav_items.append(f'<a href="{href}"{active}>{esc(self.label((key, _labels), lang))}</a>')
+            nav_items.append(
+                f'<a href="{href}"{active} data-index="{index:02d}">'
+                f'<span class="nav-index" aria-hidden="true">{index:02d}</span>'
+                f'<span class="nav-label">{esc(self.label((key, _labels), lang))}</span>'
+                '<span class="nav-arrow" aria-hidden="true">↗</span></a>'
+            )
         nav = "".join(nav_items)
 
         # 语言切换：同一 page key 在另一个语言下的地址
@@ -187,26 +195,72 @@ class Site:
             links = []
             for code, _lab in langs:
                 if code == lang:
-                    links.append(f'<span class="lang-cur">{esc(self.label((code, _lab), lang))}</span>')
+                    links.append(
+                        f'<span class="lang-cur" aria-current="true">'
+                        f'{esc(self.label((code, _lab), lang))}</span>'
+                    )
                 else:
                     target = self.index.get(page["key"], {}).get(code)
                     if target is None:
                         # 该页在目标语言不存在：退回目标语言的首页，不做死链
                         target = self.index["home"].get(code)
                     links.append(f'<a href="{rel(page["dir"], target)}">{esc(self.label((code, _lab), lang))}</a>')
-            switcher = '<div class="langs">' + "".join(links) + "</div>"
+            switcher = (
+                '<div class="langs" aria-label="Language">'
+                '<span class="tool-label">LANG</span>'
+                + "".join(links)
+                + "</div>"
+            )
 
-        tools = '<div class="side-tools">' + switcher + "</div>"
+        repo_url = cfg.get("repo", "")
+        release = cfg.get("release_tag", "")
+        api = cfg.get("api_version", "")
+        tools = (
+            '<div class="side-tools">'
+            + switcher
+            + f'<a class="repo-link" href="{esc(repo_url)}">'
+            '<span>Repository</span><span aria-hidden="true">↗</span></a>'
+            + "</div>"
+        )
+        page_name = page.get("title", page["key"])
         return f"""<div class="app">
-<aside class="side">
+<aside class="side" id="site-rail">
 <div class="side-top">
-<a class="brand" href="{brand_href}"><span class="brand-mark">{cfg['mark_svg']}</span><span class="brand-name">{esc(cfg['name'])}</span></a>
-<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="side-nav">{esc(self.ui(lang, "menu"))}</button>
+<a class="brand" href="{brand_href}" aria-label="{esc(cfg['name'])}">
+<span class="brand-mark">{cfg['mark_svg']}</span>
+<span class="brand-copy"><span class="brand-name">{esc(cfg['name'])}</span><span class="brand-sub">TRANSFER ENGINE</span></span>
+</a>
+<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="side-nav">
+<span class="nav-toggle-copy">{esc(self.ui(lang, "menu"))}</span>
+<span class="nav-toggle-icon" aria-hidden="true"><i></i><i></i></span>
+</button>
 </div>
+<div class="side-status">
+<span class="signal-dot" aria-hidden="true"></span>
+<span>ENGINE ONLINE</span>
+<span class="side-release">{esc(release)}</span>
+</div>
+<nav class="side-nav" id="side-nav" aria-label="Primary">{nav}</nav>
 {tools}
-<nav class="side-nav" id="side-nav">{nav}</nav>
+<div class="side-foot">
+<span>JVM 17+</span><span>MIT</span><span>API {esc(api)}</span>
+</div>
 </aside>
+<button class="side-scrim" type="button" tabindex="-1" aria-label="Close menu"></button>
 <main id="main" class="canvas">
+<header class="canvas-top">
+<div class="canvas-channel">
+<span class="channel-mark" aria-hidden="true"></span>
+<span class="channel-kicker">CHANNEL</span>
+<strong>{esc(page_name)}</strong>
+</div>
+<div class="canvas-telemetry">
+<span><i>REL</i>{esc(release)}</span>
+<span><i>API</i>{esc(api)}</span>
+<span><i>TEST</i>{cfg.get("test_count", "")} PASS</span>
+</div>
+<div class="scroll-track" aria-hidden="true"><i id="scroll-progress"></i></div>
+</header>
 """
 
     def footer(self, page: dict) -> str:
@@ -239,10 +293,18 @@ class Site:
         return f"""</main>
 </div>
 <footer class="site-foot">
-<div class="wrap">
+<div class="foot-signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<div class="wrap foot-wrap">
+<div class="foot-brand">
+<a class="foot-logo" href="{rel(page["dir"], self.index["home"].get(lang) or self.index["home"][cfg["default_lang"]])}">
+<span class="brand-mark">{cfg['mark_svg']}</span>
+<span>{esc(cfg['name'])}</span>
+</a>
+<p>{esc(cfg['tagline'])}</p>
+</div>
 <div class="foot-top">{cols_html}</div>
 <div class="foot-line"><a href="{esc(repo_url)}">{esc(repo_label)}</a></div>
-<div class="foot-note">{paras}</div>
+<div class="foot-base"><div class="foot-note">{paras}</div><p class="foot-sys">TRANSFER BENCH / {esc(cfg.get("release_tag", ""))} / JVM</p></div>
 </div>
 </footer>
 <script src="{asset(page["dir"], "site.js")}" defer></script>
@@ -269,7 +331,7 @@ class Site:
         crumbs = page.get("breadcrumb")
         crumb_html = breadcrumb([(t, self.href(page, k) if k else "") for t, k in crumbs]) if crumbs else ""
         head = self.head(page)
-        # 面包屑插在 <main> 之后、正文之前
+        # 面包屑插在遥测顶栏之后、正文之前
         return head + self.header(page) + crumb_html + body + self.footer(page)
 
     # ---- 其它文件 ----
@@ -316,8 +378,11 @@ class Site:
             for k, labels in cfg["nav"]
         ]
         body = (
-            f'<section><h1>{esc(self.ui(lang, "notfound_title"))}</h1>'
+            '<section class="not-found">'
+            '<p class="not-found-code" aria-hidden="true">ERR / 404</p>'
+            f'<h1>{esc(self.ui(lang, "notfound_title"))}</h1>'
             f'<p class="lead">{esc(self.ui(lang, "notfound_body"))}</p>'
+            '<div class="signal-rule" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>'
             + buttons(links)
             + "</section>"
         )

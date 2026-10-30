@@ -182,9 +182,9 @@ def main() -> int:
             for f in findings:
                 print(f"  - {f}")
         elif args.verbose:
-            print(f"✓ {rel}")
+            print(f"[ok] {rel}")
     print(f"\n共 {len(pages)} 页，{total} 处问题")
-    return 0
+    return 1 if total else 0
 
 
 if __name__ == "__main__":

@@ -580,6 +580,10 @@ def _page_doc(doc: dict, lang: str, href) -> str:
             body, toc = mdlite.render(
                 text, _resolver(src, href), h_offset=0 if dropped else 1, toc_max=3
             )
+            toc = toc.replace(
+                "<summary>本页目录</summary>",
+                f'<summary>{"On this page" if en else "本页目录"}</summary>',
+            )
         src_label = src
 
     group = DOC_GROUPS[doc["group"]][lang]
@@ -1610,16 +1614,18 @@ def plugin_cards(lang: str) -> str:
 
 
 def _nav() -> list:
-    """顶栏只放**最常走的四条路**（其余入口在页脚按栏目列全）。
+    """控制导轨里的完整路径。
 
-    上一版七项（Overview/Download/Plugins/Docs/Changelog/Community/Terms），
-    加上语言切换与主题按钮就是九个目标挤在一行 —— 按钮墙，主行动反而被淹掉。
+    桌面端有单独的纵向空间，七条路由不会挤掉主行动；移动端收进抽屉。
     """
     return [
-        ("home", {"en": "Overview", "zh": "概览"}),
+        ("home", {"en": "Console", "zh": "控制台"}),
         ("download", {"en": "Download", "zh": "下载"}),
-        ("plugins", {"en": "Plugins", "zh": "插件"}),
         ("docs", {"en": "Docs", "zh": "文档"}),
+        ("plugins", {"en": "Plugins", "zh": "插件"}),
+        ("changelog", {"en": "Changelog", "zh": "更新日志"}),
+        ("community", {"en": "Community", "zh": "社区"}),
+        ("legal", {"en": "Legal", "zh": "协议"}),
     ]
 
 
@@ -2008,6 +2014,9 @@ SITE = {
     "default_lang": "en",
     "langs": [("en", {"en": "English", "zh": "English"}), ("zh", {"en": "中文", "zh": "中文"})],
     "body_class": "brand-turbodl",
+    "release_tag": LATEST["tag"],
+    "api_version": API_VERSION,
+    "test_count": TEST_COUNT,
     "mark_svg": (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true">'
         '<g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round">'

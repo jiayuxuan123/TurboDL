@@ -85,6 +85,9 @@ def _inline(text: str, link=None, *, image_prefix: str = "") -> str:
     # 反引号可以有多个（``a `b` c``），所以用回溯匹配等长的围栏
     text = re.sub(r"(`+)(.+?)\1", stash, text, flags=re.S)
 
+    # 中文正文的成对直引号在网页里换成「」；代码已在上一步暂存，不会被改动。
+    text = re.sub(r'"([^"\n]*[\u4e00-\u9fff][^"\n]*)"', r"「\1」", text)
+
     text = html.escape(text, quote=False)
 
     def _url(raw: str) -> str:

@@ -107,7 +107,10 @@ def fmt_bytes(n: int) -> str:
 def code_block(code: str, caption: str = "") -> str:
     """代码块。`caption` 是上方那行小标签（文件名 / 语言）。"""
     cap = f'<div class="code-cap">{esc(caption)}</div>' if caption else ""
-    return f'<div class="code">{cap}<pre><code>{esc(code.strip(chr(10)))}</code></pre></div>'
+    return (
+        f'<div class="code" data-code-block>{cap}'
+        f'<pre><code>{esc(code.strip(chr(10)))}</code></pre></div>'
+    )
 
 
 def table(headers: list[str], rows: list[list[str]]) -> str:
@@ -127,7 +130,10 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
         + "</tr>"
         for r in rows
     )
-    return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+    return (
+        f'<div class="table-wrap" data-table><table>'
+        f'<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+    )
 
 
 def _plain(fragment: str) -> str:
@@ -153,7 +159,8 @@ def md_inline(text: object) -> str:
 def cards(items: list[tuple[str, str]], columns: int = 3) -> str:
     """卡片网格：`(标题, 正文HTML)`。"""
     inner = "".join(
-        f'<div class="card"><h3>{t}</h3><div class="card-body">{b}</div></div>' for t, b in items
+        f'<article class="card"><h3>{t}</h3><div class="card-body">{b}</div></article>'
+        for t, b in items
     )
     return f'<div class="cards cols-{columns}">{inner}</div>'
 
@@ -161,13 +168,17 @@ def cards(items: list[tuple[str, str]], columns: int = 3) -> str:
 def buttons(items: list[tuple[str, str]], kind: str = "") -> str:
     """按钮行：`(文本, href)`。href 由调用方保证真实可达。"""
     cls = f"btn-row {kind}".strip()
-    inner = "".join(f'<a class="btn" href="{h}">{t}</a>' for t, h in items)
+    inner = "".join(
+        f'<a class="btn" href="{h}"><span>{t}</span>'
+        '<span class="btn-arrow" aria-hidden="true">↗</span></a>'
+        for t, h in items
+    )
     return f'<div class="{cls}">{inner}</div>'
 
 
 def section(title: str, body: str, anchor: str = "") -> str:
     aid = f' id="{anchor}"' if anchor else ""
-    return f"<section{aid}>{seg_rule()}<h2>{title}</h2>{body}</section>"
+    return f'<section class="section"{aid}>{seg_rule()}<h2>{title}</h2>{body}</section>'
 
 
 def seg_rule(segments: list[tuple[int, bool]] | None = None) -> str:
@@ -195,7 +206,7 @@ def seg_rule(segments: list[tuple[int, bool]] | None = None) -> str:
 def note(text: str, tone: str = "") -> str:
     """提示条：tone 取 warn / ok，留空为普通提示。"""
     cls = f"note {tone}".strip()
-    return f'<div class="{cls}">{text}</div>'
+    return f'<aside class="{cls}">{text}</aside>'
 
 
 def breadcrumb(items: list[tuple[str, str]]) -> str:
@@ -206,4 +217,8 @@ def breadcrumb(items: list[tuple[str, str]]) -> str:
             parts.append(f'<span aria-current="page">{esc(text)}</span>')
         else:
             parts.append(f'<a href="{href}">{esc(text)}</a>')
-    return '<nav class="crumbs">' + '<span class="sep">/</span>'.join(parts) + "</nav>"
+    return (
+        '<nav class="crumbs" aria-label="Breadcrumb">'
+        + '<span class="sep" aria-hidden="true">/</span>'.join(parts)
+        + "</nav>"
+    )

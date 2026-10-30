@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="TurboDL">
-  <g fill="none" stroke="#2f6fed" stroke-width="2.3" stroke-linecap="round">
-    <path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/>
-  </g>
-  <path d="M16 15.6l6.2 6.2H9.8z" fill="#2f6fed"/>
-  <path d="M16 21v7" stroke="#2f6fed" stroke-width="2.3" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-label="TurboDL">
+
+  <path d="M7 8h7v9H7zM16 8h7v15h-7zM25 8h8v6h-8z" fill="#c8ff4a"/>
+  <path d="M7 25h18M20 18v17M14 29l6 6 6-6" fill="none" stroke="#62e7e7" stroke-width="2"/>
+  <path d="M7 20h8" stroke="#c8ff4a" stroke-width="2"/>
 </svg>
