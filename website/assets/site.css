@@ -916,6 +916,11 @@ code {
   display: block;
 }
 
+.hero-title:lang(zh) {
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+}
+
 .hero-title .signal-text {
   color: var(--signal);
 }
@@ -2728,15 +2733,18 @@ pre {
 
 .foot-line a {
   display: block;
-  overflow: hidden;
+  overflow: visible;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: clamp(2rem, 6vw, 6rem);
-  line-height: 0.9;
+  font-size: clamp(1.55rem, 3.8vw, 3.5rem);
+  line-height: 0.95;
   letter-spacing: -0.05em;
   text-decoration: none;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.foot-line a span {
+  display: inline;
 }
 
 .foot-line a:hover {
@@ -3345,7 +3353,39 @@ html.js .rise.in {
 
   .foot-line a {
     white-space: normal;
-    overflow-wrap: anywhere;
+    font-size: 1.55rem;
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+
+  .foot-line a span {
+    display: block;
+  }
+}
+
+/* Chinese display glyphs occupy a full em, unlike the proportional Latin
+   display face. Keep each five-character hero line intact on one row. */
+.hero-title:lang(zh) {
+  max-width: 100%;
+  font-size: clamp(3.35rem, 6.5vw, 6.5rem);
+}
+
+@media (max-width: 960px) {
+  .hero-title:lang(zh) {
+    font-size: clamp(3.2rem, 8vw, 6rem);
+  }
+}
+
+@media (max-width: 760px) {
+  .hero-title:lang(zh) {
+    font-size: clamp(3.1rem, 15vw, 5.4rem);
+  }
+}
+
+@media (max-width: 520px) {
+  .hero-title:lang(zh) {
+    font-size: clamp(2.8rem, 16.5vw, 4.5rem);
+    line-height: 1.06;
   }
 }
 

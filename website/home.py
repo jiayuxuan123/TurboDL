@@ -36,10 +36,24 @@ def _hero(lang: str, href) -> str:
     primary = f"Download {F.LATEST['tag']}" if en else f"下载 {F.LATEST['tag']}"
     secondary = "Read the engine docs" if en else "阅读引擎文档"
     release = F.LATEST["tag"]
+    eyebrow_tail = "NO UI REQUIRED" if en else "无需界面"
+    release_label = "RELEASE" if en else "版本"
+    engine_label = "ENGINE" if en else "引擎"
+    verify_label = "VERIFY" if en else "校验"
+    request_shards = f"1 REQUEST → {esc(16)} SHARDS" if en else f"1 次请求 → {esc(16)} 个分片"
+    test_count = f"{esc(F.TEST_COUNT)} TESTS" if en else f"{esc(F.TEST_COUNT)} 项测试"
+    sample_label = "SAMPLE TRACE" if en else "示例采样"
+    shards_in_flight = "SHARDS<br>IN FLIGHT" if en else "个分片<br>并行中"
+    state_label = "STATE" if en else "状态"
+    state_value = "downloading" if en else "下载中"
+    elapsed_label = "ELAPSED" if en else "耗时"
+    eta_label = "ETA" if en else "剩余"
+    retries_label = "RETRIES" if en else "重试"
+    progress_label = "progress event / byte counter" if en else "进度事件 / 字节计数"
     return f"""
 <section class="hero-bench" data-hero>
   <div class="hero-copy">
-    <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span><span>HTTP/RANGE</span><span>KOTLIN JVM 17+</span><span class="eyebrow-tail">NO UI REQUIRED</span></p>
+    <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span><span>HTTP/RANGE</span><span>KOTLIN JVM 17+</span><span class="eyebrow-tail">{eyebrow_tail}</span></p>
     <h1 class="hero-title"><span>{esc(title_a)}</span><span class="signal-text">{esc(title_b)}</span></h1>
     <p class="hero-note">{esc(note)}</p>
     <div class="hero-act">
@@ -47,20 +61,20 @@ def _hero(lang: str, href) -> str:
       <a class="btn btn-ghost" href="{href("docs")}"><span>{esc(secondary)}</span><span class="btn-arrow" aria-hidden="true">↗</span></a>
     </div>
     <dl class="hero-facts">
-      <div><dt>RELEASE</dt><dd>{esc(release)}</dd></div>
-      <div><dt>ENGINE</dt><dd>1 REQUEST → {esc(16)} SHARDS</dd></div>
-      <div><dt>VERIFY</dt><dd>{esc(F.TEST_COUNT)} TESTS</dd></div>
+      <div><dt>{release_label}</dt><dd>{esc(release)}</dd></div>
+      <div><dt>{engine_label}</dt><dd>{request_shards}</dd></div>
+      <div><dt>{verify_label}</dt><dd>{test_count}</dd></div>
     </dl>
   </div>
 
   <aside class="telemetry-board" data-ui aria-label="{'Sample transfer telemetry' if en else '示例传输遥测'}">
     <div class="telemetry-head">
-      <span><i class="signal-dot" aria-hidden="true"></i> SAMPLE TRACE</span>
+      <span><i class="signal-dot" aria-hidden="true"></i> {sample_label}</span>
       <code>212.4 / 341.8 MB</code>
     </div>
     <div class="telemetry-readout">
       <p class="telemetry-speed"><strong>18.6</strong><span>MB/s</span></p>
-      <p class="telemetry-workers"><strong>16</strong><span>SHARDS<br>IN FLIGHT</span></p>
+      <p class="telemetry-workers"><strong>16</strong><span>{shards_in_flight}</span></p>
     </div>
     <div class="telemetry-plot">
       <span class="plot-label">RANGE / 0—341.8&nbsp;MB</span>
@@ -68,13 +82,13 @@ def _hero(lang: str, href) -> str:
       <div class="plot-axis" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
     </div>
     <div class="telemetry-grid">
-      <div><span>STATE</span><b>downloading</b></div>
-      <div><span>ELAPSED</span><b>00:18.42</b></div>
-      <div><span>ETA</span><b>00:07.02</b></div>
-      <div><span>RETRIES</span><b>0</b></div>
+      <div><span>{state_label}</span><b>{state_value}</b></div>
+      <div><span>{elapsed_label}</span><b>00:18.42</b></div>
+      <div><span>{eta_label}</span><b>00:07.02</b></div>
+      <div><span>{retries_label}</span><b>0</b></div>
     </div>
     <div class="telemetry-foot">
-      <span>progress event / byte counter</span>
+      <span>{progress_label}</span>
       <b>62%</b>
     </div>
   </aside>
@@ -252,6 +266,7 @@ def _inventory(lang: str) -> str:
 
 def _telemetry(lang: str) -> str:
     en = lang == "en"
+    progress_label = "PROGRESS EVENT" if en else "进度事件"
     rows = [
         ("state", "downloading"),
         ("downloaded", "212.4 MB"),
@@ -265,7 +280,7 @@ def _telemetry(lang: str) -> str:
     return (
         '<div class="runtime-panel" data-ui>'
         '<div class="runtime-head">'
-        '<span><i class="signal-dot" aria-hidden="true"></i> PROGRESS EVENT</span>'
+        f'<span><i class="signal-dot" aria-hidden="true"></i> {progress_label}</span>'
         '<b>62%</b>'
         "</div>"
         '<div class="runtime-bar"><i style="--value:62%"></i></div>'
@@ -367,10 +382,12 @@ def _refusals(lang: str, href) -> str:
         if en
         else "不支持的流会响亮地失败。另一种做法 —— 写下一个看起来正常、其实不对的文件 —— 正是这一节要避免的失败方式。"
     )
+    refusal_kicker = "FAIL-CLOSED" if en else "失败即拒绝"
+    refusal_label = "EXPLICIT REFUSALS" if en else "明确不支持"
     return (
         '<section class="section field section-refusals">'
         '<div class="refusal-head">'
-        '<p class="eyebrow"><span class="status-dot is-warn" aria-hidden="true"></span><span>FAIL-CLOSED</span><span>EXPLICIT REFUSALS</span></p>'
+        f'<p class="eyebrow"><span class="status-dot is-warn" aria-hidden="true"></span><span>{refusal_kicker}</span><span>{refusal_label}</span></p>'
         f'<h2>{"What it refuses to pretend" if en else "它拒绝假装支持什么"}</h2>'
         f'<p class="section-lead">{esc(lead)}</p>'
         "</div>"
@@ -474,7 +491,7 @@ java -jar turbodl-cli-{F.LATEST_VERSION}-all.jar --batch tasks.txt""",
                if en else "还没有发布到 Maven Central。官方支持的用法是 Release 页上的离线 Maven 包，下载页写了具体步骤。")
             + "</p>"
             + '<div class="btn-row end-actions">'
-            + f'<a class="btn btn-primary" href="{href("download")}"><span>Download {esc(F.LATEST["tag"])}</span><span class="btn-arrow" aria-hidden="true">↓</span></a>'
+            + f'<a class="btn btn-primary" href="{href("download")}"><span>{"Download" if en else "下载"} {esc(F.LATEST["tag"])}</span><span class="btn-arrow" aria-hidden="true">↓</span></a>'
             + f'<a class="btn btn-ghost" href="{href("plugins")}"><span>{"Plugin guide" if en else "插件开发指南"}</span><span class="btn-arrow" aria-hidden="true">↗</span></a>'
             + f'<a class="btn btn-ghost" href="{esc(F.REPO)}"><span>GitHub</span><span class="btn-arrow" aria-hidden="true">↗</span></a>'
             + "</div>",

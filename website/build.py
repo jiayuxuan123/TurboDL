@@ -175,6 +175,18 @@ class Site:
         """
         cfg = self.cfg
         lang = page["lang"]
+        en = lang == "en"
+        language_label = "Language" if en else "语言"
+        language_kicker = "LANG" if en else "语言"
+        repository_label = "Repository" if en else "仓库"
+        brand_subtitle = "TRANSFER ENGINE" if en else "传输引擎"
+        engine_status = "ENGINE ONLINE" if en else "引擎在线"
+        nav_label = "Primary" if en else "主导航"
+        close_label = "Close menu" if en else "关闭菜单"
+        channel_label = "CHANNEL" if en else "频道"
+        release_label = "REL" if en else "版本"
+        test_label = "TEST" if en else "测试"
+        test_suffix = " PASS" if en else " 通过"
         brand_href = rel(page["dir"], self.index["home"].get(lang) or self.index["home"][cfg["default_lang"]])
         nav_items = []
         for index, (key, _labels) in enumerate(cfg["nav"], start=1):
@@ -206,8 +218,8 @@ class Site:
                         target = self.index["home"].get(code)
                     links.append(f'<a href="{rel(page["dir"], target)}">{esc(self.label((code, _lab), lang))}</a>')
             switcher = (
-                '<div class="langs" aria-label="Language">'
-                '<span class="tool-label">LANG</span>'
+                f'<div class="langs" aria-label="{language_label}">'
+                f'<span class="tool-label">{language_kicker}</span>'
                 + "".join(links)
                 + "</div>"
             )
@@ -219,7 +231,7 @@ class Site:
             '<div class="side-tools">'
             + switcher
             + f'<a class="repo-link" href="{esc(repo_url)}">'
-            '<span>Repository</span><span aria-hidden="true">↗</span></a>'
+            f'<span>{repository_label}</span><span aria-hidden="true">↗</span></a>'
             + "</div>"
         )
         page_name = page.get("title", page["key"])
@@ -228,7 +240,7 @@ class Site:
 <div class="side-top">
 <a class="brand" href="{brand_href}" aria-label="{esc(cfg['name'])}">
 <span class="brand-mark">{cfg['mark_svg']}</span>
-<span class="brand-copy"><span class="brand-name">{esc(cfg['name'])}</span><span class="brand-sub">TRANSFER ENGINE</span></span>
+<span class="brand-copy"><span class="brand-name">{esc(cfg['name'])}</span><span class="brand-sub">{brand_subtitle}</span></span>
 </a>
 <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="side-nav">
 <span class="nav-toggle-copy">{esc(self.ui(lang, "menu"))}</span>
@@ -237,27 +249,27 @@ class Site:
 </div>
 <div class="side-status">
 <span class="signal-dot" aria-hidden="true"></span>
-<span>ENGINE ONLINE</span>
+<span>{engine_status}</span>
 <span class="side-release">{esc(release)}</span>
 </div>
-<nav class="side-nav" id="side-nav" aria-label="Primary">{nav}</nav>
+<nav class="side-nav" id="side-nav" aria-label="{nav_label}">{nav}</nav>
 {tools}
 <div class="side-foot">
 <span>JVM 17+</span><span>MIT</span><span>API {esc(api)}</span>
 </div>
 </aside>
-<button class="side-scrim" type="button" tabindex="-1" aria-label="Close menu"></button>
+<button class="side-scrim" type="button" tabindex="-1" aria-label="{close_label}"></button>
 <main id="main" class="canvas">
 <header class="canvas-top">
 <div class="canvas-channel">
 <span class="channel-mark" aria-hidden="true"></span>
-<span class="channel-kicker">CHANNEL</span>
+<span class="channel-kicker">{channel_label}</span>
 <strong>{esc(page_name)}</strong>
 </div>
 <div class="canvas-telemetry">
-<span><i>REL</i>{esc(release)}</span>
+<span><i>{release_label}</i>{esc(release)}</span>
 <span><i>API</i>{esc(api)}</span>
-<span><i>TEST</i>{cfg.get("test_count", "")} PASS</span>
+<span><i>{test_label}</i>{cfg.get("test_count", "")}{test_suffix}</span>
 </div>
 <div class="scroll-track" aria-hidden="true"><i id="scroll-progress"></i></div>
 </header>
@@ -290,6 +302,9 @@ class Site:
         # 页脚那行大字 = 取用地址本身（一个能点的真实地址，不是标语）。
         repo_url = cfg.get("repo", "")
         repo_label = repo_url.split("://", 1)[-1]
+        repo_host, repo_path = repo_label.split("/", 1)
+        tagline = cfg["tagline"] if lang == "en" else "JVM 多线程下载引擎"
+        footer_system = "TRANSFER BENCH" if lang == "en" else "传输台"
         return f"""</main>
 </div>
 <footer class="site-foot">
@@ -300,11 +315,11 @@ class Site:
 <span class="brand-mark">{cfg['mark_svg']}</span>
 <span>{esc(cfg['name'])}</span>
 </a>
-<p>{esc(cfg['tagline'])}</p>
+<p>{esc(tagline)}</p>
 </div>
 <div class="foot-top">{cols_html}</div>
-<div class="foot-line"><a href="{esc(repo_url)}">{esc(repo_label)}</a></div>
-<div class="foot-base"><div class="foot-note">{paras}</div><p class="foot-sys">TRANSFER BENCH / {esc(cfg.get("release_tag", ""))} / JVM</p></div>
+<div class="foot-line"><a href="{esc(repo_url)}"><span>{esc(repo_host)}/</span><span>{esc(repo_path)}</span></a></div>
+<div class="foot-base"><div class="foot-note">{paras}</div><p class="foot-sys">{footer_system} / {esc(cfg.get("release_tag", ""))} / JVM</p></div>
 </div>
 </footer>
 <script src="{asset(page["dir"], "site.js")}" defer></script>
