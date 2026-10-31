@@ -38,12 +38,23 @@ DATA = json.loads((HERE / "data" / "releases.json").read_text(encoding="utf-8"))
 LATEST = DATA["latest"]
 RELEASES = DATA["releases"]
 LATEST_VERSION = LATEST["tag"].lstrip("v")
+# The asset name has changed shape across releases; never synthesize it from
+# the tag. Prefer the actual CLI jar GitHub returned, with a legacy fallback
+# for old release JSON snapshots.
+CLI_ASSET = next(
+    (
+        asset["name"]
+        for asset in LATEST.get("assets", [])
+        if asset.get("name", "").startswith("turbodl-cli") and asset["name"].endswith(".jar")
+    ),
+    f"turbodl-cli-{LATEST_VERSION}-all.jar",
+)
 
 REPO = "https://github.com/jiayuxuan123/TurboDL"
 BLOB = f"{REPO}/blob/main"
 
 #: 本仓库实测的测试数（`./gradlew test`，0 跳过 0 失败）—— 不是估计值。
-TEST_COUNT = 258
+TEST_COUNT = 199
 #: 公开 API 版本，来自 turbodl-core 的 ApiVersion.CURRENT。
 def _read_api_version() -> str:
     """从 turbodl-core 的 ApiVersion.kt 里读当前公开 API 版本。
@@ -712,6 +723,7 @@ def _page_download(lang: str, href) -> str:
     en = lang == "en"
     ver = LATEST_VERSION
     tag = LATEST["tag"]
+    cli_asset = CLI_ASSET
     rel_url = LATEST["url"]
     n_assets = len(LATEST["assets"])
     published = (LATEST["published"] or "")[:10]
@@ -775,9 +787,9 @@ def _page_download(lang: str, href) -> str:
                     '{"type":"summary","total":1,"failed":0}',
                 ],
                 (
-                    f"java -jar turbodl-cli-{ver}-all.jar <url> --json · one line per event"
+                    f"java -jar {cli_asset} <url> --json · one line per event"
                     if en
-                    else f"java -jar turbodl-cli-{ver}-all.jar <url> --json · 每个事件一行"
+                    else f"java -jar {cli_asset} <url> --json · 每个事件一行"
                 ),
             ),
         ),
@@ -847,9 +859,9 @@ def _page_download(lang: str, href) -> str:
                 "不需要 Gradle，也不需要源码：</p>"
             )
             + code_block(
-                f"""java -jar turbodl-cli-{ver}-all.jar <url> -o out.bin -c 64
-java -jar turbodl-cli-{ver}-all.jar <url> --json        # NDJSON, script/agent friendly
-java -jar turbodl-cli-{ver}-all.jar --batch tasks.txt   # one URL per line / 每行一个 URL""",
+                f"""java -jar {cli_asset} <url> -o out.bin -c 64
+java -jar {cli_asset} <url> --json        # NDJSON, script/agent friendly
+java -jar {cli_asset} --batch tasks.txt   # one URL per line / 每行一个 URL""",
                 "shell",
             )
             + '<p class="small">'
@@ -1181,9 +1193,9 @@ val result = client.await(id)""".replace("VERSION", LATEST_VERSION),
                 "Kotlin",
             )
             + code_block(
-                """java -jar turbodl-cli-{v}-all.jar <url> -o out.bin -c 64
-java -jar turbodl-cli-{v}-all.jar <url> --json       # NDJSON
-java -jar turbodl-cli-{v}-all.jar --batch tasks.txt  # one URL per line""".replace("{v}", LATEST_VERSION),
+                f"""java -jar {CLI_ASSET} <url> -o out.bin -c 64
+java -jar {CLI_ASSET} <url> --json       # NDJSON
+java -jar {CLI_ASSET} --batch tasks.txt  # one URL per line""",
                 "shell",
             )
             # 控制台碎片：`--json` 到底输出什么（字段名来自 Main.kt 的 progress 事件）
@@ -1478,7 +1490,7 @@ def _page_community(lang: str, href) -> str:
             + fragments.readout(
                 "the checklist" if en else "检查清单",
                 [
-                    ("./gradlew test", f"258 {'cases, 0 skipped, 0 failed' if en else '个用例，0 跳过，0 失败'}"),
+                    ("./gradlew test", f"{TEST_COUNT} {'cases, 0 skipped, 0 failed' if en else '个用例，0 跳过，0 失败'}"),
                     ("dependency direction", "runtime → core" if en else "runtime → core（绝不反向）"),
                     ("plugin manifest", "turbodl-plugin.schema.json" if en else "turbodl-plugin.schema.json"),
                     ("docs", "one file in the repository per page" if en else "官网每一页 = 仓库里的一个文件"),

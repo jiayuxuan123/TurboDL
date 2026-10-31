@@ -465,9 +465,9 @@ def page(lang: str, href) -> str:
             + "</p>"
             + '<div class="runtime-stack">' + _telemetry(lang) + _console(lang) + "</div>"
             + code_block(
-                f"""java -jar turbodl-cli-{F.LATEST_VERSION}-all.jar <url> -o out.bin -c 16
-java -jar turbodl-cli-{F.LATEST_VERSION}-all.jar <url> --json
-java -jar turbodl-cli-{F.LATEST_VERSION}-all.jar --batch tasks.txt""",
+                f"""java -jar {F.CLI_ASSET} <url> -o out.bin -c 16
+java -jar {F.CLI_ASSET} <url> --json
+java -jar {F.CLI_ASSET} --batch tasks.txt""",
                 "shell",
             ),
         ),
