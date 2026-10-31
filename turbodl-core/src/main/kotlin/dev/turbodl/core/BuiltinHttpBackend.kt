@@ -31,6 +31,8 @@ internal class BuiltinHttpBackend(
      * 默认 null = 不关心（core 独立使用时的行为不变）。
      */
     private val onConfigSeen: ((TurboConfig) -> Unit)? = null,
+    /** Shared across all built-in tasks; null keeps the legacy unlimited behavior. */
+    private val connectionBudget: ConnectionBudget? = null,
 ) : DownloadBackend {
 
     override val name: String = "builtin-http"
@@ -344,11 +346,6 @@ internal class BuiltinHttpBackend(
             return BackendResult(listOf(outPart), if (total > 0) total else outPart.length())
         }
 
-        // Reserve the logical length once before parallel positional writes.
-        // Repeated EOF extension is serialized by the filesystem and becomes a
-        // measurable bottleneck when 128/256 connections all write new ranges.
-        store.ensureLength()
-
         val connections = (request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
 
         // 连接预热 / DNS 预解析：正式分片前先对解析后的最终 URL 建好若干连接（并解析 DNS），
@@ -373,22 +370,28 @@ internal class BuiltinHttpBackend(
             }
         }
 
+        val budgetLease = connectionBudget?.acquire(connections)
+        val effectiveConnections = budgetLease?.permits ?: connections
         val scheduler = SegmentScheduler(downloader, context.config, speedLimiter)
         // 真实并发数由调度器回报（而非直接用配置值），UI 才能看到实际跑满多少线程。
-        val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(connections)
+        val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(effectiveConnections)
 
-        val outcome = scheduler.run(
-            taskId = context.taskId,
-            url = effectiveUrl,
-            total = total,
-            store = store,
-            headers = taskHeaders,
-            connections = connections,
-            onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
-            onConnections = { live -> liveConnsRef.set(live) },
-            isActive = { context.isActive() },
-            ifRange = probe.strongIfRange,
-        )
+        val outcome = try {
+            scheduler.run(
+                taskId = context.taskId,
+                url = effectiveUrl,
+                total = total,
+                store = store,
+                headers = taskHeaders,
+                connections = effectiveConnections,
+                onBytes = { _, abs -> context.reportProgress(abs, liveConnsRef.get()) },
+                onConnections = { live -> liveConnsRef.set(live) },
+                isActive = { context.isActive() },
+                ifRange = probe.strongIfRange,
+            )
+        } finally {
+            budgetLease?.let { connectionBudget?.release(it) }
+        }
 
         return when (outcome) {
             is SegmentScheduler.Outcome.Completed -> {

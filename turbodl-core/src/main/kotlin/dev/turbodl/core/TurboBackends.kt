@@ -32,7 +32,10 @@ object TurboBackends {
             { holder.config.ioBufferSize },
             { holder.config.bufferedSegmentWrite },
         )
-        return BuiltinHttpBackend(downloader) { holder.onConfigSeen(it) }
+        return BuiltinHttpBackend(
+            downloader,
+            onConfigSeen = { holder.onConfigSeen(it) },
+        )
     }
 }
 

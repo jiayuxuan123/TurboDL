@@ -18,6 +18,9 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Failure attribution without collateral damage**: every segment keeps its own last error, and a request cancelled because *another* segment exhausted its retries does not consume the cancelled segment's retry budget. A single flaky connection therefore neither fails the task nor produces a misleading "retry N times failed (Canceled)" message.
 - **Dynamic segmentation**: fine-grained pre-splitting + work stealing, so slow connections don't drag down the whole transfer and the "last segment finishing on a single thread" long tail is eliminated (IDM/XDM idea).
 - **Throughput-seeking concurrency**: the configured connection count is a ceiling, not a forced fan-out. It starts at 8 workers, doubles only after aggregate throughput improves by at least 30%, grows the worker pool and segment grid with it, and stops at the first plateau. A request for 256 connections therefore cannot silently pay 256-worker / 1024-segment overhead when the link only benefits from 8–16.
+- **Endgame by ETA, not by segment size**: tail assist now tracks each in-flight segment's EWMA throughput and takes the remaining tail from the connection with the worst estimated completion time. A shrinking segment's old writer also stops at the handoff boundary instead of writing into the portion assigned to the new connection.
+- **Global resource budgets**: task slots are FIFO and atomic, and `maxTotalConnections` caps the aggregate connection count across every built-in HTTP task. Three 64-connection tasks can no longer silently create 192 sockets when the host or router should only see a smaller budget.
+- **Desktop I/O path**: JVM hosts use direct ByteBuffers; Android/Dalvik falls back to heap buffers and `RandomAccessFile`. Sidecar replacement keeps a durable backup instead of deleting the old progress before the new one is visible.
 - **Sequential segment priority**: earlier segments are downloaded first, enabling progressive preview/playback (axel/Persepolis idea).
 - **Robust fallback & retry**:
   - Server does not support / ignores Range → automatic fallback to whole-file single-stream download;
@@ -34,6 +37,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 | Global speed limit | `globalSpeedLimitBytesPerSec` (token bucket, 0 = unlimited) |
 | Thread count (up to 256) | `maxConnectionsPerTask` (1..256) |
 | Concurrent tasks | `maxConcurrentTasks` (1..64) |
+| Global connection budget | `maxTotalConnections` (0 = unlimited) |
 | Max download retries | `maxRetries` (0..50) |
 | Dynamic segmentation | `dynamicSegmentation` (true/false) |
 | Manual/auto proxy | `proxy = Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)` |

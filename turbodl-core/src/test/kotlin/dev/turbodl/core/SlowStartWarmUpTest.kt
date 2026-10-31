@@ -21,6 +21,7 @@ class SlowStartWarmUpTest {
     private class Server(payload: ByteArray, val chunkSleepMs: Long) {
         val peak = AtomicInteger(0)
         private val cur = AtomicInteger(0)
+        private val executor = Executors.newFixedThreadPool(300)
         /** 记录下载启动早期（前若干请求）观测到的并发，检验没有一上来就全开。 */
         val earlyPeak = AtomicInteger(0)
         private val servedReqs = AtomicInteger(0)
@@ -61,18 +62,21 @@ class SlowStartWarmUpTest {
                     cur.decrementAndGet()
                 }
             }
-            server.executor = Executors.newFixedThreadPool(300)
+            server.executor = executor
             server.start()
         }
 
-        fun stop() = server.stop(0)
+        fun stop() {
+            server.stop(0)
+            executor.shutdownNow()
+        }
     }
 
     @Test
     fun `slow start ramps up and completes byte-exact`() = runBlocking {
-        val size = 24 * 1024 * 1024
+        val size = 32 * 1024 * 1024
         val payload = ByteArray(size) { ((it * 13 + 5) % 256).toByte() }
-        val srv = Server(payload, chunkSleepMs = 8)
+        val srv = Server(payload, chunkSleepMs = 16)
         val connections = 64
         val client = TurboClient(
             TurboConfig(
@@ -99,9 +103,9 @@ class SlowStartWarmUpTest {
 
     @Test
     fun `disabling slow start opens full concurrency`() = runBlocking {
-        val size = 16 * 1024 * 1024
+        val size = 24 * 1024 * 1024
         val payload = ByteArray(size) { ((it * 3 + 1) % 256).toByte() }
-        val srv = Server(payload, chunkSleepMs = 10)
+        val srv = Server(payload, chunkSleepMs = 16)
         val connections = 48
         val client = TurboClient(
             TurboConfig(

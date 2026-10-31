@@ -249,7 +249,7 @@ class ResumeIntegrityTest {
     @Test
     fun `目标文件被删后 必须干净重来`() = runBlocking {
         val data = payload(71)
-        val srv = Srv(data)
+        val srv = Srv(data, chunkDelayMs = 10)
         val dir = workDir("gone")
         val key = "k-gone"
         val out = File.createTempFile("ri4", ".bin").apply { deleteOnExit() }
@@ -277,11 +277,50 @@ class ResumeIntegrityTest {
         }
     }
 
+    /**
+     * 强校验器场景：服务器给出稳定 ETag，用户删掉目标文件后重下。
+     *
+     * 这是 `ensureLength()` 引入后的关键回归：若先预写目标文件末尾的 1 字节，
+     * `SegmentStore.destCovers()` 会误以为旧进度仍然覆盖磁盘，随后直接跳过已记录分片，
+     * 产出一个"长度正确但中间全是洞"的文件。强 ETag 不会触发弱校验指纹，
+     * 因此这是最容易漏测、也最危险的一条路径。
+     */
+    @Test
+    fun `强ETag下目标文件被删 也必须重新下载`() = runBlocking {
+        val data = payload(73)
+        val srv = Srv(data, etag = "\"stable-v1\"", chunkDelayMs = 10)
+        val dir = workDir("gone-etag")
+        val key = "k-gone-etag"
+        val out = File.createTempFile("ri4b", ".bin").apply { deleteOnExit() }
+        val url = "http://127.0.0.1:${srv.port}/f.bin"
+        try {
+            val c1 = TurboClient(cfg(dir, 4))
+            val id = c1.submit(DownloadRequest(url, out, stableKey = key))
+            waitBytes(c1, id, SIZE / 4L)
+            c1.pause(id); waitPaused(c1, id); c1.shutdown()
+            assertTrue(out.delete(), "前提：目标文件确实被删")
+
+            srv.bytesSent.set(0)
+            val c2 = TurboClient(cfg(dir, 4))
+            val r = c2.await(c2.submit(DownloadRequest(url, out, stableKey = key)))
+            c2.shutdown()
+            assertTrue(r.isSuccess, "应成功：${r.exceptionOrNull()?.message}")
+            assertEquals(sha(data), shaOf(out), "文件被删后不得复用旧进度，否则会出现空洞")
+            assertTrue(
+                srv.bytesSent.get() >= SIZE,
+                "强 ETag 下目标文件被删也必须重下满 ${SIZE} 字节（实际 ${srv.bytesSent.get()}）",
+            )
+        } finally {
+            runCatching { srv.stop() }
+            runCatching { dir.deleteRecursively() }; runCatching { out.delete() }
+        }
+    }
+
     // ------------------------------------------------------------------ 5
     @Test
     fun `侧车损坏不崩溃 按全新任务处理`() = runBlocking {
         val data = payload(83)
-        val srv = Srv(data)
+        val srv = Srv(data, chunkDelayMs = 10)
         val dir = workDir("corrupt")
         val key = "k-corrupt"
         val out = File.createTempFile("ri5", ".bin").apply { deleteOnExit() }

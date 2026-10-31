@@ -223,18 +223,32 @@ internal class SegmentDownloader(
                         .header("Accept-Encoding", "identity")
                         .get().build()
                     val call = warmClient.newCall(req)
-                    // 读取并丢弃响应体，使连接完成并回到连接池复用（而非被弃置）。
-                    try {
-                        call.execute().use { resp ->
-                            // 顺便学习重定向终址，供后续预热请求与所有分片复用。
-                            if (taskId != null && (resp.isSuccessful || resp.code == 416)) {
-                                val finalUrl = resp.request.url.toString()
-                                if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
-                            }
-                            resp.body?.byteStream()?.use { it.readBytes() }
+                    call.execute().use { resp ->
+                        // 顺便学习重定向终址，供后续预热请求与所有分片复用。
+                        if (taskId != null && (resp.isSuccessful || resp.code == 416)) {
+                            val finalUrl = resp.request.url.toString()
+                            if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
                         }
-                    } finally {
-                        if (!call.isCanceled()) runCatching { call.cancel() }
+                        val body = resp.body
+                        if (body == null) return@use
+                        // `bytes=0-0` 正常只返回 1 字节。若服务器忽略 Range
+                        // 返回 200，则**不能**把整文件读进内存：预热只是优化，
+                        // 更不能为了预热额外消耗一份完整流量。
+                        if (resp.code == 206) {
+                            body.byteStream().use { stream ->
+                                val sink = ByteArray(8 * 1024)
+                                var remaining = 8 * 1024
+                                while (remaining > 0) {
+                                    val n = stream.read(sink, 0, remaining)
+                                    if (n <= 0) break
+                                    remaining -= n
+                                }
+                            }
+                        } else {
+                            // 关闭而不是读取：该连接无法安全复用，但避免了
+                            // 服务器忽略 Range 时预热把整个文件下载一遍。
+                            body.close()
+                        }
                     }
                 }
             }
@@ -693,6 +707,7 @@ internal class SegmentDownloader(
          */
         writeBufferAt: ((position: Long, src: java.nio.ByteBuffer) -> Int)? = null,
         directBuffer: java.nio.ByteBuffer? = null,
+        writeLock: Any = Any(),
     ): SegmentResult {
         fun reportFailure(reason: String) {
             failureByTask[taskId] = reason
@@ -743,25 +758,29 @@ internal class SegmentDownloader(
                         if (done >= expected) return@use SegmentResult.OK
                         val written = if (writeBufferAt != null && directBuffer != null) {
                             copyToStoreDirect(
-                                body.byteStream(), pieceStart, done, expected - done,
-                                writeBufferAt, directBuffer, onProgress,
+                                body.byteStream(), pieceStart, done,
+                                endProvider, writeBufferAt, directBuffer, writeLock, onProgress,
                             )
                         } else {
                             require(buffer.isNotEmpty()) {
                                 "既没有 writeBufferAt 也没有读缓冲：无法写入"
                             }
                             copyToStore(
-                                body.byteStream(), pieceStart, done, expected - done,
-                                writeAt, buffer, onProgress,
+                                body.byteStream(), pieceStart, done,
+                                endProvider, writeAt, buffer, writeLock, onProgress,
                             )
                         }
                         // done 必须跟着实际写入量推进：调用方靠它更新进度记录。
                         done += written
-                        if (done < expected) {
+                        // The end can shrink while this request is streaming (tail
+                        // assist). Re-read it instead of judging against the stale
+                        // value captured when the response headers arrived.
+                        val expectedNow = (endProvider() - pieceStart + 1).coerceAtLeast(0)
+                        if (done < expectedNow) {
                             // `done` 已由 copyToStore 的 onProgress 推进到实际写入位置。
                             reportFailure(
-                                "连接提前结束：分片 $pieceStart-${pieceStart + expected - 1} 只收到 " +
-                                    "$written / ${expected - alreadyWritten} 字节"
+                                "连接提前结束：分片 $pieceStart-${pieceStart + expectedNow - 1} 只收到 " +
+                                    "$written / ${expectedNow - alreadyWritten} 字节"
                             )
                             SegmentResult.FAILED
                         } else SegmentResult.OK
@@ -808,32 +827,64 @@ internal class SegmentDownloader(
         input: java.io.InputStream,
         pieceStart: Long,
         alreadyDone: Long,
-        expected: Long,
+        limitEndProvider: () -> Long,
         writeBufferAt: (position: Long, src: java.nio.ByteBuffer) -> Int,
         buffer: java.nio.ByteBuffer,
+        writeLock: Any,
         onProgress: suspend (newlyWritten: Long, totalWritten: Long) -> Unit,
     ): Long {
         val src = java.nio.channels.Channels.newChannel(input)
         var written = 0L
         var totalWritten = alreadyDone
         while (true) {
+            val remainingBeforeRead =
+                (limitEndProvider() - pieceStart + 1) - alreadyDone - written
+            if (remainingBeforeRead <= 0) break
             buffer.clear()
             val n = src.read(buffer)
             if (n <= 0) break
             buffer.flip()
-            val allow = min(n.toLong(), expected - written)
-            if (allow <= 0) break
-            buffer.limit((buffer.position() + allow).toInt())
-            var pos = pieceStart + alreadyDone + written
-            while (buffer.hasRemaining()) {
-                val w = writeBufferAt(pos, buffer)
-                if (w <= 0) return written
-                pos += w
+            var consumed = 0
+            while (consumed < n) {
+                val remainingNow =
+                    (limitEndProvider() - pieceStart + 1) - alreadyDone - written
+                if (remainingNow <= 0) break
+                val allow = min((n - consumed).toLong(), remainingNow).toInt()
+                val before = buffer.position()
+                buffer.limit(before + allow)
+                while (buffer.hasRemaining()) {
+                    var w = 0
+                    synchronized(writeLock) {
+                        val remainingAtWrite =
+                            (limitEndProvider() - pieceStart + 1) - alreadyDone - written
+                        if (remainingAtWrite > 0) {
+                            val currentLimit = min(
+                                buffer.limit(),
+                                buffer.position() + remainingAtWrite.toInt(),
+                            )
+                            buffer.limit(currentLimit)
+                            if (buffer.hasRemaining()) {
+                                val pos = pieceStart + alreadyDone + written
+                                w = writeBufferAt(pos, buffer)
+                                if (w > 0) {
+                                    written += w
+                                    totalWritten += w
+                                }
+                            }
+                        }
+                    }
+                    if (w <= 0) return written
+                }
+                val committed = buffer.position() - before
+                consumed += committed
+                if (committed > 0) onProgress(committed.toLong(), totalWritten)
+                if (committed < allow) {
+                    // The segment shrank while this read was in flight. Drop
+                    // the unassigned tail; the new owner will request it.
+                    break
+                }
             }
-            written += allow
-            totalWritten += allow
-            onProgress(allow, totalWritten)
-            if (written >= expected) break
+            if (consumed < n) break
         }
         return written
     }
@@ -842,33 +893,58 @@ internal class SegmentDownloader(
         input: java.io.InputStream,
         pieceStart: Long,
         alreadyDone: Long,
-        expected: Long,
+        limitEndProvider: () -> Long,
         writeAt: (position: Long, buf: ByteArray, off: Int, len: Int) -> Int,
         buffer: ByteArray,
+        writeLock: Any,
         onProgress: suspend (newlyWritten: Long, totalWritten: Long) -> Unit,
     ): Long {
         var written = 0L
         var totalWritten = alreadyDone
         while (true) {
+            val remainingBeforeRead =
+                (limitEndProvider() - pieceStart + 1) - alreadyDone - written
+            if (remainingBeforeRead <= 0) break
             val n = input.read(buffer)
             if (n <= 0) break
-            val allow = min(n.toLong(), expected - written)
-            if (allow <= 0) break
-            // 分段写：writeAt 可能一次没写完（理论上位置写会写满，但不假设）。
-            var off = 0
-            var left = allow.toInt()
-            var pos = pieceStart + alreadyDone + written
-            while (left > 0) {
-                val w = writeAt(pos, buffer, off, left)
-                if (w <= 0) return written
-                off += w
-                left -= w
-                pos += w
+            var consumed = 0
+            while (consumed < n) {
+                val remainingNow =
+                    (limitEndProvider() - pieceStart + 1) - alreadyDone - written
+                if (remainingNow <= 0) break
+                val allow = min((n - consumed).toLong(), remainingNow).toInt()
+                // 分段写：writeAt 可能一次没写完（理论上位置写会写满，但不假设）。
+                var off = consumed
+                var left = allow
+                while (left > 0) {
+                    var w = 0
+                    synchronized(writeLock) {
+                        val remainingAtWrite =
+                            (limitEndProvider() - pieceStart + 1) - alreadyDone - written
+                        if (remainingAtWrite > 0) {
+                            val writeLen = min(left.toLong(), remainingAtWrite).toInt()
+                            val pos = pieceStart + alreadyDone + written
+                            w = writeAt(pos, buffer, off, writeLen)
+                            if (w > 0) {
+                                written += w
+                                totalWritten += w
+                            }
+                        }
+                    }
+                    if (w <= 0) break
+                    off += w
+                    left -= w
+                }
+                val committed = allow - left
+                consumed += committed
+                if (committed > 0) onProgress(committed.toLong(), totalWritten)
+                if (committed < allow) {
+                    // The segment shrank while this read was in flight. Drop
+                    // the unassigned tail; the new owner will request it.
+                    break
+                }
             }
-            written += allow
-            totalWritten += allow
-            onProgress(allow, totalWritten)
-            if (written >= expected) break
+            if (consumed < n) break
         }
         return written
     }

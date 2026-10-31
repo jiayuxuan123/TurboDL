@@ -226,6 +226,9 @@ internal class SegmentScheduler(
          */
         val callRef = java.util.concurrent.atomic.AtomicReference<okhttp3.Call?>(null)
 
+        /** Serializes a chunk write with tail handoff for this segment only. */
+        val writeLock = Any()
+
         /** 上次观测到的已写入字节数（供卡死检测判断这一条是否还在动）。 */
         @Volatile
         var lastObservedWritten: Long = written
@@ -237,6 +240,33 @@ internal class SegmentScheduler(
         /** 本轮尝试开始时的已写入字节数（用来判断"这一轮到底进没进数据"）。 */
         @Volatile
         var writtenAtAttemptStart: Long = written
+
+        /** EWMA of this segment's recent throughput, updated by onProgress. */
+        @Volatile
+        var recentBytesPerSec: Double = 0.0
+            private set
+
+        @Volatile
+        private var lastSpeedSampleAt: Long = System.nanoTime()
+
+        fun observeProgress(totalWritten: Long) {
+            val previous = written
+            if (totalWritten > previous) {
+                val now = System.nanoTime()
+                val elapsed = (now - lastSpeedSampleAt).coerceAtLeast(1_000_000L)
+                val instant = (totalWritten - previous) * 1_000_000_000.0 / elapsed
+                recentBytesPerSec =
+                    if (recentBytesPerSec <= 0.0) instant
+                    else recentBytesPerSec * 0.75 + instant * 0.25
+                lastSpeedSampleAt = now
+            }
+            written = totalWritten
+        }
+
+        fun beginAttempt() {
+            recentBytesPerSec = 0.0
+            lastSpeedSampleAt = System.nanoTime()
+        }
 
         /**
          * **这一片自己**的最近一次失败原因。
@@ -335,8 +365,15 @@ internal class SegmentScheduler(
         // ---------- 网格：优先沿用侧车里的旧网格 ----------
         // 分片边界由**首次**创建时决定并写进侧车；续传时照抄。
         // 否则换了连接数就会得到不同边界，进度记录对不上 → 续传失效。
-        val allSegments = store.loadOrCreate(effBlock).map { Segment(it) }
-        val segmentList = java.util.Collections.synchronizedList(allSegments)
+        val restoredPieces = store.loadOrCreate(effBlock)
+        // Validation must see the on-disk length before we reserve the final
+        // logical size. Extending first would make a deleted/recreated file look
+        // like it still covered old progress and could leave holes on resume.
+        store.ensureLength()
+        val allSegments = restoredPieces.map { Segment(it) }
+        // Splits can be appended by the controller while another worker snapshots
+        // the grid. Copy-on-write gives both paths a safe iteration view.
+        val segmentList = java.util.concurrent.CopyOnWriteArrayList(allSegments)
 
         // ---------- 续传：已完成的分片跳过，累加已下载量 ----------
         val downloaded = AtomicLong(0)
@@ -357,6 +394,11 @@ internal class SegmentScheduler(
         // 高并发下纯属 GC 负担。这里按并发数一次性分配，总量仍受 effectiveIoBufferSize 约束。
         val readBufferSize = config.effectiveIoBufferSize(workers)
         val buffers = arrayOfNulls<ByteArray>(workers)
+        val directBuffers = if (config.useDirectIoBuffers) {
+            arrayOfNulls<java.nio.ByteBuffer>(workers)
+        } else {
+            null
+        }
 
         /** 进度落盘节流。 */
         var lastPersistAt = 0L
@@ -621,7 +663,8 @@ internal class SegmentScheduler(
          * 即大块传输阶段**完全不触发**，只在收尾、并发自然塌下去的窗口里生效。
          * 这样新增的请求数只发生在"反正也要等"的时间里，不增加对服务器的冲击面。
          *
-         * 【挑谁拆】剩余字节最多的那个；且剩余量必须 >= 2×[TurboConfig.tailAssistMinBytes]
+         * 【挑谁拆】预计剩余时间最长的那个（按分片自身的 EWMA 速度估算）；
+         * 且剩余量必须 >= 2×[TurboConfig.tailAssistMinBytes]
          * （拆完两半都不低于下限，避免"拆出一个更小的尾巴"）。
          *
          * 【拆多少】在剩余区间的**中点**切，并对齐到 64KB（避免怪异的 Range 边界）。
@@ -633,40 +676,62 @@ internal class SegmentScheduler(
         fun tryTailAssist(): Boolean {
             if (!config.tailAssist) return false
             if (inFlightSegments.isEmpty()) return false
-            // 候选：剩余最多、且足够大、且未超拆分次数
+            // 候选：预计完成最晚、且足够大、且未超拆分次数。
+            // 只按“剩余最多”会在慢连接已经快完成时错误地拆一块大而快的分片；
+            // 按 ETA 能更直接地攻击长尾。
             var best: Segment? = null
-            var bestRemaining = 0L
+            var bestEta = -1.0
+            var unknownBest: Segment? = null
+            var unknownRemaining = 0L
             val minBytes = config.tailAssistMinBytes
-            for (s in inFlightSegments) {
-                if (s.splits >= config.maxSplitsPerSegment) continue
-                // 已下多少 = 该分片的写入进度（由 onProgress 实时推进）
-                val remaining = s.remaining
-                if (remaining < 2 * minBytes) continue
-                if (remaining > bestRemaining) {
-                    bestRemaining = remaining
-                    best = s
+            for (s in inFlightSegments.toList()) {
+                synchronized(s.writeLock) {
+                    if (s.splits >= config.maxSplitsPerSegment) return@synchronized
+                    // 已下多少 = 该分片的写入进度（由 onProgress 实时推进）
+                    val remaining = s.remaining
+                    if (remaining < 2 * minBytes) return@synchronized
+                    val speed = s.recentBytesPerSec
+                    if (speed > 1.0) {
+                        val eta = remaining / speed
+                        if (eta > bestEta) {
+                            bestEta = eta
+                            best = s
+                        }
+                    } else if (remaining > unknownRemaining) {
+                        unknownRemaining = remaining
+                        unknownBest = s
+                    }
                 }
+            }
+            if (best == null) {
+                best = unknownBest
             }
             val seg = best ?: return false
 
-            // 在剩余区间的中点切，对齐 64KB
-            val done = seg.written
-            val from = seg.start + done
-            val keep = ((bestRemaining / 2) / TAIL_ALIGN) * TAIL_ALIGN
-            if (keep < minBytes) return false
-            val cutAt = from + keep - 1          // 原分片保留 [start, cutAt]
-            val tailStart = cutAt + 1            // 新分片接手 [tailStart, end]
-            if (tailStart > seg.end) return false
+            // Recheck under the segment write lock. The candidate may have
+            // completed or another worker may have split it since the scan.
+            synchronized(seg.writeLock) {
+                if (seg.splits >= config.maxSplitsPerSegment) return false
+                val currentRemaining = seg.remaining
+                if (currentRemaining < 2 * minBytes) return false
+                val done = seg.written
+                val from = seg.start + done
+                val keep = ((currentRemaining / 2) / TAIL_ALIGN) * TAIL_ALIGN
+                if (keep < minBytes) return false
+                val cutAt = from + keep - 1          // 原分片保留 [start, cutAt]
+                val tailStart = cutAt + 1            // 新分片接手 [tailStart, end]
+                if (tailStart > seg.end) return false
 
-            val oldEnd = seg.end
-            // 先原子缩短原分片：下载循环会在下一次检查时停止写入超过 cutAt 的数据
-            seg.end = cutAt
-            seg.splits++
-            // 新分片是一个**新的 Piece**，随网格一起落进侧车，续传时照抄。
-            val tail = Segment(SegmentStore.Piece(tailStart, oldEnd))
-            segmentList.add(tail)
-            offer(tail)
-            tailAssistCount.incrementAndGet()
+                val oldEnd = seg.end
+                // 先缩短原分片：下一次写入会重新读取 end，并且写入与这里
+                // 共用 seg.writeLock，因此不会越过让出边界。
+                seg.end = cutAt
+                seg.splits++
+                val tail = Segment(SegmentStore.Piece(tailStart, oldEnd))
+                segmentList.add(tail)
+                offer(tail)
+                tailAssistCount.incrementAndGet()
+            }
             return true
         }
 
@@ -731,8 +796,14 @@ internal class SegmentScheduler(
          * 反而加剧限流乃至封禁；aria2 对此的注释是
          * "Hammering 'busy' server is not a good idea."
          */
-        fun backoffMsFor(attempt: Int): Long =
-            (1_000L shl attempt.coerceIn(0, 10)).coerceAtMost(60_000L)
+        fun backoffMsFor(attempt: Int): Long {
+            val base = (1_000L shl attempt.coerceIn(0, 10)).coerceAtMost(60_000L)
+            // A fleet of ranges must not wake at exactly the same millisecond.
+            // ±25% jitter turns a synchronized retry storm into a spread-out pulse;
+            // it also keeps the existing 1s/2s/4s semantics on average.
+            val jittered = base * (0.75 + java.util.concurrent.ThreadLocalRandom.current().nextDouble(0.5))
+            return jittered.toLong().coerceIn(250L, 60_000L)
+        }
 
         /**
          * 背压下调：乘性减半，但不低于 4（用户上限本身小于 4 时取上限）。
@@ -876,11 +947,25 @@ internal class SegmentScheduler(
         val ok = try {
             val jobs = List(workers) { idx ->
                 async(ioDispatcher, start = CoroutineStart.LAZY) {
-                    val workerBuffer = buffers[idx] ?: ByteArray(readBufferSize).also {
-                        buffers[idx] = it
+                    val direct = directBuffers?.let { slots ->
+                        slots[idx] ?: runCatching {
+                            java.nio.ByteBuffer.allocateDirect(readBufferSize)
+                        }.getOrNull()?.also { slots[idx] = it }
+                    }
+                    val workerBuffer = if (direct != null) {
+                        ByteArray(0)
+                    } else {
+                        buffers[idx] ?: ByteArray(readBufferSize).also {
+                            buffers[idx] = it
+                        }
                     }
                     if (debugScheduler) println("[sched] worker idx=$idx entered")
-                    if (idx in 1..8) delay(idx * 20L)  // 错峰建连
+                    // The stagger is useful while slowly opening the first
+                    // handful of connections, but it must not delay a caller
+                    // that explicitly asked for fixed full concurrency. With
+                    // an 8MB file the 1..8 * 20ms spread can otherwise finish
+                    // the whole transfer before the later workers even start.
+                    if (config.slowStart && idx in 1..8) delay(idx * 20L)
                     // 【致命失败即停】`failReason` 一旦有值，说明某个分片已经彻底耗尽重试预算 ——
                     // 这个任务注定失败，继续跑其余分片毫无意义。
                     //
@@ -923,6 +1008,7 @@ internal class SegmentScheduler(
                         seg.lastObservedWritten = seg.written
                         seg.lastProgressAt = System.currentTimeMillis()
                         seg.writtenAtAttemptStart = seg.written
+                        seg.beginAttempt()
                         inFlight.incrementAndGet()
                         activeConns.incrementAndGet()
                         inFlightSegments.add(seg)
@@ -941,8 +1027,9 @@ internal class SegmentScheduler(
                                 writeAt = { pos, buf, off, len -> store.writeAt(pos, buf, off, len) },
                                 headers = headers,
                                 onProgress = { newly, totalWritten ->
-                                    // 先推进分片自身进度（托管与续传都读它），再上报总进度。
-                                    seg.written = totalWritten
+                                    // 先推进分片自身进度与速度画像（托管与续传都读它），
+                                    // 再上报总进度。
+                                    seg.observeProgress(totalWritten)
                                     speedLimiter.awaitAllow(newly)
                                     val abs = min(downloaded.addAndGet(newly), total)
                                     recordThroughputBytes(newly)
@@ -954,6 +1041,9 @@ internal class SegmentScheduler(
                                 // 每个都按 worker 私有缓冲分配，总量仍受 ioBufferTotalBudgetBytes 约束
                                 // （256 连接 × 1MB = 256MB = Android 默认整堆，2026-10-10 真机 OOM 事故）。
                                 buffer = workerBuffer,
+                                writeBufferAt = if (direct != null) store::writeBufferAt else null,
+                                directBuffer = direct,
+                                writeLock = seg.writeLock,
                                 ifRange = ifRange,
                             )
                             when (res) {

@@ -1,5 +1,12 @@
 package dev.turbodl.core
 
+private fun defaultUseDirectIoBuffers(): Boolean {
+    val name = System.getProperty("java.vm.name").orEmpty()
+    val vendor = System.getProperty("java.vm.vendor").orEmpty()
+    return !name.contains("Dalvik", ignoreCase = true) &&
+        !vendor.contains("Android", ignoreCase = true)
+}
+
 /**
  * TurboDL 全局引擎配置。
  *
@@ -44,6 +51,16 @@ data class TurboConfig(
 
     /** 同时下载的最大任务数（队列并发）。范围 1..64。 */
     val maxConcurrentTasks: Int = 3,
+
+    /**
+     * 所有任务合计的最大活动连接数；0 = 不设全局上限。
+     *
+     * [maxConnectionsPerTask] 只约束单个任务。三个任务各 64 连接时，旧实现会
+     * 同时建立 192 条连接；桌面/移动端都可能因此触发路由器和远端风控。
+     * 非 0 时，内置 HTTP 后端会在任务开始前申请一个连接预算，按实际获得的
+     * 数量运行，并在完成/暂停/失败后归还。
+     */
+    val maxTotalConnections: Int = 0,
 
     /** 全局下载速度上限（字节/秒），所有任务合计。0 = 不限速。 */
     val globalSpeedLimitBytesPerSec: Long = 0,
@@ -490,6 +507,15 @@ data class TurboConfig(
      */
     val ioBufferTotalBudgetBytes: Int = 32 * 1024 * 1024,
 
+    /**
+     * 分片读取是否使用直接内存（DirectByteBuffer）。
+     *
+     * 桌面 JVM 上，直接缓冲可以直接交给 FileChannel，少一次堆数组到本地缓冲区的
+     * 复制；Android/Dalvik 上则默认关闭，避免把 DirectByteBuffer 计入不可回收的
+     * 本地内存。总量仍受 [ioBufferTotalBudgetBytes] 约束。
+     */
+    val useDirectIoBuffers: Boolean = defaultUseDirectIoBuffers(),
+
 
     /**
      * 进度上报最小间隔（毫秒，默认 200ms）0 = 不节流。
@@ -558,6 +584,9 @@ data class TurboConfig(
     init {
         require(maxConnectionsPerTask in 1..256) { "maxConnectionsPerTask 必须在 1..256" }
         require(maxConcurrentTasks in 1..64) { "maxConcurrentTasks 必须在 1..64" }
+        require(maxTotalConnections == 0 || maxTotalConnections in 1..8192) {
+            "maxTotalConnections 必须为 0 或 1..8192"
+        }
         require(globalSpeedLimitBytesPerSec >= 0) { "globalSpeedLimitBytesPerSec 不能为负" }
         require(maxRetries in 0..50) { "maxRetries 必须在 0..50" }
         require(minSegmentSize >= 4096) { "minSegmentSize 至少 4KB" }

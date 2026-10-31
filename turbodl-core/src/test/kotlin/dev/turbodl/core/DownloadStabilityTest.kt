@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.net.InetSocketAddress
 import java.security.MessageDigest
@@ -200,7 +201,7 @@ class DownloadStabilityTest {
             if (m == null) {
                 ex.responseHeaders.add("Accept-Ranges", "bytes")
                 ex.sendResponseHeaders(200, data.size.toLong())
-                runCatching { ex.responseBody.write(data) }
+                    runCatching { ex.responseBody.use { it.write(data) } }
                 return@createContext
             }
             val s = m.groupValues[1].toInt()
@@ -208,7 +209,7 @@ class DownloadStabilityTest {
             ex.responseHeaders.add("Accept-Ranges", "bytes")
             ex.responseHeaders.add("Content-Range", "bytes $s-$end/${data.size}")
             ex.sendResponseHeaders(206, (end - s + 1).toLong())
-            runCatching { ex.responseBody.write(data, s, end - s + 1) }
+                runCatching { ex.responseBody.use { it.write(data, s, end - s + 1) } }
         }
         server.executor = Executors.newFixedThreadPool(32)
         server.start()
@@ -216,7 +217,9 @@ class DownloadStabilityTest {
         val out = File.createTempFile("st3", ".bin").apply { deleteOnExit() }
         try {
             val c = TurboClient(cfg(dir, 8))
-            val r = c.await(c.submit(DownloadRequest("http://127.0.0.1:${server.address.port}/redir/f.bin", out)))
+            val r = withTimeout(60_000) {
+                c.await(c.submit(DownloadRequest("http://127.0.0.1:${server.address.port}/redir/f.bin", out)))
+            }
             c.shutdown()
             assertTrue(r.isSuccess, "重定向后应能下完：${r.exceptionOrNull()?.message}")
             assertEquals(sha(data), shaOf(out), "内容必须一致")

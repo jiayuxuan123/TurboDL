@@ -91,6 +91,41 @@ class SegmentStoreTest {
         }
     }
 
+    /**
+     * 预留长度绝不能发生在“旧进度是否仍然有效”的判定之前。
+     *
+     * `ensureLength()` 会把刚被重建的空文件扩展到总大小；如果先扩容再调用
+     * `peek/loadOrCreate`，`destCovers()` 会误判旧侧车仍被磁盘数据覆盖，
+     * 后续下载会跳过这些区间，最终得到“大小正确但中间有洞”的文件。
+     */
+    @Test
+    fun `目标文件被删后 先预留长度也不能让旧进度复活`() {
+        val dir = tmpDir("deleted-reserve")
+        val s = store(dir, 500)
+        s.open()
+        try {
+            val pieces = s.buildGrid(500)
+            s.writeAt(0, ByteArray(500), 0, 500)
+            pieces[0].written = 500
+            s.persist(pieces)
+        } finally {
+            s.close()
+        }
+        assertTrue(File(dir, "out.bin").delete(), "前提：目标文件确实被删掉")
+
+        val s2 = store(dir, 500)
+        s2.open()
+        try {
+            s2.ensureLength()
+            assertNull(
+                s2.peek(500),
+                "空文件被 ensureLength 扩容后，旧进度仍必须判为失效",
+            )
+        } finally {
+            s2.close()
+        }
+    }
+
     @Test
     fun `总大小变了时旧进度作废`() {
         val dir = tmpDir("totalsize")
@@ -148,6 +183,62 @@ class SegmentStoreTest {
             assertEquals(100L, grid.sumOf { it.length })
         } finally {
             s.close()
+        }
+    }
+
+    @Test
+    fun `侧车主文件缺失时从备份快照恢复`() {
+        val dir = tmpDir("backup")
+        val s = store(dir, 512)
+        s.open()
+        try {
+            val pieces = s.buildGrid(256)
+            s.writeAt(0, ByteArray(256), 0, 256)
+            pieces[0].written = 256
+            s.persist(pieces)
+        } finally {
+            s.close()
+        }
+        val state = File(dir, "progress.tdlp")
+        val backup = File(dir, "progress.tdlp.bak")
+        assertTrue(state.copyTo(backup, overwrite = true).exists())
+        assertTrue(state.delete(), "模拟原子替换后主文件暂时不可见")
+
+        val s2 = store(dir, 512)
+        s2.open()
+        try {
+            val loaded = assertNotNull(s2.peek(512), "应能从 .bak 恢复最后一次已落盘进度")
+            assertEquals(256L, loaded[0].written)
+        } finally {
+            s2.close()
+        }
+    }
+
+    @Test
+    fun `侧车主文件损坏时从备份快照恢复`() {
+        val dir = tmpDir("corrupt-backup")
+        val s = store(dir, 512)
+        s.open()
+        try {
+            val pieces = s.buildGrid(256)
+            s.writeAt(0, ByteArray(256), 0, 256)
+            pieces[0].written = 256
+            s.persist(pieces)
+        } finally {
+            s.close()
+        }
+        val state = File(dir, "progress.tdlp")
+        val backup = File(dir, "progress.tdlp.bak")
+        state.copyTo(backup, overwrite = true)
+        state.writeBytes(byteArrayOf(1, 2, 3))
+
+        val s2 = store(dir, 512)
+        s2.open()
+        try {
+            val loaded = assertNotNull(s2.peek(512), "主文件损坏时应从 .bak 恢复")
+            assertEquals(256L, loaded[0].written)
+        } finally {
+            s2.close()
         }
     }
 

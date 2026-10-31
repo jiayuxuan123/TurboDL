@@ -59,13 +59,25 @@ internal class SegmentStore(
      * [end] 是 `var` 而不是 `val`：收尾托管会把在飞分片的后半段让给新连接，
      * 需要就地缩短区间（[dev.turbodl.core.SegmentScheduler] 的 tryTailAssist）。
      */
-    class Piece(val start: Long, var end: Long, var written: Long = 0L) {
+    class Piece(
+        val start: Long,
+        @Volatile var end: Long,
+        @Volatile var written: Long = 0L,
+    ) {
         val length: Long get() = end - start + 1
         val complete: Boolean get() = written >= length
     }
 
     private var raf: RandomAccessFile? = null
     private var channel: FileChannel? = null
+    /**
+     * File length captured before `ensureLength()` extends it.
+     *
+     * Resume validation must use this snapshot, not the live length: a newly
+     * recreated empty file that was just extended to `total` would otherwise
+     * look as if it still contained the old progress.
+     */
+    private var lengthAtOpen: Long = -1L
 
     /**
      * 每个写入线程**自己的**通道。
@@ -96,6 +108,7 @@ internal class SegmentStore(
         val r = RandomAccessFile(dest, "rw")
         raf = r
         channel = r.channel
+        lengthAtOpen = r.length()
     }
 
     /**
@@ -107,8 +120,9 @@ internal class SegmentStore(
      * transfer phase into pure positional writes and avoids repeated file-growth
      * stalls. A one-byte positional write is used instead of `setLength(total)`
      * because it does not force filesystems to materialize a large zero-filled
-     * allocation up front; the unwritten regions remain holes until their
-     * segments arrive.
+     * allocation up front. On filesystems that implement holes the unwritten
+     * regions remain sparse; NTFS may materialize the range, so this is a
+     * deliberate one-time tradeoff rather than a promise of sparse storage.
      */
     fun ensureLength() {
         if (total <= 0 || dest.length() >= total) return
@@ -132,6 +146,7 @@ internal class SegmentStore(
         runCatching { raf?.close() }
         channel = null
         raf = null
+        lengthAtOpen = -1L
         // ThreadLocal 已无意义，清掉避免线程池复用时拿到已关闭的通道。
         runCatching { threadChannel.remove() }
     }
@@ -174,7 +189,11 @@ internal class SegmentStore(
         //   于是每次续传都作废 —— 那正是"暂停后从头下"最隐蔽的一种成因。
         val need = pieces.filter { it.written > 0 }
             .maxOfOrNull { it.start + it.written } ?: return true
-        return dest.length() >= need
+        // Use the length observed at open time. `ensureLength()` may run before
+        // `peek/loadOrCreate` and must not turn a deleted/recreated file into a
+        // false-positive resume candidate.
+        val available = if (lengthAtOpen >= 0) lengthAtOpen else dest.length()
+        return available >= need
     }
 
     /**
@@ -228,6 +247,28 @@ internal class SegmentStore(
         return written
     }
 
+    /**
+     * 直接缓冲版本的位置写。
+     *
+     * FileChannel 对 DirectByteBuffer 可以直接交给操作系统，避免堆数组再次
+     * 复制到本地缓冲；调用方负责在每次读取前 clear。
+     */
+    fun writeBufferAt(position: Long, src: ByteBuffer): Int {
+        val ch = threadChannel.get()
+        var written = 0
+        while (src.hasRemaining()) {
+            val n = ch.write(src, position + written)
+            if (n <= 0) {
+                throw java.io.IOException(
+                    "直接缓冲写入失败（偏移 ${position + written}，" +
+                        "还剩 ${src.remaining()} 字节）",
+                )
+            }
+            written += n
+        }
+        return written
+    }
+
     /** 从目标文件的 [position] 读最多 [len] 字节（用于续传前的内容指纹比对）。 */
     fun readAt(position: Long, len: Int): ByteArray {
         val ch = channel ?: error("SegmentStore 未 open()")
@@ -258,14 +299,24 @@ internal class SegmentStore(
                     f.writeLong(p.end)
                     f.writeLong(p.written)
                 }
+                // Make the new sidecar durable before replacing the old one.
+                f.fd.sync()
             }
-            // Windows 下目标存在时不可直接 rename 覆盖：先删再改名。
-            if (stateFile.exists()) runCatching { stateFile.delete() }
+            // Keep the last durable snapshot until the new one is visible.
+            // File.renameTo avoids java.nio.file (unavailable on Android 24/25).
+            val backup = File(stateFile.parentFile, stateFile.name + ".bak")
+            runCatching { backup.delete() }
+            if (stateFile.exists()) {
+                if (!stateFile.renameTo(backup)) {
+                    stateFile.copyTo(backup, overwrite = true)
+                    stateFile.delete()
+                }
+            }
             if (!tmp.renameTo(stateFile)) {
-                // 改名失败（跨卷/占用）：退回直接写，宁可慢也不能丢进度。
                 tmp.copyTo(stateFile, overwrite = true)
                 tmp.delete()
             }
+            runCatching { backup.delete() }
         }
     }
 
@@ -279,9 +330,13 @@ internal class SegmentStore(
 
     private class Loaded(val total: Long, val pieces: List<Piece>)
 
-    private fun readState(): Loaded? = runCatching {
-        if (!stateFile.isFile) return@runCatching null
-        RandomAccessFile(stateFile, "r").use { f ->
+    private fun readState(): Loaded? =
+        readStateFile(stateFile)
+            ?: readStateFile(File(stateFile.parentFile, stateFile.name + ".bak"))
+
+    private fun readStateFile(source: File): Loaded? = runCatching {
+        if (!source.isFile) return@runCatching null
+        RandomAccessFile(source, "r").use { f ->
             val magic = ByteArray(MAGIC.size)
             if (f.read(magic) != magic.size || !magic.contentEquals(MAGIC)) return@runCatching null
             if (f.readInt() != VERSION) return@runCatching null

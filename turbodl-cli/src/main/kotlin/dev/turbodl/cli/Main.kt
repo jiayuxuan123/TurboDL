@@ -44,6 +44,7 @@ private val downloading = AtomicBoolean(false)
 /** 解析后的全部命令行选项。 */
 private class Options {
     var connections = 16
+    var maxTotalConnections = 0
     var speedLimit: Long = 0L            // 字节/秒，0=不限
     var retry = 5
     var output: File? = null             // -o
@@ -110,6 +111,9 @@ fun main(args: Array<String>) {
             "-c", "--connections", "--threads" ->
                 opts.connections = take().toIntOrNull()?.coerceIn(1, 256)
                     ?: usageError("--connections 需为 1..256 的整数")
+            "--max-total-connections" ->
+                opts.maxTotalConnections = take().toIntOrNull()?.coerceIn(0, 8192)
+                    ?: usageError("--max-total-connections 需为 0..8192 的整数")
             "-l", "--limit", "--speed-limit" ->
                 opts.speedLimit = parseSize(take())
             "-r", "--retry" ->
@@ -237,6 +241,7 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
         TurboConfig(
             maxConnectionsPerTask = opts.connections,
             maxConcurrentTasks = 1,
+            maxTotalConnections = opts.maxTotalConnections,
             globalSpeedLimitBytesPerSec = opts.speedLimit,
             maxRetries = opts.retry,
             httpVersionPolicy = opts.httpPolicy,
@@ -388,6 +393,7 @@ private fun printHelp(out: java.io.PrintStream = System.out) {
           -d, --dir <目录>           输出目录（默认当前目录）
           -b, --batch <文件>         批量下载，每行「URL」或「URL 输出路径」，# 为注释
           -c, --connections <N>      每任务连接数（1..256，默认 16）
+              --max-total-connections <N>  所有任务合计连接上限（0=不限）
           -l, --limit <大小>         限速，如 10MB、500KB、1048576（字节）
           -r, --retry <N>            分片失败重试次数（默认 5）
           -H, --header "K: V"        附加请求头，可重复

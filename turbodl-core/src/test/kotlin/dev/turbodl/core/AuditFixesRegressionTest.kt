@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
 import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,11 +37,14 @@ class AuditFixesRegressionTest {
 
         init {
             server.createContext("/f.bin") { ex -> handler(ex, ex.requestHeaders.getFirst("Range")) }
-            server.executor = Executors.newFixedThreadPool(16)
+            server.executor = Executors.newFixedThreadPool(64)
             server.start()
         }
 
-        fun stop() = server.stop(0)
+        fun stop() {
+            server.stop(0)
+            (server.executor as? ExecutorService)?.shutdownNow()
+        }
     }
 
     private fun rangeBounds(range: String?, total: Int): Pair<Int, Int>? {

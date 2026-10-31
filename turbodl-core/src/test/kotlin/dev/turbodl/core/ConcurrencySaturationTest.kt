@@ -23,6 +23,7 @@ class ConcurrencySaturationTest {
     private class CountingServer(payload: ByteArray, chunkSleepMs: Long = 2) {
         val peak = AtomicInteger(0)
         private val current = AtomicInteger(0)
+        private val executor = Executors.newFixedThreadPool(300)
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
 
@@ -62,11 +63,14 @@ class ConcurrencySaturationTest {
                 }
             }
             // 线程池要足够大，否则是服务端而非客户端限制了并发
-            server.executor = Executors.newFixedThreadPool(300)
+            server.executor = executor
             server.start()
         }
 
-        fun stop() = server.stop(0)
+        fun stop() {
+            server.stop(0)
+            executor.shutdownNow()
+        }
     }
 
     @Test

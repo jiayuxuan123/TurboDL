@@ -47,7 +47,10 @@ class BuiltinBackendE2ETest {
     }
 
     /** 支持 Range 的本地服务器。必须真的支持 —— 否则分片与续传会走单流回退，验的不是同一条链路。 */
-    private class RangeServer(private val payload: ByteArray) {
+    private class RangeServer(
+        private val payload: ByteArray,
+        private val chunkDelayMs: Long = 0,
+    ) {
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
         val rangeRequests = AtomicInteger(0)
@@ -74,7 +77,15 @@ class BuiltinBackendE2ETest {
                 val end = minOf(e, size - 1)
                 ex.responseHeaders.add("Content-Range", "bytes $s-$end/$size")
                 ex.sendResponseHeaders(206, (end - s + 1).toLong())
-                ex.responseBody.use { it.write(payload, s, end - s + 1) }
+                ex.responseBody.use { out ->
+                    var pos = s
+                    while (pos <= end) {
+                        val n = minOf(64 * 1024, end - pos + 1)
+                        if (chunkDelayMs > 0) Thread.sleep(chunkDelayMs)
+                        out.write(payload, pos, n)
+                        pos += n
+                    }
+                }
             }
             server.executor = Executors.newFixedThreadPool(64)
             server.start()
@@ -220,6 +231,48 @@ class BuiltinBackendE2ETest {
             payload, file.readBytes(),
             "续传后内容必须逐字节一致（暂停时已下 $afterPause 字节）",
         )
+    }
+
+    /**
+     * `await()` 必须跟随 resume 后的新一次运行。
+     *
+     * pause 会把旧 Deferred 以 CancellationException 完成。旧实现 resume 用
+     * `putIfAbsent`，因此 await 永远拿到“暂停”的失败结果；本测试把这条路径
+     * 变成正式契约，防止以后又把生命周期改回去。
+     */
+    @Test
+    fun `resume 后 await 返回续传任务的结果`() = runBlocking {
+        tmpDir = tmp()
+        val payload = payloadOf(16 * 1024 * 1024, 23)
+        val srv = RangeServer(payload, chunkDelayMs = 4)
+        val client = TurboClient(
+            TurboConfig(
+                maxConnectionsPerTask = 4,
+                maxConcurrentTasks = 1,
+                adaptiveConcurrency = false,
+                slowStart = false,
+            )
+        )
+        val out = File(tmpDir, "await-resume.bin")
+        try {
+            val id = client.submit(DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out))
+            awaitSomeProgress(client, id)
+            client.pause(id)
+            Thread.sleep(300)
+            check(client.resume(id)) { "继续应当成功" }
+
+            val result = client.await(id)
+            assertTrue(
+                result.isSuccess,
+                "resume 后 await 应看到成功，而不是旧的暂停失败：${result.exceptionOrNull()?.message}",
+            )
+            assertEquals(payload.size.toLong(), result.getOrThrow().length())
+            assertContentEquals(payload, result.getOrThrow().readBytes())
+        } finally {
+            client.shutdown()
+            srv.stop()
+            out.delete()
+        }
     }
 
     // ---------------------------------------------- 取消

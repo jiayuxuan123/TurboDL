@@ -82,6 +82,7 @@ class SegmentWritePathTest {
         buffered: Boolean,
         port: Int,
         connections: Int = 8,
+        useDirectIoBuffers: Boolean = true,
     ): File {
         val srv = Server(payload, port)
         val out = File.createTempFile("writepath", ".bin").apply { deleteOnExit() }
@@ -94,6 +95,7 @@ class SegmentWritePathTest {
                 adaptiveConcurrency = false,
                 minSegmentSize = 256L * 1024,
                 bufferedSegmentWrite = buffered,
+                useDirectIoBuffers = useDirectIoBuffers,
             )
         )
         try {
@@ -120,7 +122,7 @@ class SegmentWritePathTest {
             return@runBlocking
         }
         val payload = ByteArray(SIZE) { ((it * 7 + 3) % 256).toByte() }
-        val out = download(payload, buffered = false, port = port)
+        val out = download(payload, buffered = false, port = port, useDirectIoBuffers = false)
         try {
             assertEquals(SIZE.toLong(), out.length(), "长度应精确")
             assertTrue(out.readBytes().contentEquals(payload), "直写路径必须字节精确")
@@ -136,7 +138,7 @@ class SegmentWritePathTest {
             return@runBlocking
         }
         val payload = ByteArray(SIZE) { ((it * 11 + 5) % 256).toByte() }
-        val out = download(payload, buffered = true, port = port)
+        val out = download(payload, buffered = true, port = port, useDirectIoBuffers = true)
         try {
             assertEquals(SIZE.toLong(), out.length(), "长度应精确")
             assertTrue(

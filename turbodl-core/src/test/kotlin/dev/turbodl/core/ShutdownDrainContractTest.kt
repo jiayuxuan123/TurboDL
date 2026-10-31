@@ -8,6 +8,7 @@ import java.util.concurrent.Executors
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -179,5 +180,77 @@ class ShutdownDrainContractTest {
         } finally {
             srv.stop(0)
         }
+    }
+
+    @Test
+    fun `submit after shutdown fails fast instead of leaving await hanging`() {
+        tmpDir.mkdirs()
+        val client = TurboClient(TurboConfig(maxConcurrentTasks = 1))
+        client.shutdown()
+        assertFailsWith<IllegalStateException>("关闭后提交必须立即失败") {
+            client.submit(
+                DownloadRequest(
+                    url = "http://127.0.0.1:1/never",
+                    destination = File(tmpDir, "never.bin"),
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `pause racing with cancel cannot resurrect a canceled task`() {
+        tmpDir.mkdirs()
+        val payload = ByteArray(8 * 1024 * 1024) { (it % 239).toByte() }
+        val (srv, port) = startServer(payload)
+        val client = TurboClient(
+            TurboConfig(
+                maxConnectionsPerTask = 4,
+                maxConcurrentTasks = 1,
+                warmUpConnections = false,
+                slowStart = false,
+                workDir = tmpDir,
+            )
+        )
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    url = "http://127.0.0.1:$port/f.bin",
+                    destination = File(tmpDir, "race.bin"),
+                    knownSize = payload.size.toLong(),
+                )
+            )
+            Thread.sleep(120)
+            client.cancel(id, deleteOutput = true)
+            // This used to launch a second cleanup that could overwrite CANCELED
+            // with PAUSED after the cancel cleanup had already finished.
+            client.pause(id)
+
+            val deadline = System.currentTimeMillis() + 10_000
+            while (System.currentTimeMillis() < deadline &&
+                client.progress.value[id]?.state != TaskState.CANCELED
+            ) {
+                Thread.sleep(20)
+            }
+            assertEquals(TaskState.CANCELED, client.progress.value[id]?.state)
+        } finally {
+            client.shutdown()
+            srv.stop(0)
+        }
+    }
+
+    @Test
+    fun `updateConfig retires the old segment client`() {
+        val client = TurboClient(TurboConfig(maxConnectionsPerTask = 4))
+        val before = clientField(client, "segmentClient")
+            ?: error("segmentClient 字段读取失败")
+        client.updateConfig(TurboConfig(maxConnectionsPerTask = 8))
+        val after = clientField(client, "segmentClient")
+            ?: error("segmentClient 字段读取失败")
+        assertTrue(before !== after, "更新配置后应换成新的客户端")
+        assertTrue(
+            before.dispatcher.executorService.isShutdown,
+            "旧 segmentClient 的 Dispatcher 必须回收，否则反复改设置会泄漏线程与连接",
+        )
+        client.shutdown()
     }
 }
