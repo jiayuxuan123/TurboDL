@@ -19,11 +19,14 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.InputStream
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.withContext
 
 /**
  * TurboDL 下载引擎入口（SDK 门面）。
@@ -538,6 +541,18 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         if (total > 0 && dest.length() != total) {
             throw IllegalStateException("大小校验失败：期望 $total，实际 ${dest.length()}")
         }
+        request.expectedSha256?.let { expected ->
+            val actual = withContext(Dispatchers.IO) { sha256Of(dest) }
+            if (!actual.equals(expected, ignoreCase = true)) {
+                // The bytes are complete by length but proven wrong. Drop the
+                // resume snapshot so a retry cannot reuse them as if they were
+                // valid progress.
+                chunkDirOf(id).deleteRecursively()
+                throw IllegalStateException(
+                    "SHA-256 校验失败：期望 ${expected.lowercase()}，实际 $actual",
+                )
+            }
+        }
         chunkDirOf(id).deleteRecursively()
         updateProgress(id) {
             it.copy(state = TaskState.COMPLETED, downloadedBytes = dest.length(), totalBytes = dest.length())
@@ -558,6 +573,20 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     /** 将稳定键规整为安全目录名（避免路径分隔符/非法字符）。 */
     private fun sanitizeKey(raw: String): String =
         "key_" + raw.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }.joinToString("")
+
+    /** Stream the final file so checksum verification does not allocate it in memory. */
+    private fun sha256Of(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(1024 * 1024).use { input: InputStream ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
 
     private fun emit(event: TurboEvent) {
         scope.launch { _events.emit(event) }

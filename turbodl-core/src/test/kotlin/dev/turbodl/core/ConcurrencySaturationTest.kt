@@ -140,4 +140,36 @@ class ConcurrencySaturationTest {
             srv.stop()
         }
     }
+
+    @Test
+    fun `downward adaptive starts at the user connection count`() = runBlocking {
+        val size = 16 * 1024 * 1024
+        val payload = ByteArray(size) { (it % 113).toByte() }
+        val srv = CountingServer(payload, chunkSleepMs = 8)
+        val connections = 24
+        val client = TurboClient(
+            TurboConfig(
+                maxConnectionsPerTask = connections,
+                maxConcurrentTasks = 1,
+                slowStart = true,
+                adaptiveConcurrency = true,
+                adaptiveConcurrencyMode = AdaptiveConcurrencyMode.DOWNWARD,
+                warmUpConnections = false,
+            )
+        )
+        val out = File.createTempFile("sat-down", ".bin").apply { deleteOnExit() }
+        try {
+            val id = client.submit(DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out))
+            assertTrue(client.await(id).isSuccess)
+            // The DOWNWARD policy must expose the user's concurrency immediately,
+            // not spend the first part of the transfer at an 8-connection ramp.
+            assertTrue(
+                srv.peak.get() >= connections - 1,
+                "DOWNWARD 模式应从 $connections 路起跑，实际峰值 ${srv.peak.get()}",
+            )
+        } finally {
+            client.shutdown()
+            srv.stop()
+        }
+    }
 }

@@ -3,6 +3,7 @@ package dev.turbodl.cli
 import dev.turbodl.core.DownloadRequest
 import dev.turbodl.core.DnsMode
 import dev.turbodl.core.HttpVersionPolicy
+import dev.turbodl.core.AdaptiveConcurrencyMode
 import dev.turbodl.core.ProxyMode
 import dev.turbodl.core.ProxyType
 import dev.turbodl.core.TurboClient
@@ -45,6 +46,7 @@ private val downloading = AtomicBoolean(false)
 private class Options {
     var connections = 16
     var maxTotalConnections = 0
+    var expectedSha256: String? = null
     var speedLimit: Long = 0L            // 字节/秒，0=不限
     var retry = 5
     var output: File? = null             // -o
@@ -57,6 +59,8 @@ private class Options {
     var httpPolicy = HttpVersionPolicy.AUTO
     var warmUp = true
     var slowStart = true
+    var adaptive = true
+    var adaptiveMode = AdaptiveConcurrencyMode.DOWNWARD
     var insecure = false
     var connectTimeoutMs = 15_000L
     var readTimeoutMs = 60_000L
@@ -78,8 +82,6 @@ private class Options {
     var noOverlap = false
     /** 单连接停滞多久后中断该连接（毫秒，0=关闭）。 */
     var stallTimeoutMs: Long? = null
-    /** 关闭吞吐自适应（用于 A/B 对照：固定并发测量）。 */
-    var noAdaptive = false
     /** 输出阶段耗时事件（启动段诊断用）。 */
     var timing = false
 }
@@ -114,6 +116,13 @@ fun main(args: Array<String>) {
             "--max-total-connections" ->
                 opts.maxTotalConnections = take().toIntOrNull()?.coerceIn(0, 8192)
                     ?: usageError("--max-total-connections 需为 0..8192 的整数")
+            "--sha256" -> {
+                val value = take()
+                if (!value.matches(Regex("^[0-9a-fA-F]{64}$"))) {
+                    usageError("--sha256 需为 64 位十六进制 SHA-256")
+                }
+                opts.expectedSha256 = value.lowercase()
+            }
             "-l", "--limit", "--speed-limit" ->
                 opts.speedLimit = parseSize(take())
             "-r", "--retry" ->
@@ -137,8 +146,15 @@ fun main(args: Array<String>) {
             }
             "--force-http1" -> opts.httpPolicy = HttpVersionPolicy.FORCE_HTTP1
             "--no-warmup" -> opts.warmUp = false
+            "--slow-start" -> opts.slowStart = true
             "--no-slow-start" -> opts.slowStart = false
-            "--no-adaptive" -> opts.noAdaptive = true
+            "--adaptive" -> opts.adaptive = true
+            "--no-adaptive" -> opts.adaptive = false
+            "--adaptive-mode" -> opts.adaptiveMode = when (take().lowercase()) {
+                "downward", "down" -> AdaptiveConcurrencyMode.DOWNWARD
+                "upward", "up" -> AdaptiveConcurrencyMode.UPWARD
+                else -> usageError("--adaptive-mode 仅支持 downward|upward")
+            }
             "--spc" -> opts.segmentsPerConnection = take().toIntOrNull()?.coerceIn(1, 64)
                 ?: usageError("--spc 需为 1..64 的整数")
             "--block-size" -> opts.blockSize = parseSize(take())
@@ -258,7 +274,8 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
             blockSize = opts.blockSize ?: TurboConfig().blockSize,
             minSegmentSize = opts.minSegmentSize ?: TurboConfig().minSegmentSize,
             slowStartInitial = opts.slowStartInitial ?: TurboConfig().slowStartInitial,
-            adaptiveConcurrency = !opts.noAdaptive,
+            adaptiveConcurrency = opts.adaptive,
+            adaptiveConcurrencyMode = opts.adaptiveMode,
             tailAssist = !opts.noTailAssist,
             overlapMerge = !opts.noOverlap,
             stallTimeoutMs = opts.stallTimeoutMs ?: TurboConfig().stallTimeoutMs,
@@ -304,6 +321,7 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
             destination = out,
             headers = headers,
             stableKey = stableKey,
+            expectedSha256 = opts.expectedSha256,
         )
     )
     if (opts.json) {
@@ -394,6 +412,7 @@ private fun printHelp(out: java.io.PrintStream = System.out) {
           -b, --batch <文件>         批量下载，每行「URL」或「URL 输出路径」，# 为注释
           -c, --connections <N>      每任务连接数（1..256，默认 16）
               --max-total-connections <N>  所有任务合计连接上限（0=不限）
+              --sha256 <hex>             完成后校验 SHA-256（64 位十六进制）
           -l, --limit <大小>         限速，如 10MB、500KB、1048576（字节）
           -r, --retry <N>            分片失败重试次数（默认 5）
           -H, --header "K: V"        附加请求头，可重复
@@ -403,7 +422,8 @@ private fun printHelp(out: java.io.PrintStream = System.out) {
           --http-policy <模式>       auto|http1|http2（默认 auto：分片走 h1、单流可协商 h2）
           --no-warmup                关闭连接预热
           --no-slow-start            关闭慢启动
-          --no-adaptive              关闭吞吐自适应（固定并发，A/B 对照用）
+          --no-adaptive              关闭吞吐自适应（A/B 对照用）
+          --adaptive-mode <模式>     downward|upward（默认 downward：从用户并发上限起跑向下收敛）
           --insecure                 忽略 SSL 证书校验
           --connect-timeout <毫秒>   连接超时（默认 15000）
           --timeout <毫秒>           读取超时（默认 60000）

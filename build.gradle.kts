@@ -68,7 +68,15 @@ allprojects {
     //              写入桌面 JVM，Android/Dalvik 自动回落堆缓冲。
     //        实测：100KB/s 每连接源，8→16→32 路为 0.80→1.44→2.66MB/s；
     //              64/128/256 路在聚合天花板处稳定约 3.0MB/s，不继续堆连接。
-    version = "0.3.0.0"
+    //   0.3.1.0：
+    //        API：新增 AdaptiveConcurrencyMode（UPWARD/DOWNWARD）与 expectedSha256；
+    //            DOWNWARD 让宿主明确要求“先从用户线程数起跑，再按吞吐收敛”，
+    //            引擎不内置 App/网盘场景判断。
+    //        修复：0.3.0.0 的自适应上探对小文件和大文件都可能让线程数停在
+    //            低档；默认保留向后兼容的 UPWARD，宿主可显式下发 DOWNWARD。
+    //        校验：新增完成后的可选 SHA-256 流式校验，失败不标记完成并清理
+    //            不可信的续传侧车。
+    version = "0.3.1.0"
 }
 
 // 为可作为 SDK 发布的库模块统一启用 maven-publish。

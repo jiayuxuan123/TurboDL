@@ -21,6 +21,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Endgame by ETA, not by segment size**: tail assist now tracks each in-flight segment's EWMA throughput and takes the remaining tail from the connection with the worst estimated completion time. A shrinking segment's old writer also stops at the handoff boundary instead of writing into the portion assigned to the new connection.
 - **Global resource budgets**: task slots are FIFO and atomic, and `maxTotalConnections` caps the aggregate connection count across every built-in HTTP task. Three 64-connection tasks can no longer silently create 192 sockets when the host or router should only see a smaller budget.
 - **Desktop I/O path**: JVM hosts use direct ByteBuffers; Android/Dalvik falls back to heap buffers and `RandomAccessFile`. Sidecar replacement keeps a durable backup instead of deleting the old progress before the new one is visible.
+- **Caller-supplied SHA-256**: `DownloadRequest.expectedSha256` streams the finished file through SHA-256 before completion; a mismatch fails the task and drops the resume snapshot so bad bytes are never reused.
 - **Sequential segment priority**: earlier segments are downloaded first, enabling progressive preview/playback (axel/Persepolis idea).
 - **Robust fallback & retry**:
   - Server does not support / ignores Range → automatic fallback to whole-file single-stream download;
@@ -38,6 +39,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 | Thread count (up to 256) | `maxConnectionsPerTask` (1..256) |
 | Concurrent tasks | `maxConcurrentTasks` (1..64) |
 | Global connection budget | `maxTotalConnections` (0 = unlimited) |
+| Final SHA-256 | `DownloadRequest.expectedSha256` (optional 64-hex digest) |
 | Max download retries | `maxRetries` (0..50) |
 | Dynamic segmentation | `dynamicSegmentation` (true/false) |
 | Manual/auto proxy | `proxy = Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)` |

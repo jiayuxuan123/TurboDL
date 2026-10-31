@@ -14,6 +14,14 @@ data class DownloadRequest(
     /** 已知文件大小（字节）；<=0 表示未知，由引擎探测。 */
     val knownSize: Long = -1,
 
+    /**
+     * 可选的最终文件 SHA-256（64 位十六进制，大小写均可）。
+     *
+     * 校验在目标文件写完后、任务标记为完成前执行。失败时任务进入 FAILED，
+     * 并丢弃本次续传侧车，避免下一次重试跳过已经确认错误的字节。
+     */
+    val expectedSha256: String? = null,
+
     /** 覆盖本任务的连接数；null 使用全局配置。范围仍受 1..256 限制。 */
     val connectionsOverride: Int? = null,
 
@@ -36,7 +44,16 @@ data class DownloadRequest(
      * 在事件回调（[TurboEvent]）中原样拿回，无需自建 roomId→业务信息映射。
      */
     val tags: Map<String, String> = emptyMap(),
-)
+) {
+    init {
+        require(
+            expectedSha256 == null ||
+                expectedSha256.matches(Regex("^[0-9a-fA-F]{64}$"))
+        ) {
+            "expectedSha256 必须是 64 位十六进制 SHA-256"
+        }
+    }
+}
 
 /** 任务状态。 */
 enum class TaskState {
@@ -48,6 +65,19 @@ enum class TaskState {
     PAUSED,        // 暂停（保留断点）
     FAILED,        // 失败
     CANCELED,      // 取消
+}
+
+/**
+ * 自适应并发的搜索方向。
+ *
+ * 这是 SDK 的策略开关，不绑定任何宿主：
+ * - [UPWARD]：从较小并发开始，实测吞吐持续提升才扩档，适合保守的通用下载器。
+ * - [DOWNWARD]：先从用户设定的并发上限起跑，再按实测吞吐向下收敛，适合
+ *   网盘/大文件等“线程数必须立刻可用”的宿主。
+ */
+enum class AdaptiveConcurrencyMode {
+    UPWARD,
+    DOWNWARD,
 }
 
 /** 实时进度快照。 */

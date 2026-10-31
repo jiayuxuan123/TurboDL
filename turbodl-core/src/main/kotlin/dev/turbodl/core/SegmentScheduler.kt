@@ -95,14 +95,8 @@ internal class SegmentScheduler(
         /** 吞吐自适应的窗口长度；两个稳定窗口合并后交给候选档控制器。 */
         const val ADAPTIVE_SAMPLE_INTERVAL_MS = 500L
 
-        /**
-         * 自适应模式的起始并发。
-         *
-         * 8 与 AB Download Manager 的默认线程数一致，也是多数 CDN 的安全区间。
-         * 30% 以上的提升会触发下一次翻倍；没有提升就停在这里，不再先冲到
-         * 128/256 再花时间降回来。
-         */
-        const val ADAPTIVE_INITIAL_CONNECTIONS = 8
+        /** UPWARD 模式的保守起始并发；DOWNWARD 模式直接使用用户上限。 */
+        const val ADAPTIVE_GRID_START = 8
 
         /**
          * 判定窗口有效时，「在飞连接数相对目标并发」的最低比例。
@@ -327,21 +321,11 @@ internal class SegmentScheduler(
         /**
          * Initial grid width.
          *
-         * Adaptive mode must not pre-split for the *requested ceiling*. A request
-         * for 256 connections that settles at 8 used to produce 1024 tiny files
-         * and then process them through 8 workers -- all the request/state cost
-         * with none of the parallelism. Start from the conservative concurrency
-         * and grow the grid later only if measured throughput justifies it.
+         * DOWNWARD starts at the user's ceiling and can shrink later; UPWARD
+         * starts at the conservative first step and grows only after measured
+         * gains. An explicit slowStartInitial overrides both.
          */
-        val gridConcurrency = if (adaptiveEnabled) {
-            min(
-                workers,
-                config.slowStartInitial.takeIf { it > 0 }
-                    ?: min(workers, ADAPTIVE_INITIAL_CONNECTIONS),
-            )
-        } else {
-            workers
-        }
+        val gridConcurrency = workers
 
         // ---------- 块大小：按「连接数」反推，保证固定 N 线程全部跑满 ----------
         // 上限 maxSegmentsPerTask（默认 128，**0 = 不限**）：块数不再随连接数无限膨胀
@@ -444,20 +428,12 @@ internal class SegmentScheduler(
          */
         val resuming = allSegments.any { it.written > 0 }
         val slowStartInit = when {
-            !config.slowStart -> workers
-            // 自适应模式从保守档起跑，再由实测吞吐决定是否继续翻倍。
-            // 不能先冲到用户上限再往下探：128 路在回环上可能在控制器拿到第一个
-            // 有效窗口前就把吞吐打崩，用户看到的就是“线程越多反而越慢”。
-            adaptiveEnabled ->
-                min(
-                    workers,
-                    config.slowStartInitial.takeIf { it > 0 }
-                        ?: min(workers, ADAPTIVE_INITIAL_CONNECTIONS),
-                )
             resuming -> workers                       // 续传：直接到顶
+            !config.slowStart -> workers
             config.slowStartInitial > 0 -> min(config.slowStartInitial, workers)
-            // 默认初始值随设定并发缩放（至少 4）：固定 4 在 128 连接下起点太低，
-            // 配合比例上调可快速到顶，同时避免一上来就全开冲击服务器。
+            adaptiveEnabled && config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.UPWARD ->
+                min(workers, ADAPTIVE_GRID_START)
+            // 传统慢启动的默认起点随并发缩放，至少 4。
             else -> min(workers, max(4, workers / 4))
         }
         /** 动态目标并发（慢启动从 slowStartInit 升、背压时降；自适应时由控制器定档）。 */
@@ -474,7 +450,8 @@ internal class SegmentScheduler(
         val adaptive = if (adaptiveEnabled) AdaptiveConcurrencyController(
             maximumConcurrency = workers,
             initialConcurrency = slowStartInit,
-            probeDownFirst = false,
+            probeDownFirst =
+                config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.DOWNWARD,
         ) else null
         val throughputLock = Any()
         var throughputWindowBytes = 0L
@@ -618,11 +595,10 @@ internal class SegmentScheduler(
                     // 窗口不合格（收尾/限速/失败/并发刚变）：不做任何档位判断。
                     return
                 }
+                val rampFinished = desired.get() >= min(workers, ceiling.get())
                 val decision = adaptive.observe(
                     throughput = throughput,
-                    // 合格窗口本身就意味着 desired 在本窗口内保持稳定；控制器现在负责
-                    // 从起始档向上探测，因此不能再用“到达用户上限”作为学习前提。
-                    rampDone = true,
+                    rampDone = rampFinished,
                     concurrencyLimit = min(workers, ceiling.get()),
                 )
                 if (debugScheduler) {
@@ -869,19 +845,10 @@ internal class SegmentScheduler(
 
         fun rampUpIfHealthy() {
             if (windowThrottled.get()) return                 // 窗口内被限流过：先稳住
+            // 控制器正在下探/上探时，保持档位，不让爬升打架
+            if (adaptive?.isProbing() == true) return
             val cur = desired.get()
             val cap = ceiling.get()
-
-            // 自适应开启时，desired 只能由控制器按实测吞吐调整。
-            // 以前这里仍会按 100ms 一档把 16 直接冲到 128/256，控制器还没来得及测
-            // 16 路的基线，链路已经被高并发打崩。这里只保留“背压后的天花板恢复”，
-            // 其余爬升全部交给 AdaptiveConcurrencyController。
-            if (adaptive != null) {
-                if (cap < workers && ceilingCutByBackpressure.get()) {
-                    recoverCeilingIfDue(cap)
-                }
-                return
-            }
 
             if (cur >= workers) return
             if (cur >= cap) {

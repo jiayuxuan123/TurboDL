@@ -150,7 +150,10 @@ class AdaptiveConcurrencyTest {
             }
         }
 
-        fun stop() = server.stop(0)
+        fun stop() {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+        }
     }
 
     /** 把 n 字节的发送许可按速率摊开；同一实例被多请求共享即「聚合」语义。 */
@@ -222,8 +225,8 @@ class AdaptiveConcurrencyTest {
                     knownSize = payload.size.toLong(),
                 )
             )
-            // 前 5 秒是慢启动与基线测量期，之后才算稳态
-            tailStartAt.set(t0 + 5_000)
+            // 启动与初始测量期：DOWNWARD 模式立即以设定并发启动，2.5 秒后即进入稳态采样
+            tailStartAt.set(t0 + 2_500)
             val res = client.await(id)
             if (res.isFailure) error = res.exceptionOrNull()?.message ?: "failed"
             else if (!out.readBytes().contentEquals(payload)) error = "内容不一致"
@@ -251,8 +254,8 @@ class AdaptiveConcurrencyTest {
             println("[ADAPT] 安全端口全部占用，跳过（8791-8850）")
             return@runBlocking
         }
-        // 8 连接 × 4 × 64KB = 2MB 起，取 4MB 让分片数（64）远多于连接数（8）
-        val payload = ByteArray(4 * 1024 * 1024) { ((it * 17 + 5) % 256).toByte() }
+        // 8 连接 × 4 × 64KB = 2MB 起，取 6MB 留出足够的稳态采样窗口
+        val payload = ByteArray(6 * 1024 * 1024) { ((it * 17 + 5) % 256).toByte() }
 
         // 每连接 96KB/s：8 连接 ≈ 768KB/s，4 连接只有约 384KB/s。
         // 控制器一定会试着把 8 探到 4（找「够用的最低档」），那会让吞吐腰斩 → **必须被拒**。

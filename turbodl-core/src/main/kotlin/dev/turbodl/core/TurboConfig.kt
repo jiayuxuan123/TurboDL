@@ -404,34 +404,51 @@ data class TurboConfig(
     val warmUpConnectionCount: Int = 0,
 
     /**
-     * 慢启动（默认开）：分片并发从少逐步上调到 [maxConnectionsPerTask]，而非一上来就全开。
+     * 慢启动（默认开）：分片并发从设定值开始立即起跑，背压后再恢复。
      *
-     * 好处：避免瞬时几十个连接同时握手冲击服务器/被风控，也避免小文件刚开就过度建连；
+     * 注意：[adaptiveConcurrency] 开启时默认直接从 [maxConnectionsPerTask]
+     * 起步；只有当调用方显式设置 [slowStartInitial] 时才从较低档开始。
+     * 这样用户设置的线程数不会被“还没爬上去文件就下完”拖住。
      * 与背压正交：背压负责“遇错降”，慢启动负责“健康升”。
      */
     val slowStart: Boolean = true,
 
     /**
-     * 慢启动初始并发；<=0 时，自适应模式从 8 路开始，传统慢启动从
-     * `min(maxConnectionsPerTask, 4)` 开始。显式设置后优先使用本值。
+     * 慢启动初始并发；<=0 时直接从 [maxConnectionsPerTask] 起跑。
+     *
+     * 只有调用方明确希望先保守起跑时，才设置一个较小的值。
      */
     val slowStartInitial: Int = 0,
 
     /**
      * 基于任务总吞吐的并发搜索（默认开）。
      *
-     * [maxConnectionsPerTask] 是**上限**，不是必须立即跑满的目标。自适应模式从
-     * 8 路开始，在每个稳定窗口后尝试翻倍；只有总吞吐至少提升 30% 才接受新档，
-     * 否则退回最后有效档并停止向上。达到上限后保持，不再周期性下探掉速。
+     * 自适应默认从 [maxConnectionsPerTask] 起跑，先在用户要求的高并发下测总吞吐；
+     * 只有在多个稳定窗口证明降低并发不会明显损失吞吐时，才向下收敛。
+     * 它不会从 8 路慢慢向上爬，因此大文件不会“下一半了线程数还没上去”。
      *
-     * worker 与分片网格也随有效并发增长：请求 256 路但实际只需 8 路时，
-     * 不会预创建 256 个空闲 worker，也不会预先切成上千个 64KB 小段。
+     * worker 仍按实际目标懒启动；请求 256 路时会先启动到用户设置的并发上限，
+     * 之后自适应若向下收敛，空闲 worker 会自然 park。
+     *
+     * 默认**从用户设定的并发上限起跑**，给链路一个完整的快速窗口；只有在
+     * 多个稳定窗口证明更高并发没有收益时才下探（向下搜索），而不是从 8 路
+     * 慢慢往上试探。这样既不会让短任务卡在低线程数，也能在聚合限速时收敛。
      *
      * 不根据每连接吞吐低就降档：服务端按连接独立限速时，单连接速度本来就低，
      * 增加连接仍可能提高总吞吐。若启用了全局限速，吞吐判定会自动停用，避免把用户限速误判成服务器平台期。
      * 固定并发测量台可显式关闭此项。
      */
     val adaptiveConcurrency: Boolean = true,
+
+    /**
+     * 自适应并发的搜索方向（默认 [AdaptiveConcurrencyMode.DOWNWARD]）。
+     *
+     * 默认先以用户设置的并发上限起跑，让多线程加速立即生效；随后根据总吞吐
+     * 向下探测（在聚合限速时减小连接数节省资源）。
+     * 若需要保守从少逐步翻倍，可显式指定 [AdaptiveConcurrencyMode.UPWARD]。
+     */
+    val adaptiveConcurrencyMode: AdaptiveConcurrencyMode =
+        AdaptiveConcurrencyMode.DOWNWARD,
 
     /**
      * 预热并发度上限（默认 4）。
