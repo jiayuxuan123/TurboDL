@@ -28,9 +28,12 @@ import kotlinx.coroutines.delay
  *
  * ## 关于 [MAX_WAIT_MS]
  *
- * 保留一个远大于 200ms 的单次等待上限，目的**不是轮询**，而是让「用户在下载过程中
- * 修改限速值」能在数秒内被感知（睡死前先醒来重读一次配置）。
- * 触发该上限后循环会重新 `limitProvider()`，因此配置变更即时生效。
+ * 保留一个单次等待上限，目的**不是轮询**，而是让「用户在下载过程中修改限速值」
+ * 能在亚秒级被感知（睡死前先醒来重读一次配置）。触发该上限后循环会重新
+ * `limitProvider()`，因此配置变更在 400ms 内生效。
+ *
+ * 400ms 是权衡结果：更长的上限会让"把限速从 1KB/s 改成不限速"后仍要等好几秒；
+ * 更短则在高并发下增加锁与协程调度次数。64 路并发时每秒约 160 次唤醒，可忽略。
  */
 internal class SpeedLimiter(private val limitProvider: () -> Long) {
 
@@ -44,7 +47,7 @@ internal class SpeedLimiter(private val limitProvider: () -> Long) {
          * 单次等待上限。仅用于让「配置变更」被及时感知，不是为了轮询。
          * 取值远大于旧实现的 200ms —— 那是缺陷的根源。
          */
-        private const val MAX_WAIT_MS = 5_000L
+        private const val MAX_WAIT_MS = 400L
     }
 
     private fun refill(limit: Long, need: Long) {
@@ -69,9 +72,12 @@ internal class SpeedLimiter(private val limitProvider: () -> Long) {
     /** 消费 [bytes] 字节额度；额度不足时挂起等待。 */
     suspend fun awaitAllow(bytes: Long) {
         if (bytes <= 0) return
-        val limit = limitProvider().coerceAtLeast(0)
-        if (limit <= 0) return   // 不限速：立即返回，不碰锁
         while (true) {
+            // 【每轮重读】限速值可能在等待过程中被宿主改掉。
+            // 旧实现只在循环外读一次：从 1KB/s 改成不限速时，已经进入等待的调用
+            // 仍按旧速率睡到 MAX_WAIT_MS 才醒，表现为"改了设置但速度没变"。
+            val limit = limitProvider().coerceAtLeast(0)
+            if (limit <= 0) return   // 不限速：立即返回，不碰锁
             val waitMs = synchronized(lock) {
                 refill(limit, bytes)
                 if (bytes <= tokens) {

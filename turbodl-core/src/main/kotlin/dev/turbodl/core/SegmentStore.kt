@@ -70,6 +70,8 @@ internal class SegmentStore(
 
     private var raf: RandomAccessFile? = null
     private var channel: FileChannel? = null
+    /** 侧车写入的串行化锁：多个下载 worker 会同时触发 persist。 */
+    private val persistLock = Any()
     /**
      * File length captured before `ensureLength()` extends it.
      *
@@ -285,6 +287,11 @@ internal class SegmentStore(
 
     /** 落盘进度记录（原子替换：先写临时文件再改名）。 */
     fun persist(pieces: List<Piece>) {
+        // 【必须串行】persist 会被多个下载 worker 同时调用（persistProgress 里的
+        // lastPersistAt 是普通变量，多个线程可以同时通过节流检查）。两个 writer 会
+        // 互相 setLength(0)、交错写头与分片记录，并竞争同一个 .tmp / .bak 的改名 ——
+        // 轻则丢断点，重则生成"可解析但混合了两个时刻"的快照。
+        synchronized(persistLock) {
         runCatching {
             val tmp = File(stateFile.parentFile, stateFile.name + ".tmp")
             stateFile.parentFile?.mkdirs()
@@ -318,11 +325,18 @@ internal class SegmentStore(
             }
             runCatching { backup.delete() }
         }
+        }
     }
 
     /** 清掉进度记录与目标文件（内容已变、无法安全续传时）。 */
     fun reset() {
-        runCatching { stateFile.delete() }
+        synchronized(persistLock) {
+            // 【三件一起删】readState 会自动回退到 .bak：只删主文件的话，
+            // 明确丢弃旧进度之后仍然可能把旧备份读回来，等于没重置。
+            runCatching { stateFile.delete() }
+            runCatching { File(stateFile.parentFile, stateFile.name + ".bak").delete() }
+            runCatching { File(stateFile.parentFile, stateFile.name + ".tmp").delete() }
+        }
         close()
         runCatching { dest.delete() }
         open()
@@ -351,6 +365,17 @@ internal class SegmentStore(
                 val w = f.readLong()
                 if (s < 0 || e < s || w < 0) return@runCatching null
                 list.add(Piece(s, e, w.coerceAtMost(e - s + 1)))
+            }
+            // 【整网格校验】只检查单条区间不够：一个损坏但可解析的快照可以声明
+            // "整文件已完成"，实际留下零/旧数据，而长度校验照样通过。
+            // 要求：有序、无重叠、无空洞、完整覆盖 [0, total)。
+            if (totalRead > 0 && list.isNotEmpty()) {
+                var expectedStart = 0L
+                for (p in list) {
+                    if (p.start != expectedStart) return@runCatching null
+                    expectedStart = p.end + 1
+                }
+                if (expectedStart != totalRead) return@runCatching null
             }
             Loaded(totalRead, list)
         }

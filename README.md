@@ -22,6 +22,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Global resource budgets**: task slots are FIFO and atomic, and `maxTotalConnections` caps the aggregate connection count across every built-in HTTP task. Three 64-connection tasks can no longer silently create 192 sockets when the host or router should only see a smaller budget.
 - **Desktop I/O path**: JVM hosts use direct ByteBuffers; Android/Dalvik falls back to heap buffers and `RandomAccessFile`. Sidecar replacement keeps a durable backup instead of deleting the old progress before the new one is visible.
 - **Caller-supplied SHA-256**: `DownloadRequest.expectedSha256` streams the finished file through SHA-256 before completion; a mismatch fails the task and drops the resume snapshot so bad bytes are never reused.
+- **Multi-source mirrors** (`0.4.0.0`): `DownloadRequest.mirrors` adds alternate URLs for the same file. The engine samples each source, then routes segments toward the fastest one by measured throughput, drops a source into exponential back-off when it fails, and rejects any mirror whose `Content-Range` total disagrees with the task size — so a mislabelled mirror can never write wrong bytes into the file. CLI: `--mirror <URL>` (repeatable).
 - **Sequential segment priority**: earlier segments are downloaded first, enabling progressive preview/playback (axel/Persepolis idea).
 - **Robust fallback & retry**:
   - Server does not support / ignores Range → automatic fallback to whole-file single-stream download;
@@ -30,6 +31,28 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Restrained adaptivity**: concurrency is throttled down **only** on 429/503 or when consecutive failures hit a threshold; normal network jitter **never** reduces the thread count (no AIMD jitter heuristics).
 - **Resumable downloads**: segments are persisted; pause/resume continues from the real on-disk progress.
 - **Byte-level integrity check**: total size is verified after merge, rejecting corrupted files.
+
+## 0.4.0.0 — correctness overhaul
+
+This release is mostly **bug fixes**: thirteen defects surfaced by an internal audit, three of which could silently corrupt the output file.
+
+| # | Defect | Consequence before the fix |
+|---|---|---|
+| 1 | Resume reused old segments when the content fingerprint could not be fetched **and** the strong validator had changed | a file swapped server-side could produce a length-valid but mixed old/new file |
+| 2 | Whole-file fallback ignored `delete()` failures and never truncated | a shorter re-download kept the previous file's tail |
+| 3 | Multiple workers wrote the progress sidecar concurrently through one `.tmp` | interleaved snapshots, lost resume points |
+| 4 | Sidecar restore validated single ranges only; `reset()` left the `.bak` behind | a corrupt snapshot could claim "already complete"; discarded progress came back |
+| 5 | The "global" speed limit was one token bucket **per task** | 3 tasks × 1 MB/s = 3 MB/s |
+| 6 | `resume()` never completed its `Deferred` on pause and never set `FAILED` on error | `await()` hung forever; progress stuck at DOWNLOADING |
+| 7 | Back-pressure could not go below 4 connections | servers allowing 1–3 connections always failed |
+| 8 | An adaptive down-shift permanently lowered the ceiling | after the network recovered, the engine never retried 16/32 |
+| 9 | `connectTimeout`/`readTimeout` do not cover DNS | a hung resolver stalled the task indefinitely |
+| 10 | A `206` without a parseable `Content-Range` was accepted | bytes from the wrong offset could be written |
+| 11 | Warm-up ran before the global connection budget was acquired | warm-up bypassed `maxTotalConnections` |
+| 12 | `SpeedLimiter` read the limit once outside its wait loop | changing the limit mid-download had no effect for seconds |
+| 13 | Every `5xx` counted as throttling | spurious concurrency cuts and misleading "持续被限流" errors |
+
+Each fix is covered by a regression test (`RegressionFixesTest.kt`) plus two end-to-end mirror tests (`MirrorPoolTest.kt`).
 
 ## Nine engine capabilities
 
@@ -45,6 +68,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 | Manual/auto proxy | `proxy = Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)` |
 | DNS configuration | `dns = System / StaticHosts / DoH(url)` |
 | Ignore SSL | `trustAllCerts` |
+| Mirror sources (same file) | `DownloadRequest.mirrors` (speed-weighted selection + failover) |
 | Theming | handled by the upper-layer app (the SDK does not deal with UI rendering) |
 
 ## Quick start

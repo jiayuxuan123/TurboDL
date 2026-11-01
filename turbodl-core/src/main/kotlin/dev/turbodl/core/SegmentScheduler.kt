@@ -44,7 +44,13 @@ import kotlin.math.min
 internal class SegmentScheduler(
     private val downloader: SegmentDownloader,
     private val config: TurboConfig,
-    private val speedLimiter: SpeedLimiter,
+    /**
+     * 消费限速额度。**必须由宿主注入同一个全局限速器**（[BackendContext.throttle]）。
+     *
+     * 旧实现让每个分段任务各自 new 一个 SpeedLimiter，于是"全局限速"实际是
+     * "每任务限速"：3 个任务各限 1MB/s，总吞吐就是 3MB/s。
+     */
+    private val throttle: suspend (Long) -> Unit,
     ) {    private companion object {
         /**
          * 每次上调的比例（相对当前目标并发）。
@@ -300,6 +306,11 @@ internal class SegmentScheduler(
          * 带上它可让服务器在内容已变时返回整文件（200），由上层重试而非写入错数据。
          */
         ifRange: String? = null,
+        /**
+         * 多来源选择池（可选）。给了就每个分片按实测速度从池里挑来源，
+         * 失败自动切到其他镜像；不给就固定用 [url]。
+         */
+        mirrors: MirrorPool? = null,
     ): Outcome = coroutineScope {
         // per-host 并发上限：默认 0 = 不限（只有个别 CDN 如迅雷才需要限，且应由调用方按 host 选择性启用）。
         // 警告：若对所有下载统一设一个小值（如 16），会把单个下载（全部同一 host）直接限死到该值，
@@ -490,6 +501,15 @@ internal class SegmentScheduler(
          * 只有前者允许被 rampUpIfHealthy 抬回来。
          */
         val ceilingCutByBackpressure = java.util.concurrent.atomic.AtomicBoolean(false)
+        /**
+         * 天花板是不是被**吞吐自适应**压低的（区别于服务器背压）。
+         *
+         * 旧实现把自适应降档直接写进 `ceiling`，而且把 backpressure 标记清成 false：
+         * 一旦网络变差降到 8，之后网络明显变好也永远不会再试 16/32 ——
+         * 因为控制器拿到的 `concurrencyLimit` 就是这个被写死的 8。
+         * 现在自适应降档单独记一个可恢复标记，由 [recoverCeilingIfDue] 逐步抬回去。
+         */
+        val ceilingCutByAdaptive = java.util.concurrent.atomic.AtomicBoolean(false)
 
         /** 限流（429/503）重试预算：比 maxRetries 宽（原因见 companion 里 `throttleBudget` 的注释）。 */
         val throttleRetryBudget = throttleBudget(config.maxRetries)
@@ -609,10 +629,11 @@ internal class SegmentScheduler(
                     )
                 }
                 decision.suggestedCeiling?.let { suggested ->
-                    // 这是控制器的"选择"，不是服务器的强制 —— 清掉背压标记，
-                    // 免得恢复逻辑把它又抬回去，跟控制器自己的结论打架。
-                    ceilingCutByBackpressure.set(false)
                     ceiling.updateAndGet { current -> min(current, suggested) }
+                    // 打上"可恢复"标记：这是吞吐偏好，不是服务器的强制。
+                    // 链路变好后 recoverCeilingIfDue 会把天花板逐步抬回去，
+                    // 引擎才有机会重新试更高的档位。
+                    ceilingCutByAdaptive.set(true)
                 }
                 decision.target?.let {
                     val target = it.coerceIn(1, ceiling.get())
@@ -800,8 +821,11 @@ internal class SegmentScheduler(
             if (now - lastThrottleDownAt < BACKPRESSURE_MIN_INTERVAL_MS) return
             lastThrottleDownAt = now
             val cur = desired.get()
-            val floor = min(workers, 4)
-            val target = max(floor, cur / 2)
+            // 【下限必须是 1】旧实现把背压下限定在 4 路：服务器只允许 1–3 条连接时，
+            // 降到 4 就再也降不动，于是持续 429/503 → 每个分片耗尽限流预算 → 整任务失败。
+            // 4 路下限只适用于"吞吐自适应"（那是我们自己的偏好），不适用于
+            // 服务器明确的"你太快了"信号 —— 那种情况下服务器说了算。
+            val target = max(1, cur / 2)
             if (target < cur) {
                 desired.set(target)
                 // 429/503 背压高于吞吐学习：清掉旧基线，不能让自适应立即爬回被拒档位。
@@ -840,7 +864,10 @@ internal class SegmentScheduler(
             val step = if (cap * 2 <= workers) cap else cap + 1
             val next = min(workers, max(cap + 1, step))
             ceiling.set(next)
-            if (next >= workers) ceilingCutByBackpressure.set(false)
+            if (next >= workers) {
+                ceilingCutByBackpressure.set(false)
+                ceilingCutByAdaptive.set(false)
+            }
         }
 
         fun rampUpIfHealthy() {
@@ -852,7 +879,7 @@ internal class SegmentScheduler(
 
             if (cur >= workers) return
             if (cur >= cap) {
-                if (cap < workers && ceilingCutByBackpressure.get()) {
+                if (cap < workers && (ceilingCutByBackpressure.get() || ceilingCutByAdaptive.get())) {
                     recoverCeilingIfDue(cap)
                 }
                 return
@@ -980,10 +1007,15 @@ internal class SegmentScheduler(
                         activeConns.incrementAndGet()
                         inFlightSegments.add(seg)
                         reportConns()
+                        // 每个分片自己挑来源：快的镜像多派，失败的镜像进退避窗口。
+                        val attemptUrl = mirrors?.pick() ?: url
+                        val attemptStartedAtMs = System.currentTimeMillis()
+                        val bytesAtAttemptStart = seg.written
+                        var mirrorReported = false
                         try {
                             val res = downloader.downloadSegmentInto(
                                 taskId = taskId,
-                                url = url,
+                                url = attemptUrl,
                                 pieceStart = seg.start,
                                 // 把这次请求的句柄交给分片：卡死守护靠它"只掐这一条"。
                                 onCallStarted = { c -> seg.callRef.set(c) },
@@ -997,7 +1029,7 @@ internal class SegmentScheduler(
                                     // 先推进分片自身进度与速度画像（托管与续传都读它），
                                     // 再上报总进度。
                                     seg.observeProgress(totalWritten)
-                                    speedLimiter.awaitAllow(newly)
+                                    throttle(newly)
                                     val abs = min(downloaded.addAndGet(newly), total)
                                     recordThroughputBytes(newly)
                                     persistProgress()
@@ -1012,7 +1044,17 @@ internal class SegmentScheduler(
                                 directBuffer = direct,
                                 writeLock = seg.writeLock,
                                 ifRange = ifRange,
+                                expectedTotal = total,
                             )
+                            // 把这次的成败/速度回报给镜像池：成功的来源 EWMA 上升、
+                            // 失败的来源进入指数退避，下一个分片就会自动换源。
+                            mirrors?.report(
+                                url = attemptUrl,
+                                ok = res == SegmentResult.OK,
+                                bytes = (seg.written - bytesAtAttemptStart).coerceAtLeast(0),
+                                elapsedMs = System.currentTimeMillis() - attemptStartedAtMs,
+                            )
+                            mirrorReported = true
                             when (res) {
                                 SegmentResult.OK -> {
                                     // 【S4 修复】不再"每次成功都清零"。
@@ -1170,6 +1212,9 @@ internal class SegmentScheduler(
                             activeConns.decrementAndGet()
                             inFlight.decrementAndGet()
                             inFlightSegments.remove(seg)
+                            // 异常路径下 report 不会被调用，这里补一次归还，避免
+                            // MirrorPool 的 in-flight 计数永久虚高。
+                            if (!mirrorReported) mirrors?.release(attemptUrl)
                             reportConns()
                         }
                     }

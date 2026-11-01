@@ -47,7 +47,6 @@ internal class BuiltinHttpBackend(
         onConfigSeen?.invoke(context.config)
         val request = context.request
         val chunkDir = context.workDir
-        val speedLimiter = SpeedLimiter { context.config.globalSpeedLimitBytesPerSec }
 
         // ---------- 探测：必须快，且不能阻塞下载开始 ----------
         // 设计取舍：探测只为拿到大小/Range/重定向地址，它**不传输数据**。
@@ -252,7 +251,20 @@ internal class BuiltinHttpBackend(
             ResumeDecision.NOT_ATTEMPTED
         }
 
-        val discard = lenChanged || decision == ResumeDecision.MISMATCH
+        // 【取证失败要分两种情形，不能一刀切】
+        //
+        //  · validatorDiffers（服务器**给了**强校验器，而且变了）+ 指纹取不到
+        //      → 已经有"文件变了"的正面证据，只是没能逐字节确认。必须丢弃：
+        //        旧实现把它当"没事，接着下"，会拼出新旧混合、长度校验却通过的文件。
+        //
+        //  · weakButResuming（服务器**根本不给**强校验器）+ 指纹取不到
+        //      → 完全没有证据说明文件变过。此时丢弃等于"一次指纹请求失败就把用户
+        //        已下载的 GB 级数据全删掉"（夸克这类网盘的实测投诉）。
+        //        保留旧分片是更合理的默认，风险面仅限"同长度 + 无校验器 + 内容被换"。
+        val unverifiableButSuspicious = decision == ResumeDecision.UNVERIFIABLE && validatorDiffers
+        val discard = lenChanged ||
+            decision == ResumeDecision.MISMATCH ||
+            unverifiableButSuspicious
         if (discard) {
             // 丢弃过期/无法安全校验的进度，从头写（不报错，对用户透明）。
             // 现在只有两样东西要清：侧车进度与目标文件本身。
@@ -295,7 +307,6 @@ internal class BuiltinHttpBackend(
         chunkDir: File,
     ): BackendResult {
         val request = context.request
-        val speedLimiter = SpeedLimiter { context.config.globalSpeedLimitBytesPerSec }
 
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
         if (!supportsRange || total <= 0) {
@@ -348,6 +359,11 @@ internal class BuiltinHttpBackend(
 
         val connections = (request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
 
+        // 【先拿预算，再预热】旧实现把预热放在 acquire 之前：maxTotalConnections=1 时
+        // 仍然会额外建立 warmUpMaxParallel 条连接，预热变成了绕过全局预算的后门。
+        val budgetLease = connectionBudget?.acquire(connections)
+        val effectiveConnections = budgetLease?.permits ?: connections
+
         // 连接预热 / DNS 预解析：正式分片前先对解析后的最终 URL 建好若干连接（并解析 DNS），
         // 填充连接池，避免分片启动时串行等待 DNS + TCP/TLS 握手。
         if (context.config.warmUpConnections) {
@@ -357,22 +373,38 @@ internal class BuiltinHttpBackend(
             val warmCount = minOf(
                 context.config.warmUpConnectionCount.takeIf { it > 0 } ?: connections,
                 context.config.warmUpMaxParallel,
+                // 预热只预开"本任务已经拿到的额度"以内的连接：它们是给分片复用的，
+                // 不该比任务被允许的连接数还多。
+                effectiveConnections,
             ).coerceAtLeast(1)
             // 关键：预热**不得阻塞下载开始**。分片立即开始，预热建好的连接会自然进连接池被复用。
             kotlinx.coroutines.CoroutineScope(currentCtx).launch {
-                runCatching {
+                try {
                     downloader.warmUp(
                         effectiveUrl, taskHeaders, warmCount,
                         timeoutMs = context.config.warmUpTimeoutMs,
                         taskId = context.taskId,
                     )
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // 暂停/取消必须能打断预热，不能把 CancellationException 吞掉。
+                    throw e
+                } catch (_: Throwable) {
+                    // 预热失败不影响下载：分片自己会建连。
                 }
             }
         }
 
-        val budgetLease = connectionBudget?.acquire(connections)
-        val effectiveConnections = budgetLease?.permits ?: connections
-        val scheduler = SegmentScheduler(downloader, context.config, speedLimiter)
+        // 用宿主提供的**同一个**全局限速器（TurboClient.speedLimiter），
+        // 而不是每个任务各 new 一个 —— 否则"全局限速"会变成"每任务限速"。
+        val scheduler = SegmentScheduler(downloader, context.config) { bytes -> context.throttle(bytes) }
+        // 多镜像来源池：主 URL + request.mirrors。空/单个时保持旧行为（不建池）。
+        // 大小一致性由 downloadSegmentInto 的 expectedTotal 校验兜底：某个镜像
+        // 自报的总长与任务总长不符时，该来源会被判失败并进入退避。
+        val mirrorUrls = buildList {
+            add(effectiveUrl)
+            request.mirrors.forEach { m -> m.trim().takeIf { it.isNotEmpty() }?.let { add(it) } }
+        }.distinct()
+        val mirrorPool = if (mirrorUrls.size > 1 && total > 0) MirrorPool(mirrorUrls) else null
         // 真实并发数由调度器回报（而非直接用配置值），UI 才能看到实际跑满多少线程。
         val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(effectiveConnections)
 
@@ -388,6 +420,7 @@ internal class BuiltinHttpBackend(
                 onConnections = { live -> liveConnsRef.set(live) },
                 isActive = { context.isActive() },
                 ifRange = probe.strongIfRange,
+                mirrors = mirrorPool,
             )
         } finally {
             budgetLease?.let { connectionBudget?.release(it) }

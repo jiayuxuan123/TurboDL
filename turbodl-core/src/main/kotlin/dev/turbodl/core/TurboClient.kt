@@ -297,17 +297,24 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 if (coroutineContext[Job]?.isActive != true) return@launch
                 try { runTask(id, req) } finally { releaseSlot(); downloader.releaseTask(id) }
             } catch (e: CancellationException) {
-                setState(id, req, TaskState.PAUSED)
+                // 【必须完成 Deferred】旧实现这里只 setState(PAUSED)，不完成 completions[id]：
+                // resume() 之后调 pause()，正在 await(id) 的调用方会**永久挂起**
+                // （start() 那条路径是对的，resume() 这条漏了）。
+                completions[id]?.complete(Result.failure(e))
+                setState(
+                    id,
+                    req,
+                    if (pauseRequested.remove(id)) TaskState.PAUSED else TaskState.CANCELED,
+                )
             } catch (e: Exception) {
                 // 同 start()：优先用分片层记录的真实原因
-                emit(
-                    TurboEvent.Failed(
-                        id,
-                        downloader.takeWholeError(id)
-                            ?: e.message
-                            ?: e.javaClass.simpleName,
-                    ),
-                )
+                val reason = downloader.takeWholeError(id)
+                    ?: e.message
+                    ?: e.javaClass.simpleName
+                emit(TurboEvent.Failed(id, reason))
+                // 【状态必须落 FAILED】旧实现只发事件不改进度，progress 会永远停在
+                // DOWNLOADING/MERGING，宿主的任务列表看起来"还在下"。
+                updateProgress(id) { it.copy(state = TaskState.FAILED, error = reason) }
                 completions[id]?.complete(Result.failure(e))
             } finally {
                 jobs.remove(id, coroutineContext[Job])

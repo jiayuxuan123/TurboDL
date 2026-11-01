@@ -687,6 +687,12 @@ internal class SegmentDownloader(
         onProgress: suspend (newlyWritten: Long, totalWritten: Long) -> Unit,
         buffer: ByteArray,
         ifRange: String? = null,
+        /**
+         * 期望的文件总大小（可选）。多镜像场景下用来识别"这个镜像其实是另一个文件"：
+         * 镜像返回的 `Content-Range` 总长与它不符时直接判这次尝试失败，
+         * 让调度器把这个来源拉黑并换源 —— 否则不同长度的镜像混用会产生静默损坏。
+         */
+        expectedTotal: Long = -1,
         /** 请求发出后把句柄交给调用方（卡死守护据此"只掐这一条"）。 */
         onCallStarted: ((okhttp3.Call) -> Unit)? = null,
         /**
@@ -750,7 +756,22 @@ internal class SegmentDownloader(
                     }
                     206 -> {
                         val crStart = parseContentRangeStart(resp.header("Content-Range"))
-                        if (crStart != null && crStart != from) return@use SegmentResult.RANGE_IGNORED
+                        // 【必须能解析】旧实现只拦"解析成功但偏移不对"，解析失败（null）时
+                        // 直接放行按请求偏移写入。代理或异常 CDN 返回一个没有 Content-Range 的
+                        // 206 时，body 可能从别的偏移开始，只要长度恰好等于请求区间，
+                        // 错误字节就会被静默写进目标文件。没有可验证的起点 = 这次响应不可信。
+                        if (crStart == null) return@use SegmentResult.RANGE_IGNORED
+                        if (crStart != from) return@use SegmentResult.RANGE_IGNORED
+                        // 多镜像防护：服务器自报的总长与本次任务的总长不一致 =
+                        // 这个"镜像"其实是另一个文件。写进去就是静默损坏，
+                        // 直接判这次尝试失败，让调度器换源。
+                        val crTotal = parseContentRangeTotal(resp.header("Content-Range"))
+                        if (expectedTotal > 0 && crTotal != null && crTotal != expectedTotal) {
+                            reportFailure(
+                                "镜像文件大小不一致：该来源 $crTotal 字节，本任务 $expectedTotal 字节",
+                            )
+                            return@use SegmentResult.FAILED
+                        }
                         val body = resp.body ?: return@use SegmentResult.FAILED
                         // 收尾托管可能已缩短区间：以**当前**末端为准，多读到的丢弃。
                         end = endProvider()
@@ -792,7 +813,11 @@ internal class SegmentDownloader(
                             forgetResolvedUrl(taskId)
                             SegmentResult.AUTH_EXPIRED
                         } else if (code in 500..599) {
-                            SegmentResult.THROTTLED
+                            // 普通 5xx（500/501/505…）不是"你太快了"，不该触发并发背压。
+                            // 旧实现把所有 5xx 都归为 THROTTLED：既错误地降并发、又消耗
+                            // 限流重试预算，最终报出"持续被限流"这种误导性错误。
+                            reportFailure("HTTP $code")
+                            SegmentResult.FAILED
                         } else {
                             SegmentResult.FAILED
                         }
@@ -1166,6 +1191,12 @@ internal class SegmentDownloader(
                 val expected = if (total > 0) total else -1L
                 var written = 0L
                 RandomAccessFile(outFile, "rw").use { raf ->
+                    // 【必须显式截断】上面的 `outFile.delete()` 在 Windows 上经常失败
+                    // （目标文件此时还被 SegmentStore 的 FileChannel 持有着），而 delete()
+                    // 的返回值又被忽略。只 seek(0) 不截断的话，新内容比旧文件短时
+                    // 旧尾部会被原样保留；当 total<=0 时最终大小直接取文件长度，
+                    // 于是"下载成功"的文件里混着上一次的旧字节。
+                    raf.setLength(0)
                     raf.seek(0)
                     body.byteStream().use { input ->
                         val buf = ByteArray(bufferSizeProvider().coerceAtLeast(8 * 1024))
@@ -1236,6 +1267,13 @@ internal class SegmentDownloader(
         if (value.isNullOrBlank()) return null
         val spec = value.substringBefore('/').trim().removePrefix("bytes").trim()
         return spec.substringBefore('-').trim().toLongOrNull()
+    }
+
+    /** 从 `Content-Range: bytes 0-99/12345` 里取总长度；`*` 或格式异常返回 null。 */
+    private fun parseContentRangeTotal(value: String?): Long? {
+        if (value.isNullOrBlank()) return null
+        val total = value.substringAfter('/', "").trim()
+        return total.toLongOrNull()
     }
 
     private suspend fun writeSlice(

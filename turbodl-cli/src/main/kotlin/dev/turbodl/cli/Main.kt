@@ -47,6 +47,8 @@ private class Options {
     var connections = 16
     var maxTotalConnections = 0
     var expectedSha256: String? = null
+    /** 额外镜像来源（-M/--mirror，可重复）。 */
+    val mirrors = mutableListOf<String>()
     var speedLimit: Long = 0L            // 字节/秒，0=不限
     var retry = 5
     var output: File? = null             // -o
@@ -136,6 +138,7 @@ fun main(args: Array<String>) {
                 opts.headers[h.substring(0, idx).trim()] = h.substring(idx + 1).trim()
             }
             "-A", "--user-agent" -> opts.userAgent = take()
+            "-M", "--mirror" -> opts.mirrors.add(take())
             "-p", "--proxy" -> opts.proxy = parseProxy(take())
             "--doh" -> opts.dohUrl = take().takeIf { it.isNotBlank() }
             "--http-policy" -> opts.httpPolicy = when (take().lowercase()) {
@@ -320,6 +323,7 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
             url = task.url,
             destination = out,
             headers = headers,
+            mirrors = opts.mirrors.toList(),
             stableKey = stableKey,
             expectedSha256 = opts.expectedSha256,
         )
@@ -417,6 +421,7 @@ private fun printHelp(out: java.io.PrintStream = System.out) {
           -r, --retry <N>            分片失败重试次数（默认 5）
           -H, --header "K: V"        附加请求头，可重复
           -A, --user-agent <UA>      覆盖 User-Agent
+          -M, --mirror <URL>         同一文件的镜像来源（可重复）；引擎按实测速度择优并自动故障切换
           -p, --proxy <URL>          代理，如 http://127.0.0.1:7890 或 socks5://host:port
           --doh <URL>                DNS over HTTPS，如 https://dns.alidns.com/dns-query
           --http-policy <模式>       auto|http1|http2（默认 auto：分片走 h1、单流可协商 h2）
