@@ -52,6 +52,14 @@ CLI_ASSET = next(
 
 REPO = "https://github.com/jiayuxuan123/TurboDL"
 BLOB = f"{REPO}/blob/main"
+DOWNLOAD_EDGE = "https://dl.yunl.us.ci"
+
+
+def release_download_url(url: str) -> str:
+    prefix = "https://github.com/jiayuxuan123/TurboDL/releases/download/"
+    if url.startswith(prefix):
+        return f"{DOWNLOAD_EDGE}/turbodl/releases/download/{url[len(prefix):]}"
+    return url
 
 #: 本仓库实测的测试数（`./gradlew test`，0 跳过 0 失败）—— 不是估计值。
 TEST_COUNT = 199
@@ -656,14 +664,14 @@ def _doc_nav(current: dict, lang: str, href) -> str:
 def asset_rows(release: dict) -> list[list[str]]:
     """把 Release 的附件渲染成表格行。
 
-    **直链来自 GitHub API**（`refresh_releases.py` 抓的），不手写 —— 手写的链接迟早会指向
-    一个不存在的文件，而"下载按钮点了没反应"正是这个站点最不该有的东西。
+    资产元数据和 GitHub 备用链接来自 API；主下载地址改为同一 Release 的 Cloudflare 代理。
     """
     from sitekit import fmt_bytes
 
     return [
         [
-            f'<a href="{esc(a["url"])}" class="mono">{esc(a["name"])}</a>',
+            f'<a href="{esc(release_download_url(a["url"]))}" class="mono">{esc(a["name"])}</a>',
+            f'<a href="{esc(a["url"])}">GitHub</a>',
             f'<span class="num">{esc(fmt_bytes(a["size"]))}</span>',
         ]
         for a in release["assets"]
@@ -774,8 +782,15 @@ def _page_download(lang: str, href) -> str:
             # 附件表放进一档色差的面板：一屏里只有两列短文本时，裸露的表格看着像一屏空场
             # （深底上没有背景，视线落不到东西上）；给个地面之后这块才算"有内容"。
             '<div class="surface">'
-            + table(["File", "Size"] if en else ["文件", "大小"], asset_rows(LATEST))
+            + table(
+                ["Cloudflare cached download", "GitHub original", "Size"]
+                if en else ["Cloudflare 缓存下载", "GitHub 原始链接", "大小"],
+                asset_rows(LATEST),
+            )
             + "</div>"
+            + buttons([
+                ("Original GitHub release" if en else "GitHub 原始 Release", rel_url),
+            ])
             # 控制台碎片：拿到文件之后它实际会打印什么（事件名与字段名来自 Main.kt）
             + fragments.console(
                 [
