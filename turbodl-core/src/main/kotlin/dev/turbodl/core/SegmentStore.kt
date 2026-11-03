@@ -292,6 +292,7 @@ internal class SegmentStore(
         // 互相 setLength(0)、交错写头与分片记录，并竞争同一个 .tmp / .bak 的改名 ——
         // 轻则丢断点，重则生成"可解析但混合了两个时刻"的快照。
         synchronized(persistLock) {
+        val snapshot = canonicalSnapshot(pieces) ?: return
         runCatching {
             val tmp = File(stateFile.parentFile, stateFile.name + ".tmp")
             stateFile.parentFile?.mkdirs()
@@ -300,8 +301,8 @@ internal class SegmentStore(
                 f.write(MAGIC)
                 f.writeInt(VERSION)
                 f.writeLong(total)
-                f.writeInt(pieces.size)
-                for (p in pieces) {
+                f.writeInt(snapshot.size)
+                for (p in snapshot) {
                     f.writeLong(p.start)
                     f.writeLong(p.end)
                     f.writeLong(p.written)
@@ -326,6 +327,37 @@ internal class SegmentStore(
             runCatching { backup.delete() }
         }
         }
+    }
+
+    /**
+     * Copy the live grid into an immutable, ordered snapshot.
+     *
+     * Dynamic splitting can append a tail after earlier grid entries, and a
+     * concurrent persist can observe the brief interval where the old piece
+     * has been shortened but its tail has not been appended yet. Rejecting an
+     * incomplete snapshot keeps the last durable resume point intact.
+     */
+    private fun canonicalSnapshot(pieces: List<Piece>): List<Piece>? {
+        val snapshot = ArrayList<Piece>(pieces.size)
+        for (piece in pieces) {
+            val start = piece.start
+            val end = piece.end
+            val written = piece.written
+            if (start < 0 || end < start || written < 0 || written > end - start + 1) {
+                return null
+            }
+            snapshot.add(Piece(start, end, written))
+        }
+        snapshot.sortBy { it.start }
+
+        if (total == 0L) return snapshot.takeIf { it.isEmpty() }
+        if (snapshot.isEmpty()) return null
+        var expectedStart = 0L
+        for (piece in snapshot) {
+            if (piece.start != expectedStart) return null
+            expectedStart = piece.end + 1
+        }
+        return snapshot.takeIf { expectedStart == total }
     }
 
     /** 清掉进度记录与目标文件（内容已变、无法安全续传时）。 */

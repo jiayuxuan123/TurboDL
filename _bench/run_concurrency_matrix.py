@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import statistics
@@ -38,10 +39,19 @@ def parse_ints(value: str) -> list[int]:
     return [int(part.strip()) for part in value.split(",") if part.strip()]
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run_case(
     *,
     url: str,
     expected_size: int,
+    expected_sha256: str | None,
     connections: int,
     mode: str,
     proxy: str | None,
@@ -68,6 +78,11 @@ def run_case(
         command.extend(["--proxy", proxy])
     if mode == "fixed":
         command.extend(["--no-slow-start", "--no-adaptive", "--no-tail-assist"])
+    else:
+        # The production host opts into the fast-start policy: begin at the
+        # requested ceiling, then let DOWNWARD adaptation shed excess
+        # connections only when aggregate throughput proves it is free.
+        command.append("--no-slow-start")
 
     started = time.monotonic()
     completed = subprocess.run(
@@ -81,10 +96,7 @@ def run_case(
     )
     elapsed = time.monotonic() - started
     actual_size = output.stat().st_size if output.exists() else 0
-    ok = (
-        completed.returncode == 0
-        and actual_size == expected_size
-    )
+    actual_sha256 = sha256_file(output) if output.exists() else ""
     completed_event = None
     connection_values: list[int] = []
     for line in completed.stdout.splitlines():
@@ -99,6 +111,16 @@ def run_case(
             if isinstance(active, int) and active > 0:
                 connection_values.append(active)
 
+    checksum_matches = expected_sha256 is None or actual_sha256 == expected_sha256
+    event_checksum_matches = not completed_event or (
+        completed_event.get("sha256", "") == actual_sha256
+    )
+    ok = (
+        completed.returncode == 0
+        and actual_size == expected_size
+        and checksum_matches
+        and event_checksum_matches
+    )
     result = {
         "mode": mode,
         "connections": connections,
@@ -107,7 +129,10 @@ def run_case(
         "elapsed_s": elapsed,
         "bytes": actual_size,
         "mb_per_s": actual_size / (1024 * 1024) / elapsed if elapsed > 0 else 0.0,
-        "sha256": (completed_event or {}).get("sha256", ""),
+        "sha256": actual_sha256,
+        "expected_sha256": expected_sha256 or "",
+        "source_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+        "jar_sha256": sha256_file(JAR),
         "max_connections": max(connection_values, default=0),
         "median_connections": statistics.median(connection_values) if connection_values else 0,
         "error": "" if ok else completed.stdout[-2000:],
@@ -128,6 +153,10 @@ def median_results(samples: list[dict]) -> dict:
         "bytes": size,
         "mb_per_s": size / (1024 * 1024) / elapsed if elapsed > 0 else 0.0,
         "samples_mb_s": [row["mb_per_s"] for row in samples],
+        "sha256": samples[0]["sha256"],
+        "expected_sha256": samples[0]["expected_sha256"],
+        "source_sha256": samples[0]["source_sha256"],
+        "jar_sha256": samples[0]["jar_sha256"],
         "max_connections": max((row["max_connections"] for row in samples), default=0),
         "median_connections": statistics.median(
             [row["median_connections"] for row in samples]
@@ -139,6 +168,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True)
     parser.add_argument("--size", type=int, required=True)
+    parser.add_argument("--sha256", help="expected full-file SHA-256")
     parser.add_argument("--connections", default="8,16,32,64,128")
     parser.add_argument("--mode", choices=("fixed", "adaptive", "both"), default="both")
     parser.add_argument("--repeats", type=int, default=2)
@@ -147,6 +177,10 @@ def main() -> int:
     parser.add_argument("--keep-files", action="store_true")
     parser.add_argument("--tag", default="network")
     args = parser.parse_args()
+    if args.sha256 is not None:
+        args.sha256 = args.sha256.lower()
+        if len(args.sha256) != 64 or any(c not in "0123456789abcdef" for c in args.sha256):
+            parser.error("--sha256 must be 64 hexadecimal characters")
 
     if not JAR.is_file():
         print(f"missing CLI jar: {JAR}", file=sys.stderr)
@@ -164,6 +198,7 @@ def main() -> int:
                 row = run_case(
                     url=args.url,
                     expected_size=args.size,
+                    expected_sha256=args.sha256,
                     connections=connections,
                     mode=mode,
                     proxy=args.proxy,
@@ -198,6 +233,10 @@ def main() -> int:
                 "bytes",
                 "mb_per_s",
                 "samples_mb_s",
+                "sha256",
+                "expected_sha256",
+                "source_sha256",
+                "jar_sha256",
                 "max_connections",
                 "median_connections",
             ),

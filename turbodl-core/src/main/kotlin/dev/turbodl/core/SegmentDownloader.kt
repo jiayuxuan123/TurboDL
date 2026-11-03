@@ -90,7 +90,7 @@ internal class SegmentDownloader(
      * 【自愈】失败时立即遗忘（见 [forgetResolvedUrl]）：若记住的是带签名、有时效的
      * CDN 直链且已过期，下一次尝试会自动回到原始 URL 重新解析，而不是抱着失效地址反复撞。
      */
-    private val resolvedUrlByTask = ConcurrentHashMap<Long, String>()
+    private val resolvedUrlByTask = ConcurrentHashMap<Long, ConcurrentHashMap<String, String>>()
 
     /**
      * 最近一次整文件下载失败的具体原因（按 taskId）。
@@ -138,11 +138,27 @@ internal class SegmentDownloader(
 
     /** 取本次分片实际应请求的地址：优先用已学习到的终址，否则回落到原始 URL。 */
     private fun urlFor(taskId: Long, original: String): String =
-        resolvedUrlByTask[taskId] ?: original
+        resolvedUrlByTask[taskId]?.get(original) ?: original
 
     /** 失败时遗忘已学习的终址，让下次尝试重新走原始 URL 解析（应对签名过期）。 */
-    private fun forgetResolvedUrl(taskId: Long) {
-        resolvedUrlByTask.remove(taskId)
+    private fun learnResolvedUrl(taskId: Long, original: String, finalUrl: String) {
+        if (finalUrl == original) return
+        resolvedUrlByTask.computeIfAbsent(taskId) { ConcurrentHashMap() }[original] = finalUrl
+    }
+
+    /**
+     * Forget one source's learned redirect. A task can have several mirror
+     * sources; forgetting the whole task made a refreshed primary redirect
+     * accidentally discard still-valid mirror entries.
+     */
+    private fun forgetResolvedUrl(taskId: Long, original: String? = null) {
+        if (original == null) {
+            resolvedUrlByTask.remove(taskId)
+            return
+        }
+        val entries = resolvedUrlByTask[taskId] ?: return
+        entries.remove(original)
+        if (entries.isEmpty()) resolvedUrlByTask.remove(taskId, entries)
     }
 
     fun cancelCalls(taskId: Long) {
@@ -218,6 +234,7 @@ internal class SegmentDownloader(
                 runCatching {
                     val req = Request.Builder()
                         .url(target)
+                        .tag(RequestOrigin::class.java, RequestOrigin(url))
                         .header("Range", "bytes=0-0")
                         .apply { headers.forEach { (k, v) -> header(k, v) } }
                         .header("Accept-Encoding", "identity")
@@ -227,7 +244,7 @@ internal class SegmentDownloader(
                         // 顺便学习重定向终址，供后续预热请求与所有分片复用。
                         if (taskId != null && (resp.isSuccessful || resp.code == 416)) {
                             val finalUrl = resp.request.url.toString()
-                            if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
+                            learnResolvedUrl(taskId, url, finalUrl)
                         }
                         val body = resp.body
                         if (body == null) return@use
@@ -253,7 +270,7 @@ internal class SegmentDownloader(
                 }
             }
             warmOnce(url)
-            val learned = taskId?.let { resolvedUrlByTask[it] } ?: url
+            val learned = taskId?.let { urlFor(it, url) } ?: url
             val jobs = (1 until n).map {
                 async(Dispatchers.IO) { warmOnce(learned) }
             }
@@ -384,6 +401,7 @@ internal class SegmentDownloader(
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(url)
+                .tag(RequestOrigin::class.java, RequestOrigin(url))
                 .header("Range", rangeSpec)
                 .apply { headers.forEach { (k, v) -> header(k, v) } }
                 // 协商用的 UA 要在 headers **之后**设置：headers 里带的那份不生效时，
@@ -540,6 +558,7 @@ internal class SegmentDownloader(
         val end = start + len - 1
         val req = Request.Builder()
             .url(url)
+            .tag(RequestOrigin::class.java, RequestOrigin(url))
             .header("Range", "bytes=$start-$end")
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             // 与分片请求一致：禁止透明解压，否则比对的是压缩后的字节。
@@ -728,6 +747,7 @@ internal class SegmentDownloader(
         val target = urlFor(taskId, url)
         val req = Request.Builder()
             .url(target)
+            .tag(RequestOrigin::class.java, RequestOrigin(url))
             .header("Range", "bytes=$from-$end")
             .apply { if (!ifRange.isNullOrBlank()) header("If-Range", ifRange) }
             .apply { headers.forEach { (k, v) -> header(k, v) } }
@@ -741,10 +761,10 @@ internal class SegmentDownloader(
             call.execute().use { resp ->
                 if (resp.isSuccessful || resp.code == 416) {
                     val finalUrl = resp.request.url.toString()
-                    if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
+                    learnResolvedUrl(taskId, url, finalUrl)
                 }
                 if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
-                    forgetResolvedUrl(taskId)
+                    forgetResolvedUrl(taskId, url)
                     return@use SegmentResult.FAILED
                 }
                 when (val code = resp.code) {
@@ -807,10 +827,24 @@ internal class SegmentDownloader(
                         } else SegmentResult.OK
                     }
                     200 -> SegmentResult.RANGE_IGNORED
-                    416 -> SegmentResult.OK
+                    416 -> {
+                        val actualTotal = parseContentRangeTotal(resp.header("Content-Range"))
+                        if (expectedTotal > 0 && actualTotal != null && actualTotal != expectedTotal) {
+                            forgetResolvedUrl(taskId, url)
+                            reportFailure(
+                                "HTTP 416：来源文件大小已变为 $actualTotal 字节，本任务期望 $expectedTotal 字节",
+                            )
+                        } else {
+                            reportFailure(
+                                "HTTP 416：请求区间 $from-$end 尚未完成，" +
+                                    "在已写入 $done/${expectedNowFor416(pieceStart, endProvider)} 字节时被服务器拒绝",
+                            )
+                        }
+                        SegmentResult.FAILED
+                    }
                     else -> {
                         if (code == 401 || code == 403 || code == 410) {
-                            forgetResolvedUrl(taskId)
+                            forgetResolvedUrl(taskId, url)
                             SegmentResult.AUTH_EXPIRED
                         } else if (code in 500..599) {
                             // 普通 5xx（500/501/505…）不是"你太快了"，不该触发并发背压。
@@ -1044,6 +1078,7 @@ internal class SegmentDownloader(
         val target = urlFor(taskId, url)
         val req = Request.Builder()
             .url(target)
+            .tag(RequestOrigin::class.java, RequestOrigin(url))
             .header("Range", "bytes=$from-$end")
             .apply { if (!ifRange.isNullOrBlank()) header("If-Range", ifRange) }
             .apply { headers.forEach { (k, v) -> header(k, v) } }
@@ -1059,12 +1094,12 @@ internal class SegmentDownloader(
                 // 只在响应可用时记（成功或 416），避免把错误页/拦截页的地址当成终址。
                 if (resp.isSuccessful || resp.code == 416) {
                     val finalUrl = resp.request.url.toString()
-                    if (finalUrl != target) resolvedUrlByTask[taskId] = finalUrl
+                    learnResolvedUrl(taskId, url, finalUrl)
                 }
                 if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
                     // 网页错误页常见于「签名直链已过期/被拦截」→ 遗忘终址，
                     // 让下一次尝试回到原始 URL 重新解析，而不是抱着失效地址反复撞。
-                    forgetResolvedUrl(taskId)
+                    forgetResolvedUrl(taskId, url)
                     return@use SegmentResult.FAILED
                 }
                 when (val code = resp.code) {
@@ -1111,7 +1146,13 @@ internal class SegmentDownloader(
                         // （若服务器真回了小于请求区间的 200，那多半是代理篡改/错误页，重试比猜测语义更安全。）
                         SegmentResult.RANGE_IGNORED
                     }
-                    416 -> SegmentResult.OK  // Range 越界：通常该分片已完成
+                    416 -> {
+                        forgetResolvedUrl(taskId, url)
+                        failureByTask[taskId] =
+                            "HTTP 416：$from-$end 仍有 ${expected - existing} 字节未完成，" +
+                                "服务器却声明区间不可满足"
+                        SegmentResult.FAILED
+                    }
                     else -> {
                         // 401/403/410 是「授权/时效」类信号：记住的 CDN 直链很可能已过期，
                         // 遗忘它 → 下次重新走原始 URL 解析（自愈），而不是一直撞同一个失效地址。
@@ -1119,7 +1160,7 @@ internal class SegmentDownloader(
                         // 单独归为 AUTH_EXPIRED（而非 FAILED）：403 **不是**"并发太高"的信号，
                         // 若混进普通失败会触发背压降并发 —— 既解决不了 403，又白掉速度。
                         if (code == 401 || code == 403 || code == 410) {
-                            forgetResolvedUrl(taskId)
+                            forgetResolvedUrl(taskId, url)
                             SegmentResult.AUTH_EXPIRED
                         } else if (code in 500..599) {
                             SegmentResult.THROTTLED
@@ -1158,6 +1199,7 @@ internal class SegmentDownloader(
         if (existing > 0) outFile.delete()
         val req = Request.Builder()
             .url(url)
+            .tag(RequestOrigin::class.java, RequestOrigin(url))
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .header("Accept-Encoding", "identity")
             .get().build()
@@ -1275,6 +1317,9 @@ internal class SegmentDownloader(
         val total = value.substringAfter('/', "").trim()
         return total.toLongOrNull()
     }
+
+    private fun expectedNowFor416(pieceStart: Long, endProvider: () -> Long): Long =
+        (endProvider() - pieceStart + 1).coerceAtLeast(0)
 
     private suspend fun writeSlice(
         input: java.io.InputStream,

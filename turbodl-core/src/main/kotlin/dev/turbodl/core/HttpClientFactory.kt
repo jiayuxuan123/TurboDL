@@ -28,7 +28,6 @@ import javax.net.ssl.X509TrustManager
  *  - TLS：可选忽略证书校验（抓包调试）。
  */
 internal object HttpClientFactory {
-
     /** 协议偏好：分片并发用 H1_ONLY；探测/单流回退可用 ALLOW_H2。 */
     enum class ProtocolPreference { H1_ONLY, ALLOW_H2 }
 
@@ -104,10 +103,33 @@ internal object HttpClientFactory {
             // 默认 UA 拦截器：若请求未显式携带 User-Agent，注入配置的通用浏览器 UA（避免部分 CDN 拦截）。
             .addInterceptor { chain ->
                 val req = chain.request()
-                val out = if (req.header("User-Agent").isNullOrBlank())
-                    req.newBuilder().header("User-Agent", config.userAgent).build()
-                else req
+                val out = req.newBuilder()
+                    .apply {
+                        if (req.header("User-Agent").isNullOrBlank()) {
+                            header("User-Agent", config.userAgent)
+                        }
+                        if (req.tag(RequestOrigin::class.java) == null) {
+                            tag(RequestOrigin::class.java, RequestOrigin(req.url.toString()))
+                        }
+                    }
+                    .build()
                 chain.proceed(out)
+            }
+            // OkHttp preserves most request headers across redirects. Origin
+            // credentials must not follow a redirect to a different scheme,
+            // host, or port; proxy credentials are handled separately.
+            .addNetworkInterceptor { chain ->
+                val current = chain.request()
+                val original = current.tag(RequestOrigin::class.java)?.url
+                    ?: chain.call().request().url.toString()
+                if (!MirrorHeaderPolicy.sameOrigin(original, current.url.toString())) {
+                    val cleaned = current.newBuilder()
+                        .headers(MirrorHeaderPolicy.stripOriginCredentials(current.headers))
+                        .build()
+                    chain.proceed(cleaned)
+                } else {
+                    chain.proceed(current)
+                }
             }
             .connectionPool(
                 ConnectionPool(

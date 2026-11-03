@@ -1,7 +1,7 @@
 package dev.turbodl.core
 
 /** 下载任务定义（提交给引擎的输入）。 */
-data class DownloadRequest(
+data class DownloadRequest @JvmOverloads constructor(
     /** 下载 URL（HTTP/HTTPS）。 */
     val url: String,
 
@@ -26,20 +26,6 @@ data class DownloadRequest(
     val connectionsOverride: Int? = null,
 
     /**
-     * 同一份文件的其他来源（镜像）。
-     *
-     * 引擎会把这些 URL 和 [url] 一起放进来源池：先各跑一小段实测速度，
-     * 之后按实测速度把分片派给更快的来源；某个来源连续失败时自动进入
-     * 退避窗口并把分片切到其他来源。
-     *
-     * 【必须真的指向同一份文件】引擎在探测阶段会核对大小：与主 URL 大小不一致的
-     * 镜像会被直接剔除。不同大小的镜像混用会产生静默损坏，所以这一条是硬校验。
-     *
-     * 留空 = 只有 [url] 一个来源，行为与旧版完全一致。
-     */
-    val mirrors: List<String> = emptyList(),
-
-    /**
      * 稳定分片目录键（用于断点续传）。
      *
      * 引擎默认用内部自增任务 id 命名分片临时目录；但内部 id 在进程重启或重新 submit 后会变化，
@@ -58,6 +44,25 @@ data class DownloadRequest(
      * 在事件回调（[TurboEvent]）中原样拿回，无需自建 roomId→业务信息映射。
      */
     val tags: Map<String, String> = emptyMap(),
+
+    /**
+     * 同一份文件的其他来源（镜像）。
+     *
+     * 引擎会把这些 URL 和 [url] 一起放进来源池：先各跑一小段实测速度，
+     * 之后按实测速度把分片派给更快的来源；某个来源连续失败时自动进入
+     * 退避窗口并把分片切到其他来源。
+     *
+     * 【必须真的指向同一份文件】引擎在探测阶段会核对大小：与主 URL 大小不一致的
+     * 镜像会被直接剔除。不同大小的镜像混用会产生静默损坏，所以这一条是硬校验。
+     *
+     * 留空 = 只有 [url] 一个来源，行为与旧版完全一致。
+     * 跨源镜像默认只继承非凭据请求头；Cookie、Authorization、API key
+     * 等敏感头不会自动发送到不同 scheme/host/port 的镜像。
+     *
+     * 该字段放在构造器末尾，并用 [JvmOverloads] 保留旧版尾部省略参数的
+     * JVM 构造器，避免升级 SDK 时既有调用方触发 NoSuchMethodError。
+     */
+    val mirrors: List<String> = emptyList(),
 ) {
     init {
         require(

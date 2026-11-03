@@ -14,6 +14,8 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import java.io.File
+import java.io.DataOutputStream
+import java.io.FileOutputStream
 import java.net.InetSocketAddress
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -489,7 +491,25 @@ class RegressionFixesTest {
                 } finally {
                     writer.close()
                 }
-                assertTrue(stateFile.isFile, "前置条件：不完整侧车文件应已写出")
+                assertFalse(
+                    stateFile.exists(),
+                    "persist 必须拒绝不完整网格，不能把它写成新的续传点",
+                )
+
+                // 读取端仍需防御旧版本或其他写入者留下的残缺侧车。
+                DataOutputStream(FileOutputStream(stateFile)).use { out ->
+                    out.write(byteArrayOf('T'.code.toByte(), 'D'.code.toByte(), 'L'.code.toByte(), 'P'.code.toByte()))
+                    out.writeInt(1)
+                    out.writeLong(total)
+                    out.writeInt(4)
+                    repeat(4) { index ->
+                        val start = index.toLong() * 128 * 1024
+                        out.writeLong(start)
+                        out.writeLong(start + 128 * 1024 - 1)
+                        out.writeLong(128 * 1024L)
+                    }
+                }
+                assertTrue(stateFile.isFile, "前置条件：残缺侧车文件应已写出")
 
                 val reopened = SegmentStore(destination, stateFile, total)
                 reopened.open()

@@ -12,6 +12,7 @@ import dev.turbodl.core.TaskProgress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.io.FileInputStream
 import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
@@ -234,6 +235,7 @@ fun main(args: Array<String>) {
             println("--- [${index + 1}/${resolved.size}] ${task.url}")
         }
         val ok = runCatching { downloadOne(task, opts) }.getOrElse { e ->
+            if (System.getenv("TURBODL_DEBUG_STACK") == "1") e.printStackTrace()
             if (opts.json) println("""{"type":"failed","url":"${jsonEsc(task.url)}","error":"${jsonEsc(e.message ?: e.javaClass.simpleName)}"}""")
             else if (!opts.quiet) System.err.println("下载失败：${e.message}")
             false
@@ -358,13 +360,19 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
     result.fold(
         onSuccess = { f ->
             if (opts.json) {
-                println("""{"type":"completed","url":"${jsonEsc(task.url)}","file":"${jsonEsc(f.absolutePath)}","bytes":${f.length()},"sha256":"$stableKey"}""")
+                val digest = sha256File(f)
+                println(
+                    """{"type":"completed","url":"${jsonEsc(task.url)}",""" +
+                        """"file":"${jsonEsc(f.absolutePath)}","bytes":${f.length()},""" +
+                        """"sha256":"$digest","stableKey":"$stableKey"}"""
+                )
             } else if (!opts.quiet) {
                 println("完成：${f.absolutePath}（${f.length()} 字节）")
             }
             true
         },
         onFailure = { e ->
+            if (System.getenv("TURBODL_DEBUG_STACK") == "1") e.printStackTrace()
             if (opts.json) {
                 println("""{"type":"failed","url":"${jsonEsc(task.url)}","error":"${jsonEsc(e.message ?: e.javaClass.simpleName)}"}""")
             } else if (!opts.quiet) {
@@ -517,6 +525,19 @@ private fun formatDuration(ms: Long): String {
 private fun sha16(s: String): String =
     MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
         .joinToString("") { "%02x".format(it) }.take(16)
+
+private fun sha256File(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(1024 * 1024)
+    FileInputStream(file).use { input ->
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            if (read > 0) digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
 
 private fun jsonEsc(s: String): String =
     buildString {

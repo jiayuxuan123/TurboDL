@@ -6,6 +6,8 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -168,5 +170,57 @@ class TurboClientTest {
         assertEquals(sha256(payload), sha256(out.readBytes()))
         // 6.4MB / 2MB/s ≈ 3.2s；给宽松下限 2s（避免 CI 抖动误判）
         assertTrue(elapsed >= 2000, "限速应使耗时不低于 ~2s，实际 ${elapsed}ms")
+    }
+
+    @Test
+    fun `pause racing with final completion cannot overwrite completed state`() = runBlocking {
+        val backendStarted = CountDownLatch(1)
+        val releaseBackend = CountDownLatch(1)
+        val backend = object : DownloadBackend {
+            override val name: String = "pause-completion-race"
+            override fun supports(request: DownloadRequest): Boolean =
+                request.url.startsWith("pause-race://")
+
+            override suspend fun download(context: BackendContext): BackendResult {
+                backendStarted.countDown()
+                releaseBackend.await(5, TimeUnit.SECONDS)
+                val destination = context.request.destination
+                destination.writeBytes(byteArrayOf(7))
+                context.reportTotalSize(1)
+                context.reportProgress(1, 1)
+                return BackendResult(listOf(destination), 1)
+            }
+        }
+
+        val client = TurboClient(TurboConfig(maxConcurrentTasks = 1))
+        client.backendResolver = BackendResolver { backend }
+        val id = client.submit(
+            DownloadRequest(
+                url = "pause-race://file",
+                destination = File(tmpDir, "pause-completion-race.bin"),
+            )
+        )
+        try {
+            assertTrue(backendStarted.await(5, TimeUnit.SECONDS), "测试后端应已开始执行")
+            client.pause(id)
+            releaseBackend.countDown()
+
+            assertTrue(client.await(id).isSuccess, "已经完整落盘的任务应返回成功")
+            val cleanupField = TurboClient::class.java.getDeclaredField("pauseCleanup").apply {
+                isAccessible = true
+            }
+            @Suppress("UNCHECKED_CAST")
+            val cleanups = cleanupField.get(client) as Map<Long, kotlinx.coroutines.Job>
+            cleanups[id]?.join()
+
+            assertEquals(
+                TaskState.COMPLETED,
+                client.progress.value[id]?.state,
+                "暂停清理不得把已完成任务改回 PAUSED",
+            )
+        } finally {
+            releaseBackend.countDown()
+            client.shutdown()
+        }
     }
 }

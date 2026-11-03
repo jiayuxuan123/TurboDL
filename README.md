@@ -17,7 +17,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Progress survives crashes without inflated claims**: a small sidecar records each segment's written byte count, and it is always persisted *after* the data lands. A crash can only lose the seconds since the last flush, and re-downloading that range is idempotent.
 - **Failure attribution without collateral damage**: every segment keeps its own last error, and a request cancelled because *another* segment exhausted its retries does not consume the cancelled segment's retry budget. A single flaky connection therefore neither fails the task nor produces a misleading "retry N times failed (Canceled)" message.
 - **Dynamic segmentation**: fine-grained pre-splitting + work stealing, so slow connections don't drag down the whole transfer and the "last segment finishing on a single thread" long tail is eliminated (IDM/XDM idea).
-- **Throughput-seeking concurrency**: the configured connection count is a ceiling, not a forced fan-out. It starts at 8 workers, doubles only after aggregate throughput improves by at least 30%, grows the worker pool and segment grid with it, and stops at the first plateau. A request for 256 connections therefore cannot silently pay 256-worker / 1024-segment overhead when the link only benefits from 8–16.
+- **Host-controlled adaptive concurrency**: the configured connection count is a ceiling. `DOWNWARD` starts at the caller's requested count and reduces only when repeated throughput measurements prove the connections are wasted; `UPWARD` starts conservatively and doubles only after aggregate throughput improves by at least 30%. The selected policy is a host decision, not a provider-specific rule baked into the engine.
 - **Endgame by ETA, not by segment size**: tail assist now tracks each in-flight segment's EWMA throughput and takes the remaining tail from the connection with the worst estimated completion time. A shrinking segment's old writer also stops at the handoff boundary instead of writing into the portion assigned to the new connection.
 - **Global resource budgets**: task slots are FIFO and atomic, and `maxTotalConnections` caps the aggregate connection count across every built-in HTTP task. Three 64-connection tasks can no longer silently create 192 sockets when the host or router should only see a smaller budget.
 - **Desktop I/O path**: JVM hosts use direct ByteBuffers; Android/Dalvik falls back to heap buffers and `RandomAccessFile`. Sidecar replacement keeps a durable backup instead of deleting the old progress before the new one is visible.
@@ -28,9 +28,24 @@ TurboDL is a download core written from scratch. It **only draws on the architec
   - Server does not support / ignores Range → automatic fallback to whole-file single-stream download;
   - A bad/timed-out segment → **only that segment is retried**, the whole task is not discarded;
   - Verifies that the actually returned bytes match the requested Range (guards against servers tampering with Range and returning the whole file).
-- **Restrained adaptivity**: concurrency is throttled down **only** on 429/503 or when consecutive failures hit a threshold; normal network jitter **never** reduces the thread count (no AIMD jitter heuristics).
+- **Restrained adaptivity**: a task starts at the caller's connection ceiling. A lower tier is accepted only when a clean, post-switch window still retains at least 90% of aggregate throughput; stale requests from the previous tier are excluded. 429/503 backpressure always takes priority.
 - **Resumable downloads**: segments are persisted; pause/resume continues from the real on-disk progress.
 - **Byte-level integrity check**: total size is verified after merge, rejecting corrupted files.
+
+## 0.4.1.0 — industrial reliability pass
+
+This patch builds on the `0.4.0.0` correctness overhaul:
+
+- HTTP `416` no longer marks an incomplete segment as successful. A transient rejection is retried; a persistent one carries an actionable failure and a changed source size invalidates the learned redirect.
+- Dynamic tail segments are persisted as an ordered, validated immutable snapshot. An incomplete transient grid cannot replace the last durable resume point.
+- Mirrors no longer overwrite each other's learned redirect target, and cross-origin mirrors/redirects do not inherit Cookie, Authorization or API-key headers. Proxy credentials remain separate.
+- Task events are forwarded by one ordered consumer. `MERGING`, `COMPLETED` and `FAILED` now have explicit state-change events before their terminal events, so a host cannot receive completion before the lifecycle transition.
+- Pause cleanup can no longer overwrite a completed/canceled/failed terminal state.
+- `DownloadRequest.mirrors` moved to the end of the constructor and `JvmOverloads` keeps the legacy JVM constructor available; `component7/component8` retain the old field meanings.
+- Concurrent tail-assist snapshots no longer race Kotlin's `size()`/iterator fast path at high concurrency; a c=256 stress run exposed and reproduced the `NoSuchElementException`.
+- Adaptive down-probes now wait until in-flight work is actually at the new target. Previously, requests left over from the old tier inflated the probe window and could halve real throughput.
+- The CLI's JSON completion event now reports the real file SHA-256 plus the resume `stableKey`; it previously put the 16-character stable key in the `sha256` field.
+- The benchmark runner now computes a local SHA-256 and supports `--sha256` instead of trusting file size alone. Its adaptive scenario uses the production fast-start policy unless slow start is explicitly requested.
 
 ## 0.4.0.0 — correctness overhaul
 

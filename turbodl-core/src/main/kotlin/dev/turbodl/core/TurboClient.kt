@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -135,6 +136,15 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
 
     private val _events = MutableSharedFlow<TurboEvent>(extraBufferCapacity = 256)
     val events: SharedFlow<TurboEvent> = _events.asSharedFlow()
+    /**
+     * Single-consumer staging queue for [events].
+     *
+     * The old implementation launched one coroutine per event. Those coroutines
+     * have no ordering guarantee, so a Completed event could be delivered before
+     * the StateChanged(COMPLETED) that produced it. Channel send order is atomic;
+     * one collector then forwards events to the SharedFlow in that order.
+     */
+    private val eventQueue = Channel<TurboEvent>(Channel.UNLIMITED)
 
     private val _progress = MutableStateFlow<Map<Long, TaskProgress>>(emptyMap())
     val progress: StateFlow<Map<Long, TaskProgress>> = _progress.asStateFlow()
@@ -145,6 +155,14 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
 
     private val closed = AtomicBoolean(false)
     private val pauseRequested = ConcurrentHashMap.newKeySet<Long>()
+
+    init {
+        scope.launch {
+            for (event in eventQueue) {
+                _events.emit(event)
+            }
+        }
+    }
     private val pauseCleanup = ConcurrentHashMap<Long, Job>()
     private val cancelRequested = ConcurrentHashMap.newKeySet<Long>()
     private val cancelCleanup = ConcurrentHashMap<Long, Job>()
@@ -211,8 +229,9 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 val reason = downloader.takeWholeError(id)
                     ?: e.message
                     ?: e.javaClass.simpleName
+                setState(id, request, TaskState.FAILED)
+                updateProgress(id) { it.copy(error = reason) }
                 emit(TurboEvent.Failed(id, reason))
-                updateProgress(id) { it.copy(state = TaskState.FAILED, error = reason) }
                 completions[id]?.complete(Result.failure(e))
             } finally {
                 jobs.remove(id, coroutineContext[Job])
@@ -243,7 +262,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         val cleanup = scope.launch {
             job?.let { runCatching { it.cancelAndJoin() } }
             if (!cancelRequested.contains(id)) {
-                requests[id]?.let { setState(id, it, TaskState.PAUSED) }
+                setNonTerminalState(id, TaskState.PAUSED)
             }
             pauseCleanup.remove(id, coroutineContext[Job])
         }
@@ -371,6 +390,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
      */
     fun shutdown() {
         if (!closed.compareAndSet(false, true)) return
+        eventQueue.close()
         scope.coroutineContext[Job]?.cancel()
         // 惰性客户端可能从未创建：没创建过就没什么可关的，别在这里把它唤醒。
         streamClientRef?.let { sc ->
@@ -521,7 +541,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         total: Long,
         offsets: List<Long>? = null,
     ) {
-        updateProgress(id) { it.copy(state = TaskState.MERGING) }
+        setState(id, request, TaskState.MERGING)
         val dest = request.destination
         // 【预先合并命中】后端已把完整数据写进目标文件（overlap merge），
         // parts 就是目标文件本身 —— 此时**不能再合并一次**（那是把文件拷到自己身上）。
@@ -561,8 +581,9 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             }
         }
         chunkDirOf(id).deleteRecursively()
+        setState(id, request, TaskState.COMPLETED)
         updateProgress(id) {
-            it.copy(state = TaskState.COMPLETED, downloadedBytes = dest.length(), totalBytes = dest.length())
+            it.copy(downloadedBytes = dest.length(), totalBytes = dest.length())
         }
         emit(TurboEvent.Completed(id, dest, dest.length()))
         completions[id]?.complete(Result.success(dest))
@@ -596,13 +617,29 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     }
 
     private fun emit(event: TurboEvent) {
-        scope.launch { _events.emit(event) }
+        // The channel is unbounded only for this bounded engine event stream.
+        // Progress events are already throttled by TurboConfig.progressIntervalMs.
+        eventQueue.trySend(event)
     }
 
     private fun setState(id: Long, request: DownloadRequest, state: TaskState) {
         updateProgress(id) { it.copy(state = state) }
         emit(TurboEvent.StateChanged(id, state))
     }
+
+    private fun setNonTerminalState(id: Long, state: TaskState): Boolean {
+        var changed = false
+        _progress.update { progressById ->
+            val current = progressById[id]
+            changed = current != null && !current.state.isTerminal()
+            if (changed) progressById + (id to current!!.copy(state = state)) else progressById
+        }
+        if (changed) emit(TurboEvent.StateChanged(id, state))
+        return changed
+    }
+
+    private fun TaskState.isTerminal(): Boolean =
+        this == TaskState.COMPLETED || this == TaskState.FAILED || this == TaskState.CANCELED
 
     private fun updateProgress(id: Long, transform: (TaskProgress) -> TaskProgress) {
         var next: TaskProgress? = null

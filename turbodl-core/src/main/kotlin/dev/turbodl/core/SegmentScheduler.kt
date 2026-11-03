@@ -523,7 +523,12 @@ internal class SegmentScheduler(
          *
          * 只在收尾阶段被读，写入点也少（领取/归还），用并发集合即可，无需锁。
          */
-        val inFlightSegments: MutableSet<Segment> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        // Tail assist snapshots this set while workers concurrently add/remove
+        // segments. ConcurrentHashMap's weakly-consistent key iterator can throw
+        // NoSuchElementException if an entry disappears between hasNext() and
+        // next() (observed at c=256). CopyOnWriteArraySet gives the reader a
+        // stable snapshot; in-flight mutations are far less frequent than bytes.
+        val inFlightSegments: MutableSet<Segment> = java.util.concurrent.CopyOnWriteArraySet()
 
         /** 收尾托管已生效次数（用于日志与调参；也在测试里做行为断言）。 */
         val tailAssistCount = AtomicInteger(0)
@@ -541,7 +546,12 @@ internal class SegmentScheduler(
             val now = System.currentTimeMillis()
             if (!force && now - lastPersistAt < PROGRESS_PERSIST_INTERVAL_MS) return
             lastPersistAt = now
-            runCatching { store.persist(segmentList.toList().map { it.piece }) }
+            // `CopyOnWriteArrayList.toList()` is unsafe here: Kotlin first reads
+            // size() and then creates a separate iterator, so a worker can split
+            // or append a segment in between and turn the size==1 fast path into
+            // iterator().next() on an empty snapshot. toTypedArray() takes one
+            // atomic COW snapshot and cannot observe that mixed state.
+            runCatching { store.persist(segmentList.toTypedArray().map { it.piece }) }
         }
 
         fun poll(): Segment? = synchronized(pendingLock) { pending.poll() }
@@ -589,7 +599,8 @@ internal class SegmentScheduler(
          * 【资格判据为什么是这几条】
          *  - `measuredAt == desired`：窗口跨越了并发变化 → 测到的是混合吞吐，不能用。
          *  - 不是收尾（队列仍有活可领 或 在飞分片够多）：收尾阶段并发天然塌下去。
-         *  - 在飞连接达到目标的一半：[ADAPTIVE_MIN_ACTIVE_RATIO] 的说明。
+         *  - 实际连接数处于「目标的一半 … 目标」区间：既不能空转，
+         *    也不能把降档前尚未结束的旧请求算进新档吞吐。
          *  - 窗口内无 429/503、无连续失败：那是背压的地盘，吞吐不能用来做档位判断。
          */
         fun observeThroughput(nowNanos: Long, queued: Int) {
@@ -601,9 +612,16 @@ internal class SegmentScheduler(
                 val bytes = throughputWindowBytes
                 val inFlightNow = inFlight.get()
                 val notTail = queued > 0 || inFlightNow >= measuredAt
-                val activeEnough = activeConns.get() >= max(1, (measuredAt * ADAPTIVE_MIN_ACTIVE_RATIO).toInt())
+                val activeNow = activeConns.get()
+                // A lower target does not stop requests already in flight. Until
+                // those extra workers finish, the window still carries the old
+                // concurrency's throughput and would falsely "prove" that halving
+                // connections is free. Require a window at or below the new target
+                // on both ends, not just a lower bound.
+                val activeAtTarget = activeNow in
+                    max(1, (measuredAt * ADAPTIVE_MIN_ACTIVE_RATIO).toInt())..measuredAt
                 val eligible = throughputWindowEligible &&
-                    measuredAt == desired.get() && notTail && activeEnough &&
+                    measuredAt == desired.get() && notTail && activeAtTarget &&
                     !windowHadFailure.get() && bytes > 0
                 val throughput = if (elapsed > 0) bytes * 1_000_000_000.0 / elapsed else 0.0
                 throughputWindowBytes = 0L
@@ -681,7 +699,9 @@ internal class SegmentScheduler(
             var unknownBest: Segment? = null
             var unknownRemaining = 0L
             val minBytes = config.tailAssistMinBytes
-            for (s in inFlightSegments.toList()) {
+            // Same size/iterator race as persistProgress: snapshot the concurrent
+            // set with a single atomic toTypedArray() call.
+            for (s in inFlightSegments.toTypedArray()) {
                 synchronized(s.writeLock) {
                     if (s.splits >= config.maxSplitsPerSegment) return@synchronized
                     // 已下多少 = 该分片的写入进度（由 onProgress 实时推进）
@@ -1009,6 +1029,7 @@ internal class SegmentScheduler(
                         reportConns()
                         // 每个分片自己挑来源：快的镜像多派，失败的镜像进退避窗口。
                         val attemptUrl = mirrors?.pick() ?: url
+                        val attemptHeaders = MirrorHeaderPolicy.headersFor(url, attemptUrl, headers)
                         val attemptStartedAtMs = System.currentTimeMillis()
                         val bytesAtAttemptStart = seg.written
                         var mirrorReported = false
@@ -1024,7 +1045,7 @@ internal class SegmentScheduler(
                                 alreadyWritten = seg.written,
                                 // 按偏移直写目标文件：没有临时分片文件、没有收尾合并。
                                 writeAt = { pos, buf, off, len -> store.writeAt(pos, buf, off, len) },
-                                headers = headers,
+                                headers = attemptHeaders,
                                 onProgress = { newly, totalWritten ->
                                     // 先推进分片自身进度与速度画像（托管与续传都读它），
                                     // 再上报总进度。
