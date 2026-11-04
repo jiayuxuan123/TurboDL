@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T00:00:00Z",
+  "title": "Design System: TurboDL Website",
+  "extensions": {
+    "colorMeta": {
+      "rail": {"role": "primary", "displayName": "Rail Green"},
+      "signal-text": {"role": "secondary", "displayName": "Signal Text Orange"},
+      "paper": {"role": "neutral", "displayName": "Mineral Paper"},
+      "ink": {"role": "neutral", "displayName": "Control Ink"}
+    },
+    "motion": [
+      {"name": "packet-travel", "value": "cubic-bezier(0.2, 0.75, 0.25, 1)", "purpose": "Single packet marker along the route; disabled under reduced motion."}
+    ],
+    "breakpoints": [
+      {"name": "mobile", "value": "760px"},
+      {"name": "tablet", "value": "960px"}
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Download or documentation entry.",
+      "html": "<a class=\"ds-primary\" href=\"#\">Get TurboDL</a>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:12px 18px;background:var(--rail);color:var(--paper-raised);border:1px solid var(--rail);border-radius:4px;text-decoration:none;font-weight:700}.ds-primary:hover{background:var(--rail-dark)}.ds-primary:focus-visible{outline:3px solid var(--signal);outline-offset:3px}"
+    },
+    {
+      "name": "Route Station",
+      "kind": "custom",
+      "description": "Five-stage request route node.",
+      "html": "<div class=\"ds-route\"><span>01</span><strong>Request</strong><p>DownloadRequest enters the route.</p></div>",
+      "css": ".ds-route{display:grid;grid-template-columns:40px 1fr;gap:4px 14px;padding:16px 0;border-top:1px solid var(--steel)}.ds-route span{grid-row:1/3;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--rail);color:var(--paper-raised);font:600 12px/1 var(--mono)}.ds-route p{color:var(--muted)}"
+    },
+    {
+      "name": "Code Frame",
+      "kind": "custom",
+      "description": "Inset shell and JSON examples with copy control.",
+      "html": "<figure class=\"ds-code\"><figcaption>shell</figcaption><pre><code>java -jar turbodl-cli-all.jar URL -o file.bin</code></pre></figure>",
+      "css": ".ds-code{margin:0;background:#111713;color:#e8eee9;border-radius:7px;padding:16px;overflow:auto}.ds-code figcaption{color:#aebbb4;font:12px var(--mono);margin-bottom:10px}.ds-code pre{margin:0}.ds-code code{font:13px/1.6 var(--mono)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Packet Transit Control Board",
+    "overview": "A light engineering console that routes a download request through observable stages.",
+    "keyCharacteristics": ["Continuous request route", "Source-derived data", "Daylight engineering surface"],
+    "rules": [{"name": "The Daylight Rule", "body": "The board remains legible without glow or a dark viewport.", "section": "colors"}],
+    "dos": ["Do label illustrative routes.", "Do derive facts from source and test XML."],
+    "donts": ["Don't present deprecated controls as active.", "Don't use neon or fake telemetry."]
+  }
+}

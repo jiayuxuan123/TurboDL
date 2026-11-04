@@ -1,356 +1,444 @@
 #!/usr/bin/env python3
-"""TurboDL 首页：传输工程台。
-
-本文件只负责把 `content.py` 的真实事实排成页面，不新增任何版本号、附件或性能数字。
-视觉母题来自产品本身：Range 探测、并行分片、工作窃取、合并校验。
-"""
+"""TurboDL homepage: a packet route, its operating defaults, and the exits."""
 
 from __future__ import annotations
 
-from sitekit import code_block, esc, md_inline, section, table
+from sitekit import code_block, esc, icon, md_inline, section, table
 
 
 def _facts():
-    """延迟读取内容层，避免 content.py -> home.py -> content.py 循环导入。"""
     import content
 
     return content
 
 
-def _strip() -> str:
-    """16 路分片条；具体宽度和推进由页面 CSS / JS 生成。"""
-    return '<span class="shard-inline" data-strip aria-hidden="true"></span>'
+def _value(name: str, fallback: str) -> str:
+    fact = _facts().TURBO_CONFIG.get(name, {})
+    return str(fact.get("default", fallback))
 
 
-def _hero(lang: str, href) -> str:
-    en = lang == "en"
-    F = _facts()
-    title_a, title_b = ("Many hands,", "one file.") if en else ("各下一段，", "合成一份。")
-    note = (
-        "A Kotlin/JVM engine splits one HTTP transfer across sixteen workers, "
-        "resumes from bytes that actually landed, and rejects a server that lies about Range."
-        if en
-        else "Kotlin/JVM 下载引擎把一次 HTTP 传输拆给 16 个工作单元，从磁盘上真实落下的字节续传，"
-        "并拒绝在 Range 上撒谎的服务端。"
-    )
-    primary = f"Download {F.LATEST['tag']}" if en else f"下载 {F.LATEST['tag']}"
-    secondary = "Read the engine docs" if en else "阅读引擎文档"
-    release = F.LATEST["tag"]
-    eyebrow_tail = "NO UI REQUIRED" if en else "无需界面"
-    release_label = "RELEASE" if en else "版本"
-    engine_label = "ENGINE" if en else "引擎"
-    verify_label = "VERIFY" if en else "校验"
-    request_shards = f"1 REQUEST → {esc(16)} SHARDS" if en else f"1 次请求 → {esc(16)} 个分片"
-    test_count = f"{esc(F.TEST_COUNT)} TESTS" if en else f"{esc(F.TEST_COUNT)} 项测试"
-    sample_label = "SAMPLE TRACE" if en else "示例采样"
-    shards_in_flight = "SHARDS<br>IN FLIGHT" if en else "个分片<br>并行中"
-    state_label = "STATE" if en else "状态"
-    state_value = "downloading" if en else "下载中"
-    elapsed_label = "ELAPSED" if en else "耗时"
-    eta_label = "ETA" if en else "剩余"
-    retries_label = "RETRIES" if en else "重试"
-    progress_label = "progress event / byte counter" if en else "进度事件 / 字节计数"
-    return f"""
-<section class="hero-bench" data-hero>
-  <div class="hero-copy">
-    <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span><span>HTTP/RANGE</span><span>KOTLIN JVM 17+</span><span class="eyebrow-tail">{eyebrow_tail}</span></p>
-    <h1 class="hero-title"><span>{esc(title_a)}</span><span class="signal-text">{esc(title_b)}</span></h1>
-    <p class="hero-note">{esc(note)}</p>
-    <div class="hero-act">
-      <a class="btn btn-primary" href="{href("download")}"><span>{esc(primary)}</span><span class="btn-arrow" aria-hidden="true">↓</span></a>
-      <a class="btn btn-ghost" href="{href("docs")}"><span>{esc(secondary)}</span><span class="btn-arrow" aria-hidden="true">↗</span></a>
-    </div>
-    <dl class="hero-facts">
-      <div><dt>{release_label}</dt><dd>{esc(release)}</dd></div>
-      <div><dt>{engine_label}</dt><dd>{request_shards}</dd></div>
-      <div><dt>{verify_label}</dt><dd>{test_count}</dd></div>
-    </dl>
-  </div>
-
-  <aside class="telemetry-board" data-ui aria-label="{'Sample transfer telemetry' if en else '示例传输遥测'}">
-    <div class="telemetry-head">
-      <span><i class="signal-dot" aria-hidden="true"></i> {sample_label}</span>
-      <code>212.4 / 341.8 MB</code>
-    </div>
-    <div class="telemetry-readout">
-      <p class="telemetry-speed"><strong>18.6</strong><span>MB/s</span></p>
-      <p class="telemetry-workers"><strong>16</strong><span>{shards_in_flight}</span></p>
-    </div>
-    <div class="telemetry-plot">
-      <span class="plot-label">RANGE / 0—341.8&nbsp;MB</span>
-      <div class="shard-field" data-strip aria-hidden="true"></div>
-      <div class="plot-axis" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-    </div>
-    <div class="telemetry-grid">
-      <div><span>{state_label}</span><b>{state_value}</b></div>
-      <div><span>{elapsed_label}</span><b>00:18.42</b></div>
-      <div><span>{eta_label}</span><b>00:07.02</b></div>
-      <div><span>{retries_label}</span><b>0</b></div>
-    </div>
-    <div class="telemetry-foot">
-      <span>{progress_label}</span>
-      <b>62%</b>
-    </div>
-  </aside>
-</section>
-"""
-
-
-def _pipeline(lang: str) -> str:
+def _route_board(lang: str) -> str:
     en = lang == "en"
     stages = [
         (
             "01",
-            "1",
-            "probe",
-            "次探测",
-            "A Range request asks one question before the file is cut: can this server serve byte ranges?"
+            "Request" if en else "请求",
+            "DownloadRequest" if en else "DownloadRequest",
+            "The host submits a URL and destination. The task enters a bounded queue."
             if en
-            else "下载开始前先问一次：这个服务端认不认字节范围 Range？",
+            else "宿主提交 URL 与目标路径，任务进入有界队列。",
+            "accepted" if en else "已接收",
         ),
         (
             "02",
-            "16",
-            "shards",
-            "个分片",
-            "Sixteen segments move at once. Work stealing takes the remaining block away from a slow connection."
+            "Probe" if en else "探测",
+            f'{_value("probeTimeoutMs", "6_000")} ms',
+            "One range request establishes size, byte-range support and validators. Unsupported Range falls back to a whole-file stream."
             if en
-            else "16 个分片同时进行；工作窃取会把剩余工作从慢连接手里拿走。",
+            else "一次 Range 请求确认大小、字节范围支持与校验器；不支持 Range 时退回整文件单流。",
+            "range ready" if en else "范围就绪",
         ),
         (
             "03",
-            "1",
-            "verify",
-            "次校验",
-            "Every returned range is checked, then the merged file is checked against the expected byte count."
+            "Partition" if en else "分片",
+            f'{_value("segmentsPerConnection", "4")}x',
+            "Blocks are sized for work stealing: about four blocks per connection, capped by block size."
             if en
-            else "先核对每一段实际返回的字节，再核对合并文件的预期总大小。",
+            else "为工作窃取安排分片：每连接约四块，并受块大小上限约束。",
+            "blocks queued" if en else "分片排队",
+        ),
+        (
+            "04",
+            "Concurrency" if en else "并发",
+            f'{_value("maxConnectionsPerTask", "16")}',
+            "Workers claim ranges independently. Adaptive control only descends on server pressure."
+            if en
+            else "工作单元独立领取 Range；只有服务端背压时才自适应下调并发。",
+            "lanes active" if en else "线路活动",
+        ),
+        (
+            "05",
+            "Verify" if en else "校验",
+            "byte exact" if en else "字节一致",
+            "Returned bytes are checked against the requested range, then the merged size and terminal state are verified."
+            if en
+            else "返回字节先与请求的 Range 对齐，再核对合并后的大小与终态事件。",
+            "checked" if en else "已核对",
         ),
     ]
-    nodes = []
-    for code, count, unit_en, unit_zh, copy in stages:
-        nodes.append(
-            '<div class="pipeline-node">'
-            f'<span class="node-code">{esc(code)}</span>'
-            f'<p class="node-value"><strong>{esc(count)}</strong><span>{esc(unit_en if en else unit_zh)}</span></p>'
-            f"<p>{esc(copy)}</p>"
-            "</div>"
+    items = []
+    for number, title, value, copy, state in stages:
+        items.append(
+            f"""<li class="route-stage">
+  <span class="route-node" aria-hidden="true"></span>
+  <div class="route-stage-head">
+    <span class="stage-number">{number}</span>
+    <span class="stage-state"><i aria-hidden="true"></i>{esc(state)}</span>
+  </div>
+  <h3>{esc(title)}</h3>
+  <p class="stage-value">{esc(value)}</p>
+  <p>{esc(copy)}</p>
+</li>"""
         )
     return (
-        '<div class="pipeline" data-ui>'
-        + '<span class="pipeline-link" aria-hidden="true"></span>'.join(nodes)
-        + "</div>"
+        '<div class="route-board" data-illustration>'
+        '<div class="route-board-head">'
+        f'<h2>{"Five checkpoints before a file exists" if en else "文件出现之前的五个检查点"}</h2>'
+        '<p class="illustration-note">'
+        + (
+            "Illustrative route. Every value shown below is a TurboConfig.kt default, not a measured speed."
+            if en
+            else "路线为示意。下面的值均来自 TurboConfig.kt 的默认配置，不是实测速度。"
+        )
+        + "</p></div>"
+        f'<ol class="route-line">{"".join(items)}</ol>'
+        '<div class="route-legend">'
+        '<span><i class="status-lamp is-green" aria-hidden="true"></i>'
+        + ("configured state" if en else "配置状态")
+        + "</span>"
+        '<span><i class="status-lamp is-orange" aria-hidden="true"></i>'
+        + ("failure boundary" if en else "失败边界")
+        + "</span>"
+        '<span class="legend-note">'
+        + ("route illustration / not throughput data" if en else "路线示意 / 非吞吐数据")
+        + "</span></div></div>"
     )
 
 
-def _process_notes(lang: str) -> str:
+def _hero(lang: str, href) -> str:
+    en = lang == "en"
+    title = (
+        "One request,<br><span>laid onto rails.</span>"
+        if en
+        else "一次请求，<br><span>送上受控线路。</span>"
+    )
+    lead = (
+        "TurboDL is a Kotlin/JVM download engine with explicit probe, partition, "
+        "concurrency and verification stages. The host keeps control; the engine makes the route observable."
+        if en
+        else "TurboDL 是一个 Kotlin/JVM 下载引擎，把探测、分片、并发与校验拆成清楚的阶段。"
+        "控制权留在宿主，引擎负责让整条路线可观察、可恢复。"
+    )
+    return f"""<section class="home-hero">
+  <div class="hero-lead">
+    <h1 class="display">{title}</h1>
+    <div class="hero-side">
+      <p class="lead">{esc(lead)}</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="{href("download")}">
+          {icon("download")}<span>{"Get TurboDL" if en else "获取 TurboDL"}</span>
+        </a>
+        <a class="btn btn-secondary" href="{href("docs")}">
+          {icon("book")}<span>{"Read the manual" if en else "阅读工程手册"}</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  {_route_board(lang)}
+</section>"""
+
+
+def _operating_defaults(lang: str) -> str:
     en = lang == "en"
     rows = [
-        (
-            "PROBE" if en else "请求之前",
-            "Range support is settled first. If the server cannot do it, the engine stops pretending and downloads straight through."
+        [
+            '<span class="mono">maxConnectionsPerTask</span>',
+            '<span class="data-value">16</span>',
+            "1..256" if en else "1..256",
+            "Default lanes for one task." if en else "单任务默认并发线路数。",
+        ],
+        [
+            '<span class="mono">maxConcurrentTasks</span>',
+            '<span class="data-value">3</span>',
+            "1..64" if en else "1..64",
+            "Bounded task queue." if en else "有界的任务队列。",
+        ],
+        [
+            '<span class="mono">segmentsPerConnection</span>',
+            '<span class="data-value">4</span>',
+            "1..64" if en else "1..64",
+            "Work-stealing reserve per lane." if en else "每条线路的工作窃取余量。",
+        ],
+        [
+            '<span class="mono">blockSize</span>',
+            '<span class="data-value">16 MiB</span>',
+            "upper bound" if en else "单块上限",
+            "Coarser blocks reduce request fan-out." if en else "更粗的分块降低请求扇出。",
+        ],
+        [
+            '<span class="mono">tailAssistMinBytes</span>',
+            '<span class="data-value">256 KiB</span>',
+            "tail threshold" if en else "收尾阈值",
+            "Below this, splitting costs more than it saves." if en else "低于此值继续拆分得不偿失。",
+        ],
+        [
+            '<span class="mono">maxRetries</span>',
+            '<span class="data-value">5</span>',
+            "0..50" if en else "0..50",
+            "Per-segment retry budget." if en else "单个分片的重试预算。",
+        ],
+        [
+            '<span class="mono">probeTimeoutMs</span>',
+            '<span class="data-value">6,000 ms</span>',
+            "minimum 1,000" if en else "最小 1,000",
+            "Probe is bounded; it does not carry file bytes." if en else "探测有界，且不传输文件正文字节。",
+        ],
+        [
+            '<span class="mono">stallTimeoutMs</span>',
+            '<span class="data-value">45,000 ms</span>',
+            "0 = off" if en else "0 = 关闭",
+            "Detects a half-dead connection, not normal jitter." if en else "识别半死连接，不把正常抖动当故障。",
+        ],
+    ]
+    return section(
+        "Defaults that shape the route" if en else "塑造路线的默认值",
+        '<div class="split-ledger"><div class="split-copy">'
+        '<p class="lede">'
+        + (
+            "These are operating constraints, not a speed promise. Each row is a public field in "
+            '<span class="mono">TurboConfig.kt</span>; the host can override it per client.'
             if en
-            else "先确认服务端是否支持 Range。不支持就不假装支持，退回整条下载。",
+            else "这些是运行约束，不是速度承诺。每一行都是 "
+            '<span class="mono">TurboConfig.kt</span> 的公开字段，宿主可按 client 覆盖。'
+        )
+        + "</p>"
+        '<p class="small">'
+        + (
+            "The route diagram is illustrative. The defaults below are source-verifiable."
+            if en
+            else "路线图是示意；下表默认值可回到源码逐项核对。"
+        )
+        + "</p></div>"
+        + table(
+            ["Config field" if en else "配置字段", "Default" if en else "默认值", "Range" if en else "范围", "Operating effect" if en else "运行影响"],
+            rows,
+            compact=True,
+        )
+        + "</div>",
+    )
+
+
+def _controls(lang: str) -> str:
+    en = lang == "en"
+    controls = [
+        (
+            "dynamicSegmentation",
+            True,
+            "Dynamic segmentation" if en else "动态分片",
+            "Historical switch for tail assist; both it and tailAssist must be true."
+            if en
+            else "收尾托管的历史开关；它与 tailAssist 同时为 true 才生效。",
         ),
         (
-            "SCHEDULE" if en else "下载进行时",
-            "The block count is about four times the connection count, so a slow worker never owns the last remaining piece."
+            "tailAssist",
+            True,
+            "Tail assist" if en else "收尾托管",
+            "Idle workers can take the end of in-flight segments after the work queue empties."
             if en
-            else "块数约为连接数的四倍，慢连接不会独占最后剩下那块工作。",
+            else "工作队列空后，空闲工作单元可以接管在飞分片的尾部。",
         ),
         (
-            "VERIFY" if en else "说完成之前",
-            "The bytes returned are compared with the range that was asked for; the merged file is compared with the total size."
+            "adaptiveConcurrency",
+            True,
+            "Adaptive concurrency" if en else "自适应并发",
+            "Downward adaptation. Ordinary throughput jitter does not reduce the lane count."
             if en
-            else "实际返回的字节要和请求的 range 对上；合并后的文件还要和总大小对上。",
+            else "只向下收敛。普通吞吐抖动不会减少线路数。",
+        ),
+        (
+            "slowStart",
+            True,
+            "Slow start" if en else "慢启动",
+            "Ramps from the configured initial lane count instead of opening everything at once."
+            if en
+            else "从配置的初始线路数逐步升速，而不是一次打开全部连接。",
+        ),
+        (
+            "warmUpConnections",
+            True,
+            "Connection warm-up" if en else "连接预热",
+            "Optional warm-up is bounded and never delays the transfer indefinitely."
+            if en
+            else "可选的预热有超时上限，不会无限拖延正式传输。",
+        ),
+        (
+            "skipProbeWhenSizeKnown",
+            True,
+            "Skip known-size probe" if en else "已知大小则跳过探测",
+            "When the host already knows the size, the extra metadata request is skipped."
+            if en
+            else "宿主已知大小时，跳过额外的元数据请求。",
         ),
     ]
-    items = "".join(
-        f'<li><span class="process-code">{esc(code)}</span><p>{esc(copy)}</p></li>'
-        for code, copy in rows
-    )
-    return f'<ol class="process-notes">{items}</ol>'
-
-
-BANDS = [
-    {
-        "field": "dynamicSegmentation",
-        "default": True,
-        "say": {"en": "Split work finer than the connection count.", "zh": "把工作切得比连接数更细。"},
-        "conseq": {
-            "en": "About four blocks per connection, so the final stretch is never one worker on its own. Off: fixed blocks plus work stealing.",
-            "zh": "约四条连接对应四块工作，收尾阶段不会只剩一个工作单元。关闭后退回固定块大小 + 工作窃取。",
-        },
-    },
-    {
-        "field": "tailAssist",
-        "default": True,
-        "say": {"en": "Give the tail to whatever is idle.", "zh": "把尾巴交给空闲的工作单元。"},
-        "conseq": {
-            "en": "At most two splits per segment in the endgame; nothing below 2 MiB is split, so a 16 MiB block tops out at four parts.",
-            "zh": "只在收尾阶段生效，每个分片最多拆两次；低于 2 MiB 不拆，16 MiB 的块最多变成四段。",
-        },
-    },
-    {
-        "field": "overlapMerge",
-        "default": False,
-        "say": {"en": "Merge while the last bytes arrive.", "zh": "最后几个字节还在路上时先合并。"},
-        "conseq": {
-            "en": "Measured on 512 MB / 64 connections: 11.08 s to 10.39 s, about 6%. It can duplicate a write with tail assist, so it stays off.",
-            "zh": "512 MB / 64 连接实测：11.08 s 降到 10.39 s，约 6%。与收尾托管同时开启时可能重复写，所以默认关闭。",
-        },
-    },
-    {
-        "field": "bufferedSegmentWrite",
-        "default": False,
-        "say": {"en": "Write segments through a buffer.", "zh": "分片写入走缓冲流。"},
-        "conseq": {
-            "en": "16 MB / 128 connections / 64 KB segments: 2576 ms direct, 2584 ms buffered. The 0.3% difference is noise; resume stays honest without it.",
-            "zh": "16 MB / 128 连接 / 64 KB 分片：直写 2576 ms、缓冲 2584 ms，0.3% 落在噪声里；不加它，续传进度更可靠。",
-        },
-    },
-    {
-        "field": "trustAllCerts",
-        "default": False,
-        "say": {"en": "Trust any certificate.", "zh": "信任任何证书。"},
-        "conseq": {
-            "en": "Packet-capture debugging only. It turns certificate validation off, so production keeps it off.",
-            "zh": "只给抓包调试用。它关掉证书校验，生产环境保持关闭。",
-        },
-    },
-]
-
-
-def _bands(lang: str) -> str:
-    en = lang == "en"
-    items = []
-    for band in BANDS:
-        checked = "true" if band["default"] else "false"
-        state = (
-            ("ON BY DEFAULT" if band["default"] else "OFF BY DEFAULT")
+    rows = []
+    for field, on, label, copy in controls:
+        checked = "true" if on else "false"
+        rows.append(
+            f"""<div class="control-row">
+  <div class="control-name">
+    <span class="mono">{field}</span>
+    <strong>{esc(label)}</strong>
+  </div>
+  <p>{esc(copy)}</p>
+  <button class="switch" type="button" role="switch" aria-checked="{checked}"
+    data-on-label="{"Default on" if en else "默认开启"}"
+    data-off-label="{"Default off" if en else "默认关闭"}">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">{"Default on" if en else "默认开启"}</span>
+  </button>
+</div>"""
+        )
+    return section(
+        "Controls with runtime authority" if en else "真正有运行效力的控制项",
+        '<p class="section-lead">'
+        + (
+            "Only current, non-deprecated switches are shown. Toggling here demonstrates state; "
+            "it does not modify an engine instance."
             if en
-            else ("默认开启" if band["default"] else "默认关闭")
+            else "这里只列当前有效、未废弃的开关。拨动仅演示状态，不会修改真实引擎实例。"
         )
-        items.append(
-            f'<article class="band{" is-on" if band["default"] else ""}">'
-            '<div class="band-head">'
-            f'<code>{esc(band["field"])}</code>'
-            f'<button class="sw" type="button" role="switch" aria-checked="{checked}" aria-label="{esc(band["field"])}">'
-            '<span aria-hidden="true"></span></button>'
-            "</div>"
-            f'<p class="band-say">{esc(band["say"][lang])}</p>'
-            f'<p class="band-conseq">{esc(band["conseq"][lang])}</p>'
-            f'<p class="band-state">{esc(state)}</p>'
-            "</article>"
-        )
-    return '<div class="band-grid" data-ui>' + "".join(items) + "</div>"
+        + "</p>"
+        + '<div class="control-ledger">'
+        + "".join(rows)
+        + "</div>"
+        + '<p class="section-foot mono">TurboConfig.kt · current defaults</p>',
+    )
 
 
-def _inventory(lang: str) -> str:
+def _modules(lang: str) -> str:
     en = lang == "en"
-    names = [
-        ("turbodl-core", "engine / zero plugin dependency" if en else "引擎 / 零插件依赖"),
-        ("turbo-plugin-runtime", "lifecycle + extension points" if en else "生命周期 + 扩展点"),
-        ("turbo-plugin-bootstrap", "one-call wiring" if en else "一次调用完成装配"),
-        ("turbo-plugin-hls", "HLS VOD backend" if en else "HLS 点播后端"),
-        ("turbo-plugin-js", "QuickJS loader" if en else "QuickJS 加载器"),
-        ("turbo-plugin-parser", "share-link parser" if en else "分享链接解析"),
-        ("turbodl-cli", "scriptable command line" if en else "可脚本化命令行"),
+    modules = [
+        ("turbodl-core", "Required" if en else "必需", "HTTP range engine, resume, retry, queueing, DNS/proxy." if en else "HTTP Range 引擎、续传、重试、队列、DNS/代理。"),
+        ("turbo-plugin-runtime", "Optional" if en else "可选", "Lifecycle, disposal, services, events and extension points." if en else "生命周期、清理、服务、事件与扩展点。"),
+        ("turbo-plugin-bootstrap", "Optional" if en else "可选", "One-call assembly for the base runtime and HTTP backend." if en else "一次调用装配基础运行时与 HTTP 后端。"),
+        ("turbo-plugin-hls", "Optional" if en else "可选", "HLS VOD playlists, concurrent segments and AES-128." if en else "HLS 点播清单、分片并发与 AES-128。"),
+        ("turbo-plugin-js", "Optional" if en else "可选", "QuickJS loader for plugins written in JavaScript." if en else "加载 JavaScript 插件的 QuickJS 加载器。"),
+        ("turbo-plugin-parser", "Optional" if en else "可选", "Share-link parsing for Weibo, Xiaohongshu and Pixiv." if en else "微博、小红书与 Pixiv 分享链接解析。"),
+        ("turbodl-cli", "Separate" if en else "独立", "A scriptable JAR over the SDK, with NDJSON output." if en else "基于 SDK 的可脚本化 JAR，支持 NDJSON 输出。"),
     ]
     rows = "".join(
-        f'<li><code>{esc(name)}</code><span>{esc(role)}</span></li>'
-        for name, role in names
+        f"""<li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>{esc(name)}</code>
+  <span class="module-state{' is-required' if state in ("Required", "必需") else ''}">{esc(state)}</span>
+  <p>{esc(copy)}</p>
+</li>"""
+        for name, state, copy in modules
     )
-    return f'<ol class="module-index" data-lit>{rows}</ol>'
-
-
-def _telemetry(lang: str) -> str:
-    en = lang == "en"
-    progress_label = "PROGRESS EVENT" if en else "进度事件"
-    rows = [
-        ("state", "downloading"),
-        ("downloaded", "212.4 MB"),
-        ("total", "341.8 MB"),
-        ("percent", "62"),
-        ("speed", "18.6 MB/s"),
-        ("connections", "16"),
-        ("eta_ms", "7 020"),
-    ]
-    grid = "".join(f"<div><span>{esc(k)}</span><b>{esc(v)}</b></div>" for k, v in rows)
-    return (
-        '<div class="runtime-panel" data-ui>'
-        '<div class="runtime-head">'
-        f'<span><i class="signal-dot" aria-hidden="true"></i> {progress_label}</span>'
-        '<b>62%</b>'
-        "</div>"
-        '<div class="runtime-bar"><i style="--value:62%"></i></div>'
-        f'<div class="runtime-grid">{grid}</div>'
-        '<p class="runtime-foot">'
-        + ('Every field comes from the engine event stream; the SDK renders no interface of its own.'
-           if en else "每个字段都来自引擎事件流；SDK 自己不画任何界面。")
-        + "</p></div>"
+    return section(
+        "One repository, seven separate stops" if en else "一个仓库，七个独立站点",
+        '<p class="section-lead">'
+        + (
+            "The engine is complete without the plugin framework. Optional modules add protocol and host integration; dependency direction never reverses."
+            if en
+            else "不安装插件框架，引擎也能完整工作。可选模块增加协议与宿主集成能力；依赖方向始终不反转。"
+        )
+        + "</p>"
+        + f'<ol class="module-route">{rows}</ol>',
     )
 
 
-def _console(lang: str) -> str:
-    en = lang == "en"
-    lines = [
-        '{"type":"start","url":"https://example.com/image.iso","output":"/tmp/image.iso"}',
-        '{"type":"timing","stage":"metadata","t_ms":184,"probe_ms":96,"resume":""}',
-        '{"type":"progress","state":"downloading","downloaded":222732288,"total":358411469,"percent":62,"speed":19503514,"connections":16,"eta_ms":7020}',
-        '{"type":"completed","url":"https://example.com/image.iso","file":"/tmp/image.iso","bytes":358411469,"sha256":"0f3a…"}',
-        '{"type":"summary","total":1,"failed":0}',
-    ]
-    body = "\n".join(esc(line) for line in lines)
-    cap = "turbodl --json · one event per line" if en else "turbodl --json · 每个事件一行"
-    return (
-        '<div class="console" data-ui>'
-        f'<div class="console-cap"><span>NDJSON / STDOUT</span><span>{esc(cap)}</span></div>'
-        f"<pre><code>{body}</code></pre></div>"
-    )
-
-
-def _home_faq(lang: str) -> str:
+def _refusals(lang: str) -> str:
     en = lang == "en"
     F = _facts()
-    rel = F.LATEST["url"]
-    tag = F.LATEST["tag"]
+    rows = []
+    for plugin in F.OFFICIAL_PLUGINS:
+        refused = "".join(
+            f'<span class="tag">{esc(reason)}</span>' for reason in plugin["refuses"][lang]
+        )
+        rows.append(
+            [
+                f'<strong>{esc(plugin["name"])}</strong><br><span class="mono small">{esc(plugin["id"])}</span>',
+                refused,
+                md_inline(plugin["refuses_note"][lang]),
+            ]
+        )
+    return section(
+        "Fail closed, not almost right" if en else "失败即拒绝，而不是“差不多对”",
+        '<p class="section-lead">'
+        + (
+            "The official plugins state their unsupported cases before a corrupt file can be produced. "
+            "This is part of the product surface, not a footnote."
+            if en
+            else "官方插件会先写明不支持的输入，避免先产出一个损坏文件。"
+            "这是产品边界，不是脚注。"
+        )
+        + "</p>"
+        + table(
+            ["Plugin" if en else "插件", "Refused explicitly" if en else "明确拒绝", "Why" if en else "为什么"],
+            rows,
+        ),
+    )
+
+
+def _events(lang: str) -> str:
+    en = lang == "en"
+    sample = """{"type":"start","url":"<url>","output":"out.bin"}
+{"type":"timing","stage":"metadata","t_ms":184,"probe_ms":96,"resume":""}
+{"type":"progress","state":"downloading","downloaded":48234496,"total":167772160,"percent":28,"connections":16,"eta_ms":4000}
+{"type":"completed","url":"<url>","file":"out.bin","bytes":167772160,"sha256":"<digest>"}
+{"type":"summary","total":1,"failed":0}"""
+    return section(
+        "The event stream is the host interface" if en else "事件流就是宿主接口",
+        '<div class="event-layout"><div class="event-copy">'
+        '<p class="lede">'
+        + (
+            "The engine renders no UI. It reports state transitions and byte counters; the host decides how to present them."
+            if en
+            else "引擎不画界面。它报告状态切换与字节计数，怎么呈现由宿主决定。"
+        )
+        + "</p>"
+        '<p class="illustration-note">'
+        + (
+            "The event names come from the current CLI. The numeric values in this block are illustrative only."
+            if en
+            else "下面的事件名来自当前 CLI；数值仅用于说明格式，是示意数据。"
+        )
+        + "</p></div>"
+        + code_block(sample, "turbodl --json · sample output" if en else "turbodl --json · 示例输出")
+        + "</div>",
+    )
+
+
+def _faq(lang: str) -> str:
+    en = lang == "en"
+    F = _facts()
     qa = [
         (
-            "Does this need Android?",
-            "No. It is a pure Kotlin/JVM library. Android is one consumer; a server or desktop tool is another. The only requirement is JVM 17+.",
-            "它需要 Android 吗？",
-            "不需要。它是纯 Kotlin/JVM 库。Android 只是使用者之一，服务端或桌面工具同样可以用。唯一要求是 JVM 17+。",
+            "Does this require Android?",
+            "No. The core is pure Kotlin/JVM and requires JVM 17+. Android is one possible host.",
+            "必须用 Android 吗？",
+            "不必。核心是纯 Kotlin/JVM，要求 JVM 17+。Android 只是可能的宿主之一。",
         ),
         (
-            "Do I have to use the plugin framework?",
-            'No. <code>turbodl-core</code> has no plugin-framework dependency. The framework earns its place only when you need protocols beyond HTTP.',
-            "必须用插件框架吗？",
-            '不必。<code>turbodl-core</code> 不依赖插件框架。需要 HTTP 之外的协议时，框架才有意义。',
+            "Is the plugin framework mandatory?",
+            'No. <span class="mono">turbodl-core</span> has no plugin-framework dependency. Optional modules only add capability.',
+            "必须安装插件框架吗？",
+            '不必。<span class="mono">turbodl-core</span> 不依赖插件框架。可选模块只增加能力。',
         ),
         (
-            "Can it download HLS?",
-            "Yes for video-on-demand through the official plugin: playlist resolution, concurrent segments and AES-128. Live playlists, DRM and fMP4 are refused explicitly.",
-            "能下 HLS 吗？",
-            "点播可以，通过官方插件：解析清单、分片并发、AES-128 解密。直播清单、DRM 与 fMP4 会被明确拒绝。",
+            "Are the coordinates on Maven Central?",
+            f'Not yet. The supported path is the offline Maven bundle attached to <a href="{F.LATEST["url"]}">{F.LATEST["tag"]}</a>.',
+            "坐标已经上 Maven Central 了吗？",
+            f'还没有。当前支持的用法是 <a href="{F.LATEST["url"]}">{F.LATEST["tag"]}</a> 附件里的离线 Maven 包。',
         ),
         (
-            "Is there a GUI?",
-            "Not from this project. The SDK deliberately renders no interface. What ships is the engine, the plugin framework and a command-line tool.",
-            "有图形界面吗？",
-            "这个项目不提供。SDK 有意不画界面。提供的是引擎、插件框架与命令行工具。",
+            "What happens when a server ignores Range?",
+            "The returned bytes are checked against the requested range. An unsupported or dishonest server cannot silently place bytes at the wrong offset.",
+            "服务端忽略 Range 会怎样？",
+            "返回字节会与请求的 Range 核对。不支持或撒谎的服务端不能悄悄把字节写到错误偏移。",
         ),
         (
-            "Where do I get the files?",
-            f'Every file is an attachment of the <a href="{rel}">{tag}</a> release: a self-contained CLI JAR and an offline Maven bundle. They are not on Maven Central yet.',
-            "从哪里拿文件？",
-            f'每个文件都是 <a href="{rel}">{tag}</a> Release 的附件：自包含 CLI JAR 与离线 Maven 包。目前还没有发布到 Maven Central。',
+            "Does it download HLS?",
+            "VOD HLS is available through the official HLS plugin. Live playlists, DRM, fMP4 and discontinuities are refused.",
+            "能下载 HLS 吗？",
+            "点播 HLS 由官方 HLS 插件提供。直播清单、DRM、fMP4 与不连续序列会被明确拒绝。",
         ),
         (
-            "What happens when a server lies about Range?",
-            "The returned bytes are compared with the requested range. A server that ignores Range is caught and that segment fails instead of writing misplaced bytes.",
-            "服务端对 Range 撒谎会怎样？",
-            "会核对实际返回的字节与请求的那段。忽略 Range 的服务端会被识别，该分片判为失败，而不是写入错位数据。",
+            "Where is the GUI?",
+            "This repository ships an engine, plugin framework and CLI. It deliberately does not impose a GUI.",
+            "图形界面在哪里？",
+            "这个仓库提供引擎、插件框架与命令行。它有意不把界面强加给宿主。",
         ),
     ]
     items = []
@@ -358,143 +446,54 @@ def _home_faq(lang: str) -> str:
         opened = " open" if index == 0 else ""
         items.append(
             f'<details class="faq-item"{opened}><summary>'
-            f'<span>{esc(q_en if en else q_zh)}</span><i aria-hidden="true"></i></summary>'
-            f'<div class="answer"><p>{a_en if en else a_zh}</p></div></details>'
+            f'<span>{esc(q_en if en else q_zh)}</span>{icon("chevron")}'
+            f'</summary><div class="answer"><p>{a_en if en else a_zh}</p></div></details>'
         )
-    return '<div class="faq">' + "".join(items) + "</div>"
+    return section(
+        "Before the first download" if en else "第一次下载之前",
+        '<div class="faq">' + "".join(items) + "</div>",
+    )
 
 
-def _refusals(lang: str, href) -> str:
+def _closing(lang: str, href) -> str:
     en = lang == "en"
     F = _facts()
-    rows = []
-    for plugin in F.OFFICIAL_PLUGINS:
-        chips = "".join(f'<span class="chip">{esc(reason)}</span>' for reason in plugin["refuses"][lang])
-        rows.append(
-            [
-                f'<strong>{esc(plugin["name"])}</strong><code>{esc(plugin["id"])}</code>',
-                chips,
-                md_inline(plugin["refuses_note"][lang]),
-            ]
+    coordinate = f'implementation("dev.turbodl:turbodl-core:{F.LATEST_VERSION}")'
+    return section(
+        "Start at the core coordinate" if en else "从核心坐标开始",
+        '<div class="closing-board">'
+        '<div class="closing-copy">'
+        f'<h3>{"The smallest useful dependency" if en else "最小可用依赖"}</h3>'
+        '<p>'
+        + (
+            "Add the core, submit a request, and keep the lifecycle in the host. The offline bundle is the current supported distribution path."
+            if en
+            else "加入核心依赖、提交请求，并由宿主掌握生命周期。当前官方分发方式是离线 Maven 包。"
         )
-    lead = (
-        "An unsupported stream fails loudly. The alternative — writing a file that looks fine and is not — is the failure mode this section exists to prevent."
-        if en
-        else "不支持的流会响亮地失败。另一种做法 —— 写下一个看起来正常、其实不对的文件 —— 正是这一节要避免的失败方式。"
-    )
-    refusal_kicker = "FAIL-CLOSED" if en else "失败即拒绝"
-    refusal_label = "EXPLICIT REFUSALS" if en else "明确不支持"
-    return (
-        '<section class="section field section-refusals">'
-        '<div class="refusal-head">'
-        f'<p class="eyebrow"><span class="status-dot is-warn" aria-hidden="true"></span><span>{refusal_kicker}</span><span>{refusal_label}</span></p>'
-        f'<h2>{"What it refuses to pretend" if en else "它拒绝假装支持什么"}</h2>'
-        f'<p class="section-lead">{esc(lead)}</p>'
-        "</div>"
-        + table(
-            ["Plugin" if en else "插件", "Refused on purpose" if en else "明确拒绝", "Why" if en else "为什么"],
-            rows,
-        )
-        + "</section>"
+        + "</p></div>"
+        '<div class="coordinate-row"><code id="core-coordinate">'
+        + esc(coordinate)
+        + '</code><button class="copy-button" type="button" data-copy="#core-coordinate" aria-label="Copy dependency">'
+        + icon("copy")
+        + f'<span>{"Copy" if en else "复制"}</span></button></div>'
+        '<div class="btn-row">'
+        f'<a class="btn btn-primary" href="{href("download")}">{icon("download")}<span>{"Download artifacts" if en else "下载构件"}</span></a>'
+        f'<a class="btn btn-secondary" href="{href("plugins")}">{icon("plug")}<span>{"Plugin handbook" if en else "插件手册"}</span></a>'
+        f'<a class="btn btn-secondary" href="{esc(F.REPO)}">{icon("external")}<span>GitHub</span></a>'
+        "</div></div>",
     )
 
 
 def page(lang: str, href) -> str:
-    """按“信号进入 → 分片并行 → 事件输出 → 开始使用”的顺序组织首页。"""
-    en = lang == "en"
-    F = _facts()
-    feature_rows = [
+    return "".join(
         [
-            f'<span class="feature-name">{esc(title[lang])}</span>',
-            md_inline(copy[lang]),
+            _hero(lang, href),
+            _operating_defaults(lang),
+            _controls(lang),
+            _modules(lang),
+            _refusals(lang),
+            _events(lang),
+            _faq(lang),
+            _closing(lang, href),
         ]
-        for title, copy in F.FEATURES
-    ]
-    parts = [
-        _hero(lang, href),
-        section(
-            f"One request becomes {esc(16)} moving parts" if en else f"一次请求，变成 {esc(16)} 个移动部件",
-            '<p class="section-lead">'
-            + ('The progress bar is not decoration. Its three regions mirror the actual transfer pipeline: probe, parallel shards, verify.'
-               if en else "进度条不是装饰。它的三段分别对应真实流程：探测、并行分片、校验。")
-            + "</p>"
-            + _pipeline(lang)
-            + _process_notes(lang),
-        ),
-        section(
-            "Six decisions baked into the byte plane" if en else "字节层面的六个决定",
-            '<div class="feature-matrix">'
-            + table(
-                ["Mechanism" if en else "机制", "Operational consequence" if en else "实际结果"],
-                feature_rows,
-            )
-            + "</div>"
-            + '<p class="section-foot">'
-            + ("Each line is measurable in the repository. Two exist because the obvious implementation was measured and rejected."
-               if en else "每一条都能在仓库里核对。其中两条存在的原因，是「看起来显然」的做法被实测否掉了。")
-            + "</p>",
-        ),
-        section(
-            "Every control maps to a public field" if en else "每个控件都对应公开字段",
-            '<p class="section-lead">'
-            + ("Five controls below use the engine defaults. The switch is live in the page; the numeric consequences come from measured runs."
-               if en else "下面五个控件使用引擎默认值。开关可以在页面里直接拨动，数字结论来自实测。")
-            + "</p>"
-            + _bands(lang)
-            + '<div class="capability-surface">' + F._capabilities(lang) + "</div>"
-            + '<p class="section-foot">'
-            + ("The SDK renders no interface by design: speed limits, queues and progress remain values your application chooses how to show."
-               if en else "SDK 有意不画界面：限速、队列与进度都是值，怎么呈现由上层应用决定。")
-            + "</p>",
-        ),
-        section(
-            "One repository, seven deliberately separate artifacts" if en else "一个仓库，七个刻意分开的构件",
-            '<p class="section-lead">'
-            + ("Take the engine alone or assemble the whole protocol stack. The dependency direction never reverses."
-               if en else "可以只取引擎，也可以装配完整协议栈。依赖方向始终不会反转。")
-            + "</p>"
-            + _inventory(lang)
-            + '<div class="module-table">' + F._modules(lang) + "</div>",
-        ),
-        _refusals(lang, href),
-        section(
-            "What the engine emits while it runs" if en else "引擎运行时会发出什么",
-            '<p class="section-lead">'
-            + ("The CLI can print one JSON object per event. The panel and terminal below use the same field names as the engine."
-               if en else "命令行可以每个事件打印一行 JSON。下面的面板和终端使用引擎同一批字段名。")
-            + "</p>"
-            + '<div class="runtime-stack">' + _telemetry(lang) + _console(lang) + "</div>"
-            + code_block(
-                f"""java -jar {F.CLI_ASSET} <url> -o out.bin -c 16
-java -jar {F.CLI_ASSET} <url> --json
-java -jar {F.CLI_ASSET} --batch tasks.txt""",
-                "shell",
-            ),
-        ),
-        section(
-            "Questions before the first download" if en else "第一次下载之前会问的事",
-            _home_faq(lang),
-        ),
-        section(
-            "Start with one coordinate" if en else "从一个坐标开始",
-            '<p class="cta-line">'
-            + ("Add the engine to your build and hand the bytes to the runtime:"
-               if en else "把引擎加进构建，把字节交给运行时：")
-            + "</p>"
-            + '<div class="cta-terminal">'
-            + '<span class="cta-prompt" aria-hidden="true">$</span>'
-            + f'<input class="cta-coord" id="coord" readonly value=\'implementation("dev.turbodl:turbodl-core:{F.LATEST_VERSION}")\' aria-label="Gradle dependency">'
-            + f'<button class="btn btn-primary" type="button" data-copy="#coord" data-copied="{"Copied" if en else "已复制"}"><span>{"Copy" if en else "复制"}</span><span class="btn-arrow" aria-hidden="true">⌘</span></button>'
-            + "</div>"
-            + '<p class="cta-hint">'
-            + ("Not on Maven Central yet. The release’s offline Maven bundle is the supported way to consume it; the download page spells out how."
-               if en else "还没有发布到 Maven Central。官方支持的用法是 Release 页上的离线 Maven 包，下载页写了具体步骤。")
-            + "</p>"
-            + '<div class="btn-row end-actions">'
-            + f'<a class="btn btn-primary" href="{href("download")}"><span>{"Download" if en else "下载"} {esc(F.LATEST["tag"])}</span><span class="btn-arrow" aria-hidden="true">↓</span></a>'
-            + f'<a class="btn btn-ghost" href="{href("plugins")}"><span>{"Plugin guide" if en else "插件开发指南"}</span><span class="btn-arrow" aria-hidden="true">↗</span></a>'
-            + f'<a class="btn btn-ghost" href="{esc(F.REPO)}"><span>GitHub</span><span class="btn-arrow" aria-hidden="true">↗</span></a>'
-            + "</div>",
-        ),
-    ]
-    return "".join(parts)
+    )

@@ -5,135 +5,279 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TurboDL</title>
 <meta name="description" content="Multi-threaded download engine for the JVM — segmented parallel HTTP, resumable, plugin framework.">
-<meta name="color-scheme" content="dark">
-<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/index.html">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://jiayuxuan123.github.io/TurboDL/">
+<link rel="alternate" hreflang="en" href="https://jiayuxuan123.github.io/TurboDL/"><link rel="alternate" hreflang="zh-CN" href="https://jiayuxuan123.github.io/TurboDL/zh/"><link rel="alternate" hreflang="x-default" href="https://jiayuxuan123.github.io/TurboDL/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TurboDL">
 <meta property="og:title" content="TurboDL">
 <meta property="og:description" content="Multi-threaded download engine for the JVM — segmented parallel HTTP, resumable, plugin framework.">
-<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/index.html">
+<meta property="og:url" content="https://jiayuxuan123.github.io/TurboDL/">
 <meta property="og:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Multi-threaded download engine for the JVM">
 <meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="zh_CN">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="TurboDL">
 <meta name="twitter:description" content="Multi-threaded download engine for the JVM — segmented parallel HTTP, resumable, plugin framework.">
 <meta name="twitter:image" content="https://jiayuxuan123.github.io/TurboDL/assets/og.png">
-<meta name="theme-color" content="#090c0b">
+<meta name="theme-color" content="#EEF1EC">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-<script>document.documentElement.className+=" js";setTimeout(function(){if(!window.__motionReady){document.documentElement.classList.add("motion-ready");var n=document.querySelectorAll(".rise");for(var i=0;i<n.length;i++)n[i].classList.add("in")}},2200);</script>
-<link rel="stylesheet" href="assets/site.b95af392.css">
+<link rel="stylesheet" href="assets/site.f2f58d87.css">
 </head>
 <body class="brand-turbodl page-home" data-page="home">
 <a class="skip" href="#main">Skip to content</a>
-<div class="app">
-<aside class="side" id="site-rail">
-<div class="side-top">
-<a class="brand" href="index.html" aria-label="TurboDL">
-<span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span>
-<span class="brand-copy"><span class="brand-name">TurboDL</span><span class="brand-sub">TRANSFER ENGINE</span></span>
-</a>
-<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="side-nav">
-<span class="nav-toggle-copy">Menu</span>
-<span class="nav-toggle-icon" aria-hidden="true"><i></i><i></i></span>
-</button>
-</div>
-<div class="side-status">
-<span class="signal-dot" aria-hidden="true"></span>
-<span>ENGINE ONLINE</span>
-<span class="side-release">v0.4.1.0</span>
-</div>
-<nav class="side-nav" id="side-nav" aria-label="Primary"><a href="index.html" aria-current="page" data-index="01"><span class="nav-index" aria-hidden="true">01</span><span class="nav-label">Console</span><span class="nav-arrow" aria-hidden="true">↗</span></a><a href="download/index.html" data-index="02"><span class="nav-index" aria-hidden="true">02</span><span class="nav-label">Download</span><span class="nav-arrow" aria-hidden="true">↗</span></a><a href="docs/index.html" data-index="03"><span class="nav-index" aria-hidden="true">03</span><span class="nav-label">Docs</span><span class="nav-arrow" aria-hidden="true">↗</span></a><a href="plugins/index.html" data-index="04"><span class="nav-index" aria-hidden="true">04</span><span class="nav-label">Plugins</span><span class="nav-arrow" aria-hidden="true">↗</span></a><a href="changelog/index.html" data-index="05"><span class="nav-index" aria-hidden="true">05</span><span class="nav-label">Changelog</span><span class="nav-arrow" aria-hidden="true">↗</span></a><a href="community/index.html" data-index="06"><span class="nav-index" aria-hidden="true">06</span><span class="nav-label">Community</span><span class="nav-arrow" aria-hidden="true">↗</span></a><a href="legal/index.html" data-index="07"><span class="nav-index" aria-hidden="true">07</span><span class="nav-label">Legal</span><span class="nav-arrow" aria-hidden="true">↗</span></a></nav>
-<div class="side-tools"><div class="langs" aria-label="Language"><span class="tool-label">LANG</span><span class="lang-cur" aria-current="true">English</span><a href="zh/index.html">中文</a></div><a class="repo-link" href="https://github.com/jiayuxuan123/TurboDL"><span>Repository</span><span aria-hidden="true">↗</span></a></div>
-<div class="side-foot">
-<span>JVM 17+</span><span>MIT</span><span>API 1.0.0</span>
-</div>
-</aside>
-<button class="side-scrim" type="button" tabindex="-1" aria-label="Close menu"></button>
-<main id="main" class="canvas">
-<header class="canvas-top">
-<div class="canvas-channel">
-<span class="channel-mark" aria-hidden="true"></span>
-<span class="channel-kicker">CHANNEL</span>
-<strong>TurboDL</strong>
-</div>
-<div class="canvas-telemetry">
-<span><i>REL</i>v0.4.1.0</span>
-<span><i>API</i>1.0.0</span>
-<span><i>TEST</i>199 PASS</span>
-</div>
-<div class="scroll-track" aria-hidden="true"><i id="scroll-progress"></i></div>
-</header>
-
-<section class="hero-bench" data-hero>
-  <div class="hero-copy">
-    <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span><span>HTTP/RANGE</span><span>KOTLIN JVM 17+</span><span class="eyebrow-tail">NO UI REQUIRED</span></p>
-    <h1 class="hero-title"><span>Many hands,</span><span class="signal-text">one file.</span></h1>
-    <p class="hero-note">A Kotlin/JVM engine splits one HTTP transfer across sixteen workers, resumes from bytes that actually landed, and rejects a server that lies about Range.</p>
-    <div class="hero-act">
-      <a class="btn btn-primary" href="download/index.html"><span>Download v0.4.1.0</span><span class="btn-arrow" aria-hidden="true">↓</span></a>
-      <a class="btn btn-ghost" href="docs/index.html"><span>Read the engine docs</span><span class="btn-arrow" aria-hidden="true">↗</span></a>
+<header class="site-header">
+  <div class="header-main wrap">
+    <a class="brand" href="index.html" aria-label="TurboDL">
+      <span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h8l4 4h12M4 16h12l4 4h8"/></g><circle cx="4" cy="9" r="2" fill="currentColor"/><circle cx="4" cy="16" r="2" fill="currentColor"/><circle cx="16" cy="13" r="2" fill="currentColor"/><circle cx="28" cy="20" r="2" fill="currentColor"/></svg></span>
+      <span class="brand-copy">
+        <span class="brand-name">TurboDL</span>
+        <span class="brand-sub">PACKET TRANSIT CONTROL</span>
+      </span>
+    </a>
+    <nav class="primary-nav" aria-label="Primary">
+      <a class="nav-stop is-current" href="index.html" aria-current="page"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Overview</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a><a class="nav-stop" href="download/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Download</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a><a class="nav-stop" href="docs/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Docs</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a><a class="nav-stop" href="plugins/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Plugins</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a><a class="nav-stop" href="changelog/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Changelog</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a><a class="nav-stop" href="community/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Community</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a><a class="nav-stop" href="legal/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Legal</span><svg class="icon nav-stop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m14 7 5 5-5 5"/></svg></a>
+    </nav>
+    <div class="header-tools">
+      <div class="langs" aria-label="Language"><span class="lang-option is-current" aria-current="true">English</span><a class="lang-option" href="zh/index.html">中文</a></div>
+      <a class="repo-link" href="https://github.com/jiayuxuan123/TurboDL" aria-label="Repository">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h4"/></svg><span>Repository</span>
+      </a>
+      <button class="menu-toggle" type="button" aria-label="Open menu"
+        aria-expanded="false" aria-controls="mobile-menu" data-menu-open>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>Menu</span>
+      </button>
     </div>
-    <dl class="hero-facts">
-      <div><dt>RELEASE</dt><dd>v0.4.1.0</dd></div>
-      <div><dt>ENGINE</dt><dd>1 REQUEST → 16 SHARDS</dd></div>
-      <div><dt>VERIFY</dt><dd>199 TESTS</dd></div>
-    </dl>
   </div>
-
-  <aside class="telemetry-board" data-ui aria-label="Sample transfer telemetry">
-    <div class="telemetry-head">
-      <span><i class="signal-dot" aria-hidden="true"></i> SAMPLE TRACE</span>
-      <code>212.4 / 341.8 MB</code>
+  <div class="system-strip">
+    <div class="wrap system-strip-inner">
+      <span><i class="status-lamp is-green" aria-hidden="true"></i>Release v0.4.1.0</span>
+      <span>API 1.0.0</span>
+      <span>Core tests 254</span>
+      <span>CLI tests 12</span>
+      <span class="system-strip-end">JVM 17+ · MIT</span>
     </div>
-    <div class="telemetry-readout">
-      <p class="telemetry-speed"><strong>18.6</strong><span>MB/s</span></p>
-      <p class="telemetry-workers"><strong>16</strong><span>SHARDS<br>IN FLIGHT</span></p>
+  </div>
+</header>
+<dialog class="sheet-dialog mobile-menu" id="mobile-menu" aria-labelledby="mobile-menu-title">
+  <div class="sheet-head">
+    <div>
+      <span class="sheet-code">ROUTE MAP</span>
+      <p class="sheet-title" id="mobile-menu-title">Navigate</p>
     </div>
-    <div class="telemetry-plot">
-      <span class="plot-label">RANGE / 0—341.8&nbsp;MB</span>
-      <div class="shard-field" data-strip aria-hidden="true"></div>
-      <div class="plot-axis" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+    <button class="icon-button" type="button" aria-label="Close menu" data-menu-close>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <nav class="mobile-nav" aria-label="Primary"><a class="nav-stop is-current" href="index.html" aria-current="page"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Overview</span></a><a class="nav-stop" href="download/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Download</span></a><a class="nav-stop" href="docs/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Docs</span></a><a class="nav-stop" href="plugins/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Plugins</span></a><a class="nav-stop" href="changelog/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Changelog</span></a><a class="nav-stop" href="community/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Community</span></a><a class="nav-stop" href="legal/index.html"><span class="stop-lamp" aria-hidden="true"></span><span class="nav-stop-label">Legal</span></a></nav>
+  <div class="sheet-section">
+    <span class="sheet-code">LANGUAGE</span>
+    <div class="langs sheet-langs"><span class="lang-option is-current" aria-current="true">English</span><a class="lang-option" href="zh/index.html">中文</a></div>
+  </div>
+  <a class="sheet-repo" href="https://github.com/jiayuxuan123/TurboDL">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h4"/></svg><span>github.com/jiayuxuan123/TurboDL</span>
+  </a>
+</dialog>
+<main id="main" class="page"><div class="page-content wrap"><section class="home-hero">
+  <div class="hero-lead">
+    <h1 class="display">One request,<br><span>laid onto rails.</span></h1>
+    <div class="hero-side">
+      <p class="lead">TurboDL is a Kotlin/JVM download engine with explicit probe, partition, concurrency and verification stages. The host keeps control; the engine makes the route observable.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="download/index.html">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg><span>Get TurboDL</span>
+        </a>
+        <a class="btn btn-secondary" href="docs/index.html">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5z"/></svg><span>Read the manual</span>
+        </a>
+      </div>
     </div>
-    <div class="telemetry-grid">
-      <div><span>STATE</span><b>downloading</b></div>
-      <div><span>ELAPSED</span><b>00:18.42</b></div>
-      <div><span>ETA</span><b>00:07.02</b></div>
-      <div><span>RETRIES</span><b>0</b></div>
-    </div>
-    <div class="telemetry-foot">
-      <span>progress event / byte counter</span>
-      <b>62%</b>
-    </div>
-  </aside>
-</section>
-<section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>One request becomes 16 moving parts</h2><p class="section-lead">The progress bar is not decoration. Its three regions mirror the actual transfer pipeline: probe, parallel shards, verify.</p><div class="pipeline" data-ui><div class="pipeline-node"><span class="node-code">01</span><p class="node-value"><strong>1</strong><span>probe</span></p><p>A Range request asks one question before the file is cut: can this server serve byte ranges?</p></div><span class="pipeline-link" aria-hidden="true"></span><div class="pipeline-node"><span class="node-code">02</span><p class="node-value"><strong>16</strong><span>shards</span></p><p>Sixteen segments move at once. Work stealing takes the remaining block away from a slow connection.</p></div><span class="pipeline-link" aria-hidden="true"></span><div class="pipeline-node"><span class="node-code">03</span><p class="node-value"><strong>1</strong><span>verify</span></p><p>Every returned range is checked, then the merged file is checked against the expected byte count.</p></div></div><ol class="process-notes"><li><span class="process-code">PROBE</span><p>Range support is settled first. If the server cannot do it, the engine stops pretending and downloads straight through.</p></li><li><span class="process-code">SCHEDULE</span><p>The block count is about four times the connection count, so a slow worker never owns the last remaining piece.</p></li><li><span class="process-code">VERIFY</span><p>The bytes returned are compared with the range that was asked for; the merged file is compared with the total size.</p></li></ol></section><section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Six decisions baked into the byte plane</h2><div class="feature-matrix"><div class="table-wrap" data-table><table><thead><tr><th>Mechanism</th><th>Operational consequence</th></tr></thead><tbody><tr><td data-label="Mechanism"><span class="feature-name">Segmented parallel download</span></td><td data-label="Operational consequence">HTTP Range segments downloaded in parallel, with connection reuse (HTTP/2 multiplexing + keep-alive).</td></tr><tr><td data-label="Mechanism"><span class="feature-name">Dynamic segmentation + work stealing</span></td><td data-label="Operational consequence">Fine-grained pre-splitting plus work stealing, so one slow connection cannot drag the whole transfer down — and the &quot;last segment on a single thread&quot; long tail disappears.</td></tr><tr><td data-label="Mechanism"><span class="feature-name">Restrained adaptivity</span></td><td data-label="Operational consequence">Concurrency drops <strong>only</strong> on 429/503 or after consecutive failures. Ordinary jitter never touches the thread count — no AIMD oscillation.</td></tr><tr><td data-label="Mechanism"><span class="feature-name">Resume from real progress</span></td><td data-label="Operational consequence">Segments are persisted on disk; pause/resume continues from what actually landed, not from a remembered number.</td></tr><tr><td data-label="Mechanism"><span class="feature-name">Range tampering rejected</span></td><td data-label="Operational consequence">The bytes actually returned are checked against the Range that was requested — a server that ignores Range and sends the whole file is caught, not written as misplaced data.</td></tr><tr><td data-label="Mechanism"><span class="feature-name">Byte-level integrity check</span></td><td data-label="Operational consequence">Total size is verified after the merge step; a short or oversized result is rejected.</td></tr></tbody></table></div></div><p class="section-foot">Each line is measurable in the repository. Two exist because the obvious implementation was measured and rejected.</p></section><section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Every control maps to a public field</h2><p class="section-lead">Five controls below use the engine defaults. The switch is live in the page; the numeric consequences come from measured runs.</p><div class="band-grid" data-ui><article class="band is-on"><div class="band-head"><code>dynamicSegmentation</code><button class="sw" type="button" role="switch" aria-checked="true" aria-label="dynamicSegmentation"><span aria-hidden="true"></span></button></div><p class="band-say">Split work finer than the connection count.</p><p class="band-conseq">About four blocks per connection, so the final stretch is never one worker on its own. Off: fixed blocks plus work stealing.</p><p class="band-state">ON BY DEFAULT</p></article><article class="band is-on"><div class="band-head"><code>tailAssist</code><button class="sw" type="button" role="switch" aria-checked="true" aria-label="tailAssist"><span aria-hidden="true"></span></button></div><p class="band-say">Give the tail to whatever is idle.</p><p class="band-conseq">At most two splits per segment in the endgame; nothing below 2 MiB is split, so a 16 MiB block tops out at four parts.</p><p class="band-state">ON BY DEFAULT</p></article><article class="band"><div class="band-head"><code>overlapMerge</code><button class="sw" type="button" role="switch" aria-checked="false" aria-label="overlapMerge"><span aria-hidden="true"></span></button></div><p class="band-say">Merge while the last bytes arrive.</p><p class="band-conseq">Measured on 512 MB / 64 connections: 11.08 s to 10.39 s, about 6%. It can duplicate a write with tail assist, so it stays off.</p><p class="band-state">OFF BY DEFAULT</p></article><article class="band"><div class="band-head"><code>bufferedSegmentWrite</code><button class="sw" type="button" role="switch" aria-checked="false" aria-label="bufferedSegmentWrite"><span aria-hidden="true"></span></button></div><p class="band-say">Write segments through a buffer.</p><p class="band-conseq">16 MB / 128 connections / 64 KB segments: 2576 ms direct, 2584 ms buffered. The 0.3% difference is noise; resume stays honest without it.</p><p class="band-state">OFF BY DEFAULT</p></article><article class="band"><div class="band-head"><code>trustAllCerts</code><button class="sw" type="button" role="switch" aria-checked="false" aria-label="trustAllCerts"><span aria-hidden="true"></span></button></div><p class="band-say">Trust any certificate.</p><p class="band-conseq">Packet-capture debugging only. It turns certificate validation off, so production keeps it off.</p><p class="band-state">OFF BY DEFAULT</p></article></div><div class="capability-surface"><div class="table-wrap" data-table><table><thead><tr><th>Capability</th><th>Config field</th><th>Notes</th></tr></thead><tbody><tr><td data-label="Capability">Global speed limit</td><td data-label="Config field"><span class="mono">globalSpeedLimitBytesPerSec</span></td><td data-label="Notes">0 = unlimited</td></tr><tr><td data-label="Capability">Thread count</td><td data-label="Config field"><span class="mono">maxConnectionsPerTask</span></td><td data-label="Notes">1..256</td></tr><tr><td data-label="Capability">Concurrent tasks</td><td data-label="Config field"><span class="mono">maxConcurrentTasks</span></td><td data-label="Notes">1..64</td></tr><tr><td data-label="Capability">Max retries</td><td data-label="Config field"><span class="mono">maxRetries</span></td><td data-label="Notes">0..50</td></tr><tr><td data-label="Capability">Dynamic segmentation</td><td data-label="Config field"><span class="mono">dynamicSegmentation</span></td><td data-label="Notes">true / false</td></tr><tr><td data-label="Capability">Proxy</td><td data-label="Config field"><span class="mono">proxy</span></td><td data-label="Notes">Direct / System / Manual(HTTP,SOCKS,auth) / Pac(url)</td></tr><tr><td data-label="Capability">DNS</td><td data-label="Config field"><span class="mono">dns</span></td><td data-label="Notes">System / StaticHosts / DoH(url)</td></tr><tr><td data-label="Capability">Ignore SSL</td><td data-label="Config field"><span class="mono">trustAllCerts</span></td><td data-label="Notes">packet-capture debugging</td></tr><tr><td data-label="Capability">Theming</td><td data-label="Config field"><span class="mono">—</span></td><td data-label="Notes">upper-layer app's job; the SDK renders no UI</td></tr></tbody></table></div></div><p class="section-foot">The SDK renders no interface by design: speed limits, queues and progress remain values your application chooses how to show.</p></section><section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>One repository, seven deliberately separate artifacts</h2><p class="section-lead">Take the engine alone or assemble the whole protocol stack. The dependency direction never reverses.</p><ol class="module-index" data-lit><li><code>turbodl-core</code><span>engine / zero plugin dependency</span></li><li><code>turbo-plugin-runtime</code><span>lifecycle + extension points</span></li><li><code>turbo-plugin-bootstrap</code><span>one-call wiring</span></li><li><code>turbo-plugin-hls</code><span>HLS VOD backend</span></li><li><code>turbo-plugin-js</code><span>QuickJS loader</span></li><li><code>turbo-plugin-parser</code><span>share-link parser</span></li><li><code>turbodl-cli</code><span>scriptable command line</span></li></ol><div class="module-table"><div class="table-wrap" data-table><table><thead><tr><th>Artifact</th><th>Role</th><th>Required?</th></tr></thead><tbody><tr><td data-label="Artifact"><span class="mono">turbodl-core</span></td><td data-label="Role"><strong>Download engine SDK</strong><br><span class="muted">Segmented parallel download, resume, retry, speed limit, DNS/proxy. Publishes fine on its own and has <strong>no</strong> plugin-framework dependency.</span></td><td data-label="Required?">required</td></tr><tr><td data-label="Artifact"><span class="mono">turbo-plugin-runtime</span></td><td data-label="Role"><strong>Plugin runtime kernel</strong><br><span class="muted">Lifecycle, cleanup (disposer), event bus, service registry, extension points, version handshake, diagnostics. Knows nothing about any specific protocol.</span></td><td data-label="Required?">optional</td></tr><tr><td data-label="Artifact"><span class="mono">turbo-plugin-bootstrap</span></td><td data-label="Role"><strong>Bootstrap wiring</strong><br><span class="muted">One-call wiring of the base plugins (Kotlin loader + HTTP backend) and the bridge from the engine&#x27;s event stream.</span></td><td data-label="Required?">optional</td></tr><tr><td data-label="Artifact"><span class="mono">turbo-plugin-hls</span></td><td data-label="Role"><strong>HLS VOD adapter</strong><br><span class="muted">Resolves M3U8 playlists, downloads segments concurrently (with per-segment retry), decrypts AES-128, honors EXT-X-BYTERANGE. Live/DRM/fMP4 playlists are refused explicitly instead of producing corrupt output.</span></td><td data-label="Required?">optional</td></tr><tr><td data-label="Artifact"><span class="mono">turbo-plugin-js</span></td><td data-label="Role"><strong>JavaScript plugin loader</strong><br><span class="muted">Loads TurboDL plugins written in JavaScript. Embeds QuickJS — one runtime and one context per script — and exposes a stable `host`/`plugin` ABI with coarse-grained capabilities.</span></td><td data-label="Required?">optional</td></tr><tr><td data-label="Artifact"><span class="mono">turbo-plugin-parser</span></td><td data-label="Role"><strong>Platform link parser</strong><br><span class="muted">Turns a share link into download requests: Weibo (MP4 + image sets), Xiaohongshu (watermark-free video + original images), Pixiv (every page&#x27;s original). Holds no credentials — where a platform needs a login it returns null and the host&#x27;s own session handling takes over.</span></td><td data-label="Required?">optional</td></tr><tr><td data-label="Artifact"><span class="mono">turbodl-cli</span></td><td data-label="Role"><strong>Command-line tool</strong><br><span class="muted">A complete CLI built on the SDK: multi-threaded, resumable, batch mode, NDJSON output for scripts and agents. Shipped as a fat JAR.</span></td><td data-label="Required?">optional</td></tr></tbody></table></div></div></section><section class="section field section-refusals"><div class="refusal-head"><p class="eyebrow"><span class="status-dot is-warn" aria-hidden="true"></span><span>FAIL-CLOSED</span><span>EXPLICIT REFUSALS</span></p><h2>What it refuses to pretend</h2><p class="section-lead">An unsupported stream fails loudly. The alternative — writing a file that looks fine and is not — is the failure mode this section exists to prevent.</p></div><div class="table-wrap" data-table><table><thead><tr><th>Plugin</th><th>Refused on purpose</th><th>Why</th></tr></thead><tbody><tr><td data-label="Plugin"><strong>HLS VOD Backend</strong><code>backend.hls</code></td><td data-label="Refused on purpose"><span class="chip">Live playlists (no `EXT-X-ENDLIST`)</span><span class="chip">DRM / `SAMPLE-AES`</span><span class="chip">fMP4 `EXT-X-MAP`</span><span class="chip">Discontinuities</span></td><td data-label="Why">Refused explicitly: an unsupported stream fails loudly instead of producing a file that looks fine and is not.</td></tr><tr><td data-label="Plugin"><strong>JavaScript Plugin Loader</strong><code>loader.js</code></td><td data-label="Refused on purpose"><span class="chip">Registering a `DownloadBackend` (the byte plane stays in Kotlin)</span><span class="chip">Publishing a service (a service is a Kotlin object graph)</span><span class="chip">`require` / npm / `fetch` — the host ABI is the entire surface</span><span class="chip">`jar:` or remote script sources (local file / `inline:` / `data:` only, for now)</span></td><td data-label="Why">A script computes URLs, headers and signatures; it never streams download data. That boundary is what keeps a script from becoming a bandwidth bottleneck.</td></tr><tr><td data-label="Plugin"><strong>Platform Link Parser</strong><code>parser.platforms</code></td><td data-label="Refused on purpose"><span class="chip">Logging in — a platform that needs a session returns null and the host&#x27;s own account handling takes over</span><span class="chip">Pixiv animations (ugoira): a zip plus a frame-timing table needs image processing</span><span class="chip">Pixiv novels</span><span class="chip">Signed APIs (Douyin, Kuaishou, Bilibili): per-platform signature algorithms stay in the host</span></td><td data-label="Why">Its result type carries no path: a `DownloadRequest` needs a `destination: File`, but a parser runs before the host has chosen a directory. The temp-dir destination is filled in only at the boundary, so the host still applies its own path policy.</td></tr></tbody></table></div></section><section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>What the engine emits while it runs</h2><p class="section-lead">The CLI can print one JSON object per event. The panel and terminal below use the same field names as the engine.</p><div class="runtime-stack"><div class="runtime-panel" data-ui><div class="runtime-head"><span><i class="signal-dot" aria-hidden="true"></i> PROGRESS EVENT</span><b>62%</b></div><div class="runtime-bar"><i style="--value:62%"></i></div><div class="runtime-grid"><div><span>state</span><b>downloading</b></div><div><span>downloaded</span><b>212.4 MB</b></div><div><span>total</span><b>341.8 MB</b></div><div><span>percent</span><b>62</b></div><div><span>speed</span><b>18.6 MB/s</b></div><div><span>connections</span><b>16</b></div><div><span>eta_ms</span><b>7 020</b></div></div><p class="runtime-foot">Every field comes from the engine event stream; the SDK renders no interface of its own.</p></div><div class="console" data-ui><div class="console-cap"><span>NDJSON / STDOUT</span><span>turbodl --json · one event per line</span></div><pre><code>{&quot;type&quot;:&quot;start&quot;,&quot;url&quot;:&quot;https://example.com/image.iso&quot;,&quot;output&quot;:&quot;/tmp/image.iso&quot;}
+  </div>
+  <div class="route-board" data-illustration><div class="route-board-head"><h2>Five checkpoints before a file exists</h2><p class="illustration-note">Illustrative route. Every value shown below is a TurboConfig.kt default, not a measured speed.</p></div><ol class="route-line"><li class="route-stage">
+  <span class="route-node" aria-hidden="true"></span>
+  <div class="route-stage-head">
+    <span class="stage-number">01</span>
+    <span class="stage-state"><i aria-hidden="true"></i>accepted</span>
+  </div>
+  <h3>Request</h3>
+  <p class="stage-value">DownloadRequest</p>
+  <p>The host submits a URL and destination. The task enters a bounded queue.</p>
+</li><li class="route-stage">
+  <span class="route-node" aria-hidden="true"></span>
+  <div class="route-stage-head">
+    <span class="stage-number">02</span>
+    <span class="stage-state"><i aria-hidden="true"></i>range ready</span>
+  </div>
+  <h3>Probe</h3>
+  <p class="stage-value">6_000 ms</p>
+  <p>One range request establishes size, byte-range support and validators. Unsupported Range falls back to a whole-file stream.</p>
+</li><li class="route-stage">
+  <span class="route-node" aria-hidden="true"></span>
+  <div class="route-stage-head">
+    <span class="stage-number">03</span>
+    <span class="stage-state"><i aria-hidden="true"></i>blocks queued</span>
+  </div>
+  <h3>Partition</h3>
+  <p class="stage-value">4x</p>
+  <p>Blocks are sized for work stealing: about four blocks per connection, capped by block size.</p>
+</li><li class="route-stage">
+  <span class="route-node" aria-hidden="true"></span>
+  <div class="route-stage-head">
+    <span class="stage-number">04</span>
+    <span class="stage-state"><i aria-hidden="true"></i>lanes active</span>
+  </div>
+  <h3>Concurrency</h3>
+  <p class="stage-value">16</p>
+  <p>Workers claim ranges independently. Adaptive control only descends on server pressure.</p>
+</li><li class="route-stage">
+  <span class="route-node" aria-hidden="true"></span>
+  <div class="route-stage-head">
+    <span class="stage-number">05</span>
+    <span class="stage-state"><i aria-hidden="true"></i>checked</span>
+  </div>
+  <h3>Verify</h3>
+  <p class="stage-value">byte exact</p>
+  <p>Returned bytes are checked against the requested range, then the merged size and terminal state are verified.</p>
+</li></ol><div class="route-legend"><span><i class="status-lamp is-green" aria-hidden="true"></i>configured state</span><span><i class="status-lamp is-orange" aria-hidden="true"></i>failure boundary</span><span class="legend-note">route illustration / not throughput data</span></div></div>
+</section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>Defaults that shape the route</h2><div class="split-ledger"><div class="split-copy"><p class="lede">These are operating constraints, not a speed promise. Each row is a public field in <span class="mono">TurboConfig.kt</span>; the host can override it per client.</p><p class="small">The route diagram is illustrative. The defaults below are source-verifiable.</p></div><div class="table-wrap compact" data-table tabindex="0" role="region"><table><thead><tr><th scope="col">Config field</th><th scope="col">Default</th><th scope="col">Range</th><th scope="col">Operating effect</th></tr></thead><tbody><tr><td data-label="Config field"><span class="mono">maxConnectionsPerTask</span></td><td data-label="Default"><span class="data-value">16</span></td><td data-label="Range">1..256</td><td data-label="Operating effect">Default lanes for one task.</td></tr><tr><td data-label="Config field"><span class="mono">maxConcurrentTasks</span></td><td data-label="Default"><span class="data-value">3</span></td><td data-label="Range">1..64</td><td data-label="Operating effect">Bounded task queue.</td></tr><tr><td data-label="Config field"><span class="mono">segmentsPerConnection</span></td><td data-label="Default"><span class="data-value">4</span></td><td data-label="Range">1..64</td><td data-label="Operating effect">Work-stealing reserve per lane.</td></tr><tr><td data-label="Config field"><span class="mono">blockSize</span></td><td data-label="Default"><span class="data-value">16 MiB</span></td><td data-label="Range">upper bound</td><td data-label="Operating effect">Coarser blocks reduce request fan-out.</td></tr><tr><td data-label="Config field"><span class="mono">tailAssistMinBytes</span></td><td data-label="Default"><span class="data-value">256 KiB</span></td><td data-label="Range">tail threshold</td><td data-label="Operating effect">Below this, splitting costs more than it saves.</td></tr><tr><td data-label="Config field"><span class="mono">maxRetries</span></td><td data-label="Default"><span class="data-value">5</span></td><td data-label="Range">0..50</td><td data-label="Operating effect">Per-segment retry budget.</td></tr><tr><td data-label="Config field"><span class="mono">probeTimeoutMs</span></td><td data-label="Default"><span class="data-value">6,000 ms</span></td><td data-label="Range">minimum 1,000</td><td data-label="Operating effect">Probe is bounded; it does not carry file bytes.</td></tr><tr><td data-label="Config field"><span class="mono">stallTimeoutMs</span></td><td data-label="Default"><span class="data-value">45,000 ms</span></td><td data-label="Range">0 = off</td><td data-label="Operating effect">Detects a half-dead connection, not normal jitter.</td></tr></tbody></table></div></div></section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>Controls with runtime authority</h2><p class="section-lead">Only current, non-deprecated switches are shown. Toggling here demonstrates state; it does not modify an engine instance.</p><div class="control-ledger"><div class="control-row">
+  <div class="control-name">
+    <span class="mono">dynamicSegmentation</span>
+    <strong>Dynamic segmentation</strong>
+  </div>
+  <p>Historical switch for tail assist; both it and tailAssist must be true.</p>
+  <button class="switch" type="button" role="switch" aria-checked="true"
+    data-on-label="Default on"
+    data-off-label="Default off">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">Default on</span>
+  </button>
+</div><div class="control-row">
+  <div class="control-name">
+    <span class="mono">tailAssist</span>
+    <strong>Tail assist</strong>
+  </div>
+  <p>Idle workers can take the end of in-flight segments after the work queue empties.</p>
+  <button class="switch" type="button" role="switch" aria-checked="true"
+    data-on-label="Default on"
+    data-off-label="Default off">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">Default on</span>
+  </button>
+</div><div class="control-row">
+  <div class="control-name">
+    <span class="mono">adaptiveConcurrency</span>
+    <strong>Adaptive concurrency</strong>
+  </div>
+  <p>Downward adaptation. Ordinary throughput jitter does not reduce the lane count.</p>
+  <button class="switch" type="button" role="switch" aria-checked="true"
+    data-on-label="Default on"
+    data-off-label="Default off">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">Default on</span>
+  </button>
+</div><div class="control-row">
+  <div class="control-name">
+    <span class="mono">slowStart</span>
+    <strong>Slow start</strong>
+  </div>
+  <p>Ramps from the configured initial lane count instead of opening everything at once.</p>
+  <button class="switch" type="button" role="switch" aria-checked="true"
+    data-on-label="Default on"
+    data-off-label="Default off">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">Default on</span>
+  </button>
+</div><div class="control-row">
+  <div class="control-name">
+    <span class="mono">warmUpConnections</span>
+    <strong>Connection warm-up</strong>
+  </div>
+  <p>Optional warm-up is bounded and never delays the transfer indefinitely.</p>
+  <button class="switch" type="button" role="switch" aria-checked="true"
+    data-on-label="Default on"
+    data-off-label="Default off">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">Default on</span>
+  </button>
+</div><div class="control-row">
+  <div class="control-name">
+    <span class="mono">skipProbeWhenSizeKnown</span>
+    <strong>Skip known-size probe</strong>
+  </div>
+  <p>When the host already knows the size, the extra metadata request is skipped.</p>
+  <button class="switch" type="button" role="switch" aria-checked="true"
+    data-on-label="Default on"
+    data-off-label="Default off">
+    <span class="switch-track" aria-hidden="true"><i></i></span>
+    <span class="switch-label">Default on</span>
+  </button>
+</div></div><p class="section-foot mono">TurboConfig.kt · current defaults</p></section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>One repository, seven separate stops</h2><p class="section-lead">The engine is complete without the plugin framework. Optional modules add protocol and host integration; dependency direction never reverses.</p><ol class="module-route"><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbodl-core</code>
+  <span class="module-state is-required">Required</span>
+  <p>HTTP range engine, resume, retry, queueing, DNS/proxy.</p>
+</li><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbo-plugin-runtime</code>
+  <span class="module-state">Optional</span>
+  <p>Lifecycle, disposal, services, events and extension points.</p>
+</li><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbo-plugin-bootstrap</code>
+  <span class="module-state">Optional</span>
+  <p>One-call assembly for the base runtime and HTTP backend.</p>
+</li><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbo-plugin-hls</code>
+  <span class="module-state">Optional</span>
+  <p>HLS VOD playlists, concurrent segments and AES-128.</p>
+</li><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbo-plugin-js</code>
+  <span class="module-state">Optional</span>
+  <p>QuickJS loader for plugins written in JavaScript.</p>
+</li><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbo-plugin-parser</code>
+  <span class="module-state">Optional</span>
+  <p>Share-link parsing for Weibo, Xiaohongshu and Pixiv.</p>
+</li><li class="module-row">
+  <span class="module-node" aria-hidden="true"></span>
+  <code>turbodl-cli</code>
+  <span class="module-state">Separate</span>
+  <p>A scriptable JAR over the SDK, with NDJSON output.</p>
+</li></ol></section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>Fail closed, not almost right</h2><p class="section-lead">The official plugins state their unsupported cases before a corrupt file can be produced. This is part of the product surface, not a footnote.</p><div class="table-wrap" data-table tabindex="0" role="region"><table><thead><tr><th scope="col">Plugin</th><th scope="col">Refused explicitly</th><th scope="col">Why</th></tr></thead><tbody><tr><td data-label="Plugin"><strong>HLS VOD Backend</strong><br><span class="mono small">backend.hls</span></td><td data-label="Refused explicitly"><span class="tag">Live playlists (no `EXT-X-ENDLIST`)</span><span class="tag">DRM / `SAMPLE-AES`</span><span class="tag">fMP4 `EXT-X-MAP`</span><span class="tag">Discontinuities</span></td><td data-label="Why">Refused explicitly: an unsupported stream fails loudly instead of producing a file that looks fine and is not.</td></tr><tr><td data-label="Plugin"><strong>JavaScript Plugin Loader</strong><br><span class="mono small">loader.js</span></td><td data-label="Refused explicitly"><span class="tag">Registering a `DownloadBackend` (the byte plane stays in Kotlin)</span><span class="tag">Publishing a service (a service is a Kotlin object graph)</span><span class="tag">`require` / npm / `fetch` — the host ABI is the entire surface</span><span class="tag">`jar:` or remote script sources (local file / `inline:` / `data:` only, for now)</span></td><td data-label="Why">A script computes URLs, headers and signatures; it never streams download data. That boundary is what keeps a script from becoming a bandwidth bottleneck.</td></tr><tr><td data-label="Plugin"><strong>Platform Link Parser</strong><br><span class="mono small">parser.platforms</span></td><td data-label="Refused explicitly"><span class="tag">Logging in — a platform that needs a session returns null and the host&#x27;s own account handling takes over</span><span class="tag">Pixiv animations (ugoira): a zip plus a frame-timing table needs image processing</span><span class="tag">Pixiv novels</span><span class="tag">Signed APIs (Douyin, Kuaishou, Bilibili): per-platform signature algorithms stay in the host</span></td><td data-label="Why">Its result type carries no path: a `DownloadRequest` needs a `destination: File`, but a parser runs before the host has chosen a directory. The temp-dir destination is filled in only at the boundary, so the host still applies its own path policy.</td></tr></tbody></table></div></section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>The event stream is the host interface</h2><div class="event-layout"><div class="event-copy"><p class="lede">The engine renders no UI. It reports state transitions and byte counters; the host decides how to present them.</p><p class="illustration-note">The event names come from the current CLI. The numeric values in this block are illustrative only.</p></div><figure class="code-block" data-code-block><figcaption class="code-cap"><span>turbodl --json · sample output</span><button class="code-copy" type="button" data-copy-code aria-label="Copy code"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span class="copy-label">Copy</span></button></figcaption><div class="code-scroll"><pre><code>{&quot;type&quot;:&quot;start&quot;,&quot;url&quot;:&quot;&lt;url&gt;&quot;,&quot;output&quot;:&quot;out.bin&quot;}
 {&quot;type&quot;:&quot;timing&quot;,&quot;stage&quot;:&quot;metadata&quot;,&quot;t_ms&quot;:184,&quot;probe_ms&quot;:96,&quot;resume&quot;:&quot;&quot;}
-{&quot;type&quot;:&quot;progress&quot;,&quot;state&quot;:&quot;downloading&quot;,&quot;downloaded&quot;:222732288,&quot;total&quot;:358411469,&quot;percent&quot;:62,&quot;speed&quot;:19503514,&quot;connections&quot;:16,&quot;eta_ms&quot;:7020}
-{&quot;type&quot;:&quot;completed&quot;,&quot;url&quot;:&quot;https://example.com/image.iso&quot;,&quot;file&quot;:&quot;/tmp/image.iso&quot;,&quot;bytes&quot;:358411469,&quot;sha256&quot;:&quot;0f3a…&quot;}
-{&quot;type&quot;:&quot;summary&quot;,&quot;total&quot;:1,&quot;failed&quot;:0}</code></pre></div></div><div class="code" data-code-block><div class="code-cap">shell</div><pre><code>java -jar turbodl-cli-all.jar &lt;url&gt; -o out.bin -c 16
-java -jar turbodl-cli-all.jar &lt;url&gt; --json
-java -jar turbodl-cli-all.jar --batch tasks.txt</code></pre></div></section><section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Questions before the first download</h2><div class="faq"><details class="faq-item" open><summary><span>Does this need Android?</span><i aria-hidden="true"></i></summary><div class="answer"><p>No. It is a pure Kotlin/JVM library. Android is one consumer; a server or desktop tool is another. The only requirement is JVM 17+.</p></div></details><details class="faq-item"><summary><span>Do I have to use the plugin framework?</span><i aria-hidden="true"></i></summary><div class="answer"><p>No. <code>turbodl-core</code> has no plugin-framework dependency. The framework earns its place only when you need protocols beyond HTTP.</p></div></details><details class="faq-item"><summary><span>Can it download HLS?</span><i aria-hidden="true"></i></summary><div class="answer"><p>Yes for video-on-demand through the official plugin: playlist resolution, concurrent segments and AES-128. Live playlists, DRM and fMP4 are refused explicitly.</p></div></details><details class="faq-item"><summary><span>Is there a GUI?</span><i aria-hidden="true"></i></summary><div class="answer"><p>Not from this project. The SDK deliberately renders no interface. What ships is the engine, the plugin framework and a command-line tool.</p></div></details><details class="faq-item"><summary><span>Where do I get the files?</span><i aria-hidden="true"></i></summary><div class="answer"><p>Every file is an attachment of the <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.4.1.0">v0.4.1.0</a> release: a self-contained CLI JAR and an offline Maven bundle. They are not on Maven Central yet.</p></div></details><details class="faq-item"><summary><span>What happens when a server lies about Range?</span><i aria-hidden="true"></i></summary><div class="answer"><p>The returned bytes are compared with the requested range. A server that ignores Range is caught and that segment fails instead of writing misplaced bytes.</p></div></details></div></section><section class="section"><div class="seg-rule" aria-hidden="true"><i class="done" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="done" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="done" style="width:13.333%"></i></div><h2>Start with one coordinate</h2><p class="cta-line">Add the engine to your build and hand the bytes to the runtime:</p><div class="cta-terminal"><span class="cta-prompt" aria-hidden="true">$</span><input class="cta-coord" id="coord" readonly value='implementation("dev.turbodl:turbodl-core:0.4.1.0")' aria-label="Gradle dependency"><button class="btn btn-primary" type="button" data-copy="#coord" data-copied="Copied"><span>Copy</span><span class="btn-arrow" aria-hidden="true">⌘</span></button></div><p class="cta-hint">Not on Maven Central yet. The release’s offline Maven bundle is the supported way to consume it; the download page spells out how.</p><div class="btn-row end-actions"><a class="btn btn-primary" href="download/index.html"><span>Download v0.4.1.0</span><span class="btn-arrow" aria-hidden="true">↓</span></a><a class="btn btn-ghost" href="plugins/index.html"><span>Plugin guide</span><span class="btn-arrow" aria-hidden="true">↗</span></a><a class="btn btn-ghost" href="https://github.com/jiayuxuan123/TurboDL"><span>GitHub</span><span class="btn-arrow" aria-hidden="true">↗</span></a></div></section></main>
-</div>
-<footer class="site-foot">
-<div class="foot-signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-<div class="wrap foot-wrap">
-<div class="foot-brand">
-<a class="foot-logo" href="index.html">
-<span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 5v9.5M16 3.2v11.3M26 5v9.5"/></g><path d="M16 15.6l6.2 6.2H9.8z" fill="currentColor"/><path d="M16 21v7" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></svg></span>
-<span>TurboDL</span>
-</a>
-<p>Multi-threaded download engine for the JVM</p>
-</div>
-<div class="foot-top"><div><h2>Project</h2><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="download/index.html">Download</a></li><li><a href="plugins/index.html">Plugins</a></li><li><a href="changelog/index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></div><div><h2>Documentation</h2><ul><li><a href="docs/readme/index.html">README</a></li><li><a href="docs/plugins/index.html">Plugin guide</a></li><li><a href="docs/convention/index.html">Convention</a></li><li><a href="docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="docs/js-loader/index.html">JS loader architecture</a></li><li><a href="docs/manifest/index.html">Manifest reference</a></li></ul></div><div><h2>Terms &amp; policies</h2><ul><li><a href="legal/license/index.html">License (MIT)</a></li><li><a href="legal/third-party/index.html">Third-party components</a></li><li><a href="legal/privacy/index.html">Privacy</a></li><li><a href="legal/terms/index.html">Terms of use</a></li><li><a href="community/index.html">Community</a></li></ul></div><div><h2>Docs in other languages</h2><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></div></div>
-<div class="foot-line"><a href="https://github.com/jiayuxuan123/TurboDL"><span>github.com/</span><span>jiayuxuan123/TurboDL</span></a></div>
-<div class="foot-base"><div class="foot-note"><p>TurboDL v0.4.1.0 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div><p class="foot-sys">TRANSFER BENCH / v0.4.1.0 / JVM</p></div>
-</div>
+{&quot;type&quot;:&quot;progress&quot;,&quot;state&quot;:&quot;downloading&quot;,&quot;downloaded&quot;:48234496,&quot;total&quot;:167772160,&quot;percent&quot;:28,&quot;connections&quot;:16,&quot;eta_ms&quot;:4000}
+{&quot;type&quot;:&quot;completed&quot;,&quot;url&quot;:&quot;&lt;url&gt;&quot;,&quot;file&quot;:&quot;out.bin&quot;,&quot;bytes&quot;:167772160,&quot;sha256&quot;:&quot;&lt;digest&gt;&quot;}
+{&quot;type&quot;:&quot;summary&quot;,&quot;total&quot;:1,&quot;failed&quot;:0}</code></pre></div></figure></div></section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>Before the first download</h2><div class="faq"><details class="faq-item" open><summary><span>Does this require Android?</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></summary><div class="answer"><p>No. The core is pure Kotlin/JVM and requires JVM 17+. Android is one possible host.</p></div></details><details class="faq-item"><summary><span>Is the plugin framework mandatory?</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></summary><div class="answer"><p>No. <span class="mono">turbodl-core</span> has no plugin-framework dependency. Optional modules only add capability.</p></div></details><details class="faq-item"><summary><span>Are the coordinates on Maven Central?</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></summary><div class="answer"><p>Not yet. The supported path is the offline Maven bundle attached to <a href="https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.4.1.0">v0.4.1.0</a>.</p></div></details><details class="faq-item"><summary><span>What happens when a server ignores Range?</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></summary><div class="answer"><p>The returned bytes are checked against the requested range. An unsupported or dishonest server cannot silently place bytes at the wrong offset.</p></div></details><details class="faq-item"><summary><span>Does it download HLS?</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></summary><div class="answer"><p>VOD HLS is available through the official HLS plugin. Live playlists, DRM, fMP4 and discontinuities are refused.</p></div></details><details class="faq-item"><summary><span>Where is the GUI?</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></summary><div class="answer"><p>This repository ships an engine, plugin framework and CLI. It deliberately does not impose a GUI.</p></div></details></div></section><section class="section"><div class="route-divider" aria-hidden="true"><i class="is-complete" style="width:23.333%"></i><i class="" style="width:10.000%"></i><i class="is-complete" style="width:16.667%"></i><i class="" style="width:6.667%"></i><i class="" style="width:30.000%"></i><i class="is-complete" style="width:13.333%"></i></div><h2>Start at the core coordinate</h2><div class="closing-board"><div class="closing-copy"><h3>The smallest useful dependency</h3><p>Add the core, submit a request, and keep the lifecycle in the host. The offline bundle is the current supported distribution path.</p></div><div class="coordinate-row"><code id="core-coordinate">implementation(&quot;dev.turbodl:turbodl-core:0.4.1.0&quot;)</code><button class="copy-button" type="button" data-copy="#core-coordinate" aria-label="Copy dependency"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>Copy</span></button></div><div class="btn-row"><a class="btn btn-primary" href="download/index.html"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg><span>Download artifacts</span></a><a class="btn btn-secondary" href="plugins/index.html"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7V3M16 7V3"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v4"/></svg><span>Plugin handbook</span></a><a class="btn btn-secondary" href="https://github.com/jiayuxuan123/TurboDL"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h4"/></svg><span>GitHub</span></a></div></div></section></div>
+</main>
+<footer class="site-footer">
+  <div class="footer-route" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="wrap footer-main">
+    <div class="footer-brand">
+      <a class="brand" href="index.html">
+        <span class="brand-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h8l4 4h12M4 16h12l4 4h8"/></g><circle cx="4" cy="9" r="2" fill="currentColor"/><circle cx="4" cy="16" r="2" fill="currentColor"/><circle cx="16" cy="13" r="2" fill="currentColor"/><circle cx="28" cy="20" r="2" fill="currentColor"/></svg></span>
+        <span class="brand-copy"><span class="brand-name">TurboDL</span>
+        <span class="brand-sub">PACKET TRANSIT CONTROL</span></span>
+      </a>
+      <p>Multi-threaded download engine for the JVM</p>
+      <a class="footer-repo" href="https://github.com/jiayuxuan123/TurboDL">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h4"/></svg><span>github.com/jiayuxuan123/TurboDL</span>
+      </a>
+    </div>
+    <div class="footer-columns"><section class="footer-column"><h2>Project</h2><ul><li><a href="https://github.com/jiayuxuan123/TurboDL">GitHub</a></li><li><a href="download/index.html">Download</a></li><li><a href="plugins/index.html">Plugins</a></li><li><a href="changelog/index.html">Changelog</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/issues">Issues</a></li></ul></section><section class="footer-column"><h2>Documentation</h2><ul><li><a href="docs/readme/index.html">README</a></li><li><a href="docs/plugins/index.html">Plugin guide</a></li><li><a href="docs/convention/index.html">Convention</a></li><li><a href="docs/js-plugins/index.html">JavaScript plugins</a></li><li><a href="docs/js-loader/index.html">JS loader architecture</a></li><li><a href="docs/manifest/index.html">Manifest reference</a></li></ul></section><section class="footer-column"><h2>Terms &amp; policies</h2><ul><li><a href="legal/license/index.html">License (MIT)</a></li><li><a href="legal/third-party/index.html">Third-party components</a></li><li><a href="legal/privacy/index.html">Privacy</a></li><li><a href="legal/terms/index.html">Terms of use</a></li><li><a href="community/index.html">Community</a></li></ul></section><section class="footer-column"><h2>README translations on GitHub</h2><ul><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-CN.md">简体中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_zh-TW.md">繁體中文</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ja.md">日本語</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_ko.md">한국어</a></li><li><a href="https://github.com/jiayuxuan123/TurboDL/blob/main/docs/i18n/README_de.md">Deutsch</a></li></ul></section></div>
+  </div>
+  <div class="wrap footer-base">
+    <div class="footer-notes"><p>TurboDL v0.4.1.0 · MIT License (with plugin-ecosystem supplemental terms) · requires JVM 17+</p><p>A pure Kotlin/JVM download engine. Idea-level acknowledgements: aria2, XDM, axel, Persepolis, Motrix, ab-download-manager — no source code copied.</p></div>
+    <p class="footer-stamp">CONTROL BOARD / v0.4.1.0</p>
+  </div>
 </footer>
-<script src="assets/site.ee5037a3.js" defer></script>
+<script src="assets/site.c63f3729.js" defer></script>
 </body>
 </html>
