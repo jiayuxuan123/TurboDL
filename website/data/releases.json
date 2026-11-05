@@ -1,302 +1,452 @@
 {
   "repo": "jiayuxuan123/TurboDL",
   "latest": {
-    "tag": "v0.4.1.0",
-    "name": "TurboDL 0.4.1.0：工业级可靠性与高并发增益",
-    "published": "2026-11-03T08:49:22Z",
+    "tag": "v0.5.0.0",
+    "name": "TurboDL 0.5.0.0：断点身份自校验与宿主控制强化",
+    "published": "2026-11-05T15:37:46Z",
     "prerelease": false,
-    "url": "https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.4.1.0",
-    "summary": "TurboDL 0.4.1.0 —— 工业级可靠性 + 高并发真正增益\n这一版继续修正确性与高并发缺陷，并把“线程数”从显示值改成真实吞吐能力。\n【正确性】\n· HTTP 416 不再把未完成分片标记成功；瞬时 416 会重试，持续 416 会给出明确失败原因。\n· 动态尾段侧车按顺序持久化并校验完整覆盖；残缺快照不会覆盖最后一次有效进度。\n· 镜像终址缓存按“任务 + 原始来源”双键隔离；跨源镜像和跨 origin 302 不继承 Cookie、Authorization、API key，Proxy-Authorization 仍只给代理层。\n· 任务事件改为单消费者有序转发；MERGING、COMPLETED、FAILED 都有明确 StateChanged 再发终态，宿主不会先收到完成、后收到状态。\n· 暂停清理不再覆盖已经完成、失败或取消的终态。\n· DownloadRequest…",
+    "url": "https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.5.0.0",
+    "summary": "TurboDL 0.5.0.0 —— 断点身份自校验 + 宿主控制强化 + 高并发稳定性\n【断点与数据安全】\n· 侧车快照内嵌目标文件身份（Windows ADS / POSIX / Android 设备号与 inode）：同长度文件替换不再误复用旧进度；\n· 旧版 v1 侧车采取严格取样校验后接纳，无法核验时完整保留原数据与断点；\n· 新增 UnverifiableResumePolicy.FAIL：宿主可在无法核验历史断点时要求报错并保留进度，不静默擦除用户数据；\n· 强 ETag 变化时若无全文件 SHA-256 校验且无法证实一致，拒绝混编并保留旧断点。\n【调度与高并发】\n· 修复已恢复任务在 256 任务终态队列轮转时的竞态清理；\n· 单 client 全局连接预算与公平 FIFO 任务槽，支持动态限制切换；\n· 尾段辅助（tail assist）阈值与动态分段策略收敛；\n· 4…",
     "assets": [
       {
-        "name": "turbo-plugin-bootstrap-0.4.1.0.jar",
-        "size": 9416,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-bootstrap-0.4.1.0.jar",
+        "name": "turbo-plugin-bootstrap-0.5.0.0.jar",
+        "size": 9806,
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-bootstrap-0.5.0.0.jar",
         "downloads": 0,
-        "sha256": "35cc91610ccb7fc9d39c1b66463a344cbe292527aeaf91de3f1848dbc22ace03"
+        "sha256": "964c47c2834b6048b271bcbd5ac5f9418ac922441a01bbe4bfe995dd6d7a785d"
       },
       {
-        "name": "turbo-plugin-bootstrap-0.4.1.0.module",
+        "name": "turbo-plugin-bootstrap-0.5.0.0.module",
         "size": 3228,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-bootstrap-0.4.1.0.module",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-bootstrap-0.5.0.0.module",
         "downloads": 0,
-        "sha256": "efa0cd3b2c10de64578b3ddf883d547d20cdda807394de6dd002dad7284a1ee3"
+        "sha256": "fcdef3339b68dbac3b3ef320fac7b5badf3d6897a3e20fb5ece95188df25878e"
       },
       {
-        "name": "turbo-plugin-bootstrap-0.4.1.0.pom",
+        "name": "turbo-plugin-bootstrap-0.5.0.0.pom",
         "size": 1380,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-bootstrap-0.4.1.0.pom",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-bootstrap-0.5.0.0.pom",
         "downloads": 0,
-        "sha256": "8286af59c0432986791adb81bfd66e158a75a29993ace790c97fdb75f98ecaf3"
+        "sha256": "a1c3c7888c84cab070bc2a8846261249c0a25203dca9ff9b1aefe3f3dce819d3"
       },
       {
-        "name": "turbo-plugin-hls-0.4.1.0.jar",
-        "size": 69021,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-hls-0.4.1.0.jar",
+        "name": "turbo-plugin-hls-0.5.0.0.jar",
+        "size": 81803,
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-hls-0.5.0.0.jar",
         "downloads": 0,
-        "sha256": "45dd4d8133bb817b7193202522184af142f14f0e5b59a66e45f139a126f0d7ef"
+        "sha256": "42e443d04d60d3533f685a313181ccf95d8bde0425ced71e7ccef4b047489321"
       },
       {
-        "name": "turbo-plugin-hls-0.4.1.0.module",
+        "name": "turbo-plugin-hls-0.5.0.0.module",
         "size": 3379,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-hls-0.4.1.0.module",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-hls-0.5.0.0.module",
         "downloads": 0,
-        "sha256": "a6447e471ff00e8ae3e7f0bfbcc710eb2a2967b617cb23dfc62ed8b05bff2316"
+        "sha256": "6fbbc3e10161e7d3a8c879fe7334dbe682c32f791a03998bc734ba4be9abe4f8"
       },
       {
-        "name": "turbo-plugin-hls-0.4.1.0.pom",
+        "name": "turbo-plugin-hls-0.5.0.0.pom",
         "size": 1581,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-hls-0.4.1.0.pom",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-hls-0.5.0.0.pom",
         "downloads": 0,
-        "sha256": "10141e248741c178d11357059a7c0b44ced36bdfa5be8fc9dd066d24e7e7dc72"
+        "sha256": "05c70d8f29762430e7c9ef7158da764e63effbe2a73f2c57df7bf05df901869a"
       },
       {
-        "name": "turbo-plugin-js-0.4.1.0.jar",
+        "name": "turbo-plugin-js-0.5.0.0.jar",
         "size": 222860,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-js-0.4.1.0.jar",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-js-0.5.0.0.jar",
         "downloads": 0,
-        "sha256": "4f730eaab52eda460f5a47249fe53cc191e79ef381abc265bfa0c84057989f4d"
+        "sha256": "79b54d13456f376e671c36b2699183ab0f8e90125e4c8daa564987b1bb360a77"
       },
       {
-        "name": "turbo-plugin-js-0.4.1.0.module",
+        "name": "turbo-plugin-js-0.5.0.0.module",
         "size": 3542,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-js-0.4.1.0.module",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-js-0.5.0.0.module",
         "downloads": 0,
-        "sha256": "9c6e43cb7c5670de014063440feba4087f8ab8003cd3bfe34ef9a98df0a6ec1b"
+        "sha256": "070d3fe65375ccf83542023508d06d49551ea48f213f5cacba894356e89397ed"
       },
       {
-        "name": "turbo-plugin-js-0.4.1.0.pom",
+        "name": "turbo-plugin-js-0.5.0.0.pom",
         "size": 1770,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-js-0.4.1.0.pom",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-js-0.5.0.0.pom",
         "downloads": 0,
-        "sha256": "6192f118c5acdeba1a93faa65421a18c4c6c293f5c97d876e27c7b35ddf5cd0e"
+        "sha256": "51bb3c82434cc7b1d8ce90db72a9539502498b39c9f72fa280b824a14caa6321"
       },
       {
-        "name": "turbo-plugin-parser-0.4.1.0.jar",
+        "name": "turbo-plugin-parser-0.5.0.0.jar",
         "size": 50036,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-parser-0.4.1.0.jar",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-parser-0.5.0.0.jar",
         "downloads": 0,
-        "sha256": "d256944ac3f41656c940d1981f2914553cf9fa16063286b339e642b39d3c7444"
+        "sha256": "07aa210514eb182819578d4601c729b36510c60c9952e2079791a4b49a340a74"
       },
       {
-        "name": "turbo-plugin-parser-0.4.1.0.module",
+        "name": "turbo-plugin-parser-0.5.0.0.module",
         "size": 3394,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-parser-0.4.1.0.module",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-parser-0.5.0.0.module",
         "downloads": 0,
-        "sha256": "46ad791fa635d1b9bc6547f6e2f168e87e96beb05849d5558f0d09907fe54d29"
+        "sha256": "36f351eb2fd4dfd53c4d048e16e5e6a2d051a9536f18acf902fa98a4bf5340ca"
       },
       {
-        "name": "turbo-plugin-parser-0.4.1.0.pom",
+        "name": "turbo-plugin-parser-0.5.0.0.pom",
         "size": 1584,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-parser-0.4.1.0.pom",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-parser-0.5.0.0.pom",
         "downloads": 0,
-        "sha256": "6a2811ed8f9bf5b6284606fa97ca750a1b8feaffd768a3084bb9776c26ff16bd"
+        "sha256": "9b69448cc404a5e0e751aa57a979925faca91b3770df1e5eaae0f7f88f1b626e"
       },
       {
-        "name": "turbo-plugin-runtime-0.4.1.0.jar",
-        "size": 106978,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-runtime-0.4.1.0.jar",
+        "name": "turbo-plugin-runtime-0.5.0.0.jar",
+        "size": 108226,
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-runtime-0.5.0.0.jar",
         "downloads": 0,
-        "sha256": "a4808c9b8f5eb4baae924608db1aceca08bb49b5b88652df58e9fd2f44e6669d"
+        "sha256": "9da797d496c7e16801bf1eaef812400045392e8b28912c1784bd502ea490d05f"
       },
       {
-        "name": "turbo-plugin-runtime-0.4.1.0.module",
+        "name": "turbo-plugin-runtime-0.5.0.0.module",
         "size": 3244,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-runtime-0.4.1.0.module",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-runtime-0.5.0.0.module",
         "downloads": 0,
-        "sha256": "cc752f0d775a3aff10b78047715e7b92df6d3d41e8e054f57a108cff12a84213"
+        "sha256": "c483dc5d5c197c6ed74ee302b33a363e12acccaa3964e38a2f84ffa80dfc260d"
       },
       {
-        "name": "turbo-plugin-runtime-0.4.1.0.pom",
+        "name": "turbo-plugin-runtime-0.5.0.0.pom",
         "size": 1393,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-runtime-0.4.1.0.pom",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-runtime-0.5.0.0.pom",
         "downloads": 0,
-        "sha256": "733ae2a871dbd7a66b2cb61ec9f1d960d77ef56f70d1e102f6db14c7683a3670"
+        "sha256": "57277f201d09c8694ea58b83ea3702d663854d4eccae9ce6b1038d00daf495ea"
       },
       {
         "name": "turbodl-cli-all.jar",
-        "size": 4859441,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-cli-all.jar",
+        "size": 4929446,
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-cli-all.jar",
         "downloads": 0,
-        "sha256": "8c94ac7cfb74f5b92f0de2de7bcaeb8e0f9806cdf0cfefd014cfbd13dd7d3efb"
+        "sha256": "351d087cf898136d57d26c5618136a24a1ca5717053073675b0acfc2534607c9"
       },
       {
-        "name": "turbodl-core-0.4.1.0.jar",
-        "size": 443296,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-core-0.4.1.0.jar",
+        "name": "turbodl-core-0.5.0.0.jar",
+        "size": 505401,
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-core-0.5.0.0.jar",
         "downloads": 0,
-        "sha256": "dbba68188bf7bf2bebde3d9101c554d1ccebc38fa9deec80a810ad7caa0cc8b2"
+        "sha256": "4d2ff8425f044e514b0b03fb5a7eb72ba8b831a00d79156cd22383cc04328a98"
       },
       {
-        "name": "turbodl-core-0.4.1.0.module",
+        "name": "turbodl-core-0.5.0.0.module",
         "size": 3208,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-core-0.4.1.0.module",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-core-0.5.0.0.module",
         "downloads": 0,
-        "sha256": "7608c1271a274403e908b8d2d10c58fb9a3538aef69286d16e76b5f2c3ed0fc5"
+        "sha256": "12e799fd32e5fb90423227d4962f968b1b696c9a378af87f9334eabbb915e4b3"
       },
       {
-        "name": "turbodl-core-0.4.1.0.pom",
+        "name": "turbodl-core-0.5.0.0.pom",
         "size": 1387,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-core-0.4.1.0.pom",
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-core-0.5.0.0.pom",
         "downloads": 0,
-        "sha256": "8d3e36463b2a7a5c08ccb6f982b82efa82c150060c1aa934c08e6841cc205e80"
+        "sha256": "3b43077a6c1440faa5b67a96c4fb38de9d44acfb9d97f318e022f0ac49357dc3"
       },
       {
-        "name": "TurboDL-v0.4.1.0-mavenLocal.zip",
-        "size": 867718,
-        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/TurboDL-v0.4.1.0-mavenLocal.zip",
+        "name": "TurboDL-v0.5.0.0-mavenLocal.zip",
+        "size": 941563,
+        "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/TurboDL-v0.5.0.0-mavenLocal.zip",
         "downloads": 0,
-        "sha256": "b6cdbd3d4e3b92d6ff27fe058a3add7bb3629d1e8e3cd6c05561a0446591ec09"
+        "sha256": "60897798eb8951a4080665491eb9b41f85635f89ea4a36b7642ea7a0878ebe4b"
       }
     ]
   },
   "releases": [
+    {
+      "tag": "v0.5.0.0",
+      "name": "TurboDL 0.5.0.0：断点身份自校验与宿主控制强化",
+      "published": "2026-11-05T15:37:46Z",
+      "prerelease": false,
+      "url": "https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.5.0.0",
+      "summary": "TurboDL 0.5.0.0 —— 断点身份自校验 + 宿主控制强化 + 高并发稳定性\n【断点与数据安全】\n· 侧车快照内嵌目标文件身份（Windows ADS / POSIX / Android 设备号与 inode）：同长度文件替换不再误复用旧进度；\n· 旧版 v1 侧车采取严格取样校验后接纳，无法核验时完整保留原数据与断点；\n· 新增 UnverifiableResumePolicy.FAIL：宿主可在无法核验历史断点时要求报错并保留进度，不静默擦除用户数据；\n· 强 ETag 变化时若无全文件 SHA-256 校验且无法证实一致，拒绝混编并保留旧断点。\n【调度与高并发】\n· 修复已恢复任务在 256 任务终态队列轮转时的竞态清理；\n· 单 client 全局连接预算与公平 FIFO 任务槽，支持动态限制切换；\n· 尾段辅助（tail assist）阈值与动态分段策略收敛；\n· 4…",
+      "assets": [
+        {
+          "name": "turbo-plugin-bootstrap-0.5.0.0.jar",
+          "size": 9806,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-bootstrap-0.5.0.0.jar",
+          "downloads": 0,
+          "sha256": "964c47c2834b6048b271bcbd5ac5f9418ac922441a01bbe4bfe995dd6d7a785d"
+        },
+        {
+          "name": "turbo-plugin-bootstrap-0.5.0.0.module",
+          "size": 3228,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-bootstrap-0.5.0.0.module",
+          "downloads": 0,
+          "sha256": "fcdef3339b68dbac3b3ef320fac7b5badf3d6897a3e20fb5ece95188df25878e"
+        },
+        {
+          "name": "turbo-plugin-bootstrap-0.5.0.0.pom",
+          "size": 1380,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-bootstrap-0.5.0.0.pom",
+          "downloads": 0,
+          "sha256": "a1c3c7888c84cab070bc2a8846261249c0a25203dca9ff9b1aefe3f3dce819d3"
+        },
+        {
+          "name": "turbo-plugin-hls-0.5.0.0.jar",
+          "size": 81803,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-hls-0.5.0.0.jar",
+          "downloads": 0,
+          "sha256": "42e443d04d60d3533f685a313181ccf95d8bde0425ced71e7ccef4b047489321"
+        },
+        {
+          "name": "turbo-plugin-hls-0.5.0.0.module",
+          "size": 3379,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-hls-0.5.0.0.module",
+          "downloads": 0,
+          "sha256": "6fbbc3e10161e7d3a8c879fe7334dbe682c32f791a03998bc734ba4be9abe4f8"
+        },
+        {
+          "name": "turbo-plugin-hls-0.5.0.0.pom",
+          "size": 1581,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-hls-0.5.0.0.pom",
+          "downloads": 0,
+          "sha256": "05c70d8f29762430e7c9ef7158da764e63effbe2a73f2c57df7bf05df901869a"
+        },
+        {
+          "name": "turbo-plugin-js-0.5.0.0.jar",
+          "size": 222860,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-js-0.5.0.0.jar",
+          "downloads": 0,
+          "sha256": "79b54d13456f376e671c36b2699183ab0f8e90125e4c8daa564987b1bb360a77"
+        },
+        {
+          "name": "turbo-plugin-js-0.5.0.0.module",
+          "size": 3542,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-js-0.5.0.0.module",
+          "downloads": 0,
+          "sha256": "070d3fe65375ccf83542023508d06d49551ea48f213f5cacba894356e89397ed"
+        },
+        {
+          "name": "turbo-plugin-js-0.5.0.0.pom",
+          "size": 1770,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-js-0.5.0.0.pom",
+          "downloads": 0,
+          "sha256": "51bb3c82434cc7b1d8ce90db72a9539502498b39c9f72fa280b824a14caa6321"
+        },
+        {
+          "name": "turbo-plugin-parser-0.5.0.0.jar",
+          "size": 50036,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-parser-0.5.0.0.jar",
+          "downloads": 0,
+          "sha256": "07aa210514eb182819578d4601c729b36510c60c9952e2079791a4b49a340a74"
+        },
+        {
+          "name": "turbo-plugin-parser-0.5.0.0.module",
+          "size": 3394,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-parser-0.5.0.0.module",
+          "downloads": 0,
+          "sha256": "36f351eb2fd4dfd53c4d048e16e5e6a2d051a9536f18acf902fa98a4bf5340ca"
+        },
+        {
+          "name": "turbo-plugin-parser-0.5.0.0.pom",
+          "size": 1584,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-parser-0.5.0.0.pom",
+          "downloads": 0,
+          "sha256": "9b69448cc404a5e0e751aa57a979925faca91b3770df1e5eaae0f7f88f1b626e"
+        },
+        {
+          "name": "turbo-plugin-runtime-0.5.0.0.jar",
+          "size": 108226,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-runtime-0.5.0.0.jar",
+          "downloads": 0,
+          "sha256": "9da797d496c7e16801bf1eaef812400045392e8b28912c1784bd502ea490d05f"
+        },
+        {
+          "name": "turbo-plugin-runtime-0.5.0.0.module",
+          "size": 3244,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-runtime-0.5.0.0.module",
+          "downloads": 0,
+          "sha256": "c483dc5d5c197c6ed74ee302b33a363e12acccaa3964e38a2f84ffa80dfc260d"
+        },
+        {
+          "name": "turbo-plugin-runtime-0.5.0.0.pom",
+          "size": 1393,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbo-plugin-runtime-0.5.0.0.pom",
+          "downloads": 0,
+          "sha256": "57277f201d09c8694ea58b83ea3702d663854d4eccae9ce6b1038d00daf495ea"
+        },
+        {
+          "name": "turbodl-cli-all.jar",
+          "size": 4929446,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-cli-all.jar",
+          "downloads": 0,
+          "sha256": "351d087cf898136d57d26c5618136a24a1ca5717053073675b0acfc2534607c9"
+        },
+        {
+          "name": "turbodl-core-0.5.0.0.jar",
+          "size": 505401,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-core-0.5.0.0.jar",
+          "downloads": 0,
+          "sha256": "4d2ff8425f044e514b0b03fb5a7eb72ba8b831a00d79156cd22383cc04328a98"
+        },
+        {
+          "name": "turbodl-core-0.5.0.0.module",
+          "size": 3208,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-core-0.5.0.0.module",
+          "downloads": 0,
+          "sha256": "12e799fd32e5fb90423227d4962f968b1b696c9a378af87f9334eabbb915e4b3"
+        },
+        {
+          "name": "turbodl-core-0.5.0.0.pom",
+          "size": 1387,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/turbodl-core-0.5.0.0.pom",
+          "downloads": 0,
+          "sha256": "3b43077a6c1440faa5b67a96c4fb38de9d44acfb9d97f318e022f0ac49357dc3"
+        },
+        {
+          "name": "TurboDL-v0.5.0.0-mavenLocal.zip",
+          "size": 941563,
+          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.5.0.0/TurboDL-v0.5.0.0-mavenLocal.zip",
+          "downloads": 0,
+          "sha256": "60897798eb8951a4080665491eb9b41f85635f89ea4a36b7642ea7a0878ebe4b"
+        }
+      ]
+    },
     {
       "tag": "v0.4.1.0",
       "name": "TurboDL 0.4.1.0：工业级可靠性与高并发增益",
       "published": "2026-11-03T08:49:22Z",
       "prerelease": false,
       "url": "https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.4.1.0",
-      "summary": "TurboDL 0.4.1.0 —— 工业级可靠性 + 高并发真正增益\n这一版继续修正确性与高并发缺陷，并把“线程数”从显示值改成真实吞吐能力。\n【正确性】\n· HTTP 416 不再把未完成分片标记成功；瞬时 416 会重试，持续 416 会给出明确失败原因。\n· 动态尾段侧车按顺序持久化并校验完整覆盖；残缺快照不会覆盖最后一次有效进度。\n· 镜像终址缓存按“任务 + 原始来源”双键隔离；跨源镜像和跨 origin 302 不继承 Cookie、Authorization、API key，Proxy-Authorization 仍只给代理层。\n· 任务事件改为单消费者有序转发；MERGING、COMPLETED、FAILED 都有明确 StateChanged 再发终态，宿主不会先收到完成、后收到状态。\n· 暂停清理不再覆盖已经完成、失败或取消的终态。\n· DownloadRequest…",
+      "summary": "TurboDL 0.4.1.0 —— 工业级可靠性 + 高并发真正增益\r\n\r\n这一版继续修正确性与高并发缺陷，并把“线程数”从显示值改成真实吞吐能力。\r\n\r\n【正确性】\r\n· HTTP 416 不再把未完成分片标记成功；瞬时 416 会重试，持续 416 会给出明确失败原因。\r\n· 动态尾段侧车按顺序持久化并校验完整覆盖；残缺快照不会覆盖最后一次有效进度。\r\n· 镜像终址缓存按“任务 + 原始来源”双键隔离；跨源镜像和跨 origin 302 不继承 Cookie、Authorization、API key，Proxy-Authorization 仍只给代理层。\r\n· 任务事件改为单消费者有序转发；MERGING、COMPLETED、FAILED 都有明确 StateChanged 再发终态，宿主不会先收到完成、后收到状态。\r\n· 暂停清理不再覆盖已经完成、失败或取消的终态。\r\n· Dow…",
       "assets": [
         {
           "name": "turbo-plugin-bootstrap-0.4.1.0.jar",
           "size": 9416,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-bootstrap-0.4.1.0.jar",
-          "downloads": 0,
+          "downloads": 7,
           "sha256": "35cc91610ccb7fc9d39c1b66463a344cbe292527aeaf91de3f1848dbc22ace03"
         },
         {
           "name": "turbo-plugin-bootstrap-0.4.1.0.module",
           "size": 3228,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-bootstrap-0.4.1.0.module",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "efa0cd3b2c10de64578b3ddf883d547d20cdda807394de6dd002dad7284a1ee3"
         },
         {
           "name": "turbo-plugin-bootstrap-0.4.1.0.pom",
           "size": 1380,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-bootstrap-0.4.1.0.pom",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "8286af59c0432986791adb81bfd66e158a75a29993ace790c97fdb75f98ecaf3"
         },
         {
           "name": "turbo-plugin-hls-0.4.1.0.jar",
           "size": 69021,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-hls-0.4.1.0.jar",
-          "downloads": 0,
+          "downloads": 7,
           "sha256": "45dd4d8133bb817b7193202522184af142f14f0e5b59a66e45f139a126f0d7ef"
         },
         {
           "name": "turbo-plugin-hls-0.4.1.0.module",
           "size": 3379,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-hls-0.4.1.0.module",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "a6447e471ff00e8ae3e7f0bfbcc710eb2a2967b617cb23dfc62ed8b05bff2316"
         },
         {
           "name": "turbo-plugin-hls-0.4.1.0.pom",
           "size": 1581,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-hls-0.4.1.0.pom",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "10141e248741c178d11357059a7c0b44ced36bdfa5be8fc9dd066d24e7e7dc72"
         },
         {
           "name": "turbo-plugin-js-0.4.1.0.jar",
           "size": 222860,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-js-0.4.1.0.jar",
-          "downloads": 0,
+          "downloads": 7,
           "sha256": "4f730eaab52eda460f5a47249fe53cc191e79ef381abc265bfa0c84057989f4d"
         },
         {
           "name": "turbo-plugin-js-0.4.1.0.module",
           "size": 3542,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-js-0.4.1.0.module",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "9c6e43cb7c5670de014063440feba4087f8ab8003cd3bfe34ef9a98df0a6ec1b"
         },
         {
           "name": "turbo-plugin-js-0.4.1.0.pom",
           "size": 1770,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-js-0.4.1.0.pom",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "6192f118c5acdeba1a93faa65421a18c4c6c293f5c97d876e27c7b35ddf5cd0e"
         },
         {
           "name": "turbo-plugin-parser-0.4.1.0.jar",
           "size": 50036,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-parser-0.4.1.0.jar",
-          "downloads": 0,
+          "downloads": 7,
           "sha256": "d256944ac3f41656c940d1981f2914553cf9fa16063286b339e642b39d3c7444"
         },
         {
           "name": "turbo-plugin-parser-0.4.1.0.module",
           "size": 3394,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-parser-0.4.1.0.module",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "46ad791fa635d1b9bc6547f6e2f168e87e96beb05849d5558f0d09907fe54d29"
         },
         {
           "name": "turbo-plugin-parser-0.4.1.0.pom",
           "size": 1584,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-parser-0.4.1.0.pom",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "6a2811ed8f9bf5b6284606fa97ca750a1b8feaffd768a3084bb9776c26ff16bd"
         },
         {
           "name": "turbo-plugin-runtime-0.4.1.0.jar",
           "size": 106978,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-runtime-0.4.1.0.jar",
-          "downloads": 0,
+          "downloads": 7,
           "sha256": "a4808c9b8f5eb4baae924608db1aceca08bb49b5b88652df58e9fd2f44e6669d"
         },
         {
           "name": "turbo-plugin-runtime-0.4.1.0.module",
           "size": 3244,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-runtime-0.4.1.0.module",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "cc752f0d775a3aff10b78047715e7b92df6d3d41e8e054f57a108cff12a84213"
         },
         {
           "name": "turbo-plugin-runtime-0.4.1.0.pom",
           "size": 1393,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbo-plugin-runtime-0.4.1.0.pom",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "733ae2a871dbd7a66b2cb61ec9f1d960d77ef56f70d1e102f6db14c7683a3670"
         },
         {
           "name": "turbodl-cli-all.jar",
           "size": 4859441,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-cli-all.jar",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "8c94ac7cfb74f5b92f0de2de7bcaeb8e0f9806cdf0cfefd014cfbd13dd7d3efb"
         },
         {
           "name": "turbodl-core-0.4.1.0.jar",
           "size": 443296,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-core-0.4.1.0.jar",
-          "downloads": 0,
+          "downloads": 7,
           "sha256": "dbba68188bf7bf2bebde3d9101c554d1ccebc38fa9deec80a810ad7caa0cc8b2"
         },
         {
           "name": "turbodl-core-0.4.1.0.module",
           "size": 3208,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-core-0.4.1.0.module",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "7608c1271a274403e908b8d2d10c58fb9a3538aef69286d16e76b5f2c3ed0fc5"
         },
         {
           "name": "turbodl-core-0.4.1.0.pom",
           "size": 1387,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/turbodl-core-0.4.1.0.pom",
-          "downloads": 0,
+          "downloads": 8,
           "sha256": "8d3e36463b2a7a5c08ccb6f982b82efa82c150060c1aa934c08e6841cc205e80"
         },
         {
           "name": "TurboDL-v0.4.1.0-mavenLocal.zip",
           "size": 867718,
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.4.1.0/TurboDL-v0.4.1.0-mavenLocal.zip",
-          "downloads": 0,
+          "downloads": 2,
           "sha256": "b6cdbd3d4e3b92d6ff27fe058a3add7bb3629d1e8e3cd6c05561a0446591ec09"
         }
       ]
@@ -3700,107 +3850,6 @@
           "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc17/TurboDL-v0.2.0-rc17-mavenLocal.zip",
           "downloads": 1,
           "sha256": "c23622be2e2c89f241985db54793f853891c33e5578daf778cbdf788defd4692"
-        }
-      ]
-    },
-    {
-      "tag": "v0.2.0-rc16",
-      "name": "v0.2.0-rc16 - 修复解析慢、消除每分片重定向、恢复断点续传",
-      "published": "2026-09-15T04:30:42Z",
-      "prerelease": true,
-      "url": "https://github.com/jiayuxuan123/TurboDL/releases/tag/v0.2.0-rc16",
-      "summary": "修复「小文件解析也慢」+ 消除每分片重定向 + 恢复断点续传\n本版集中在**下载开始前的解析链路**与**重定向/续传**三处长期存在的隐性浪费，\n全部由实测数据驱动，并各自带回归测试。\n---\n1. 修复「小文件解析阶段也很慢」（用户实报）\n> 「即使是只有 10MB、6MB 这种非常小的文件，它在解析阶段也会很慢。\n>   网盘的还快一些（直接就跑了），正常的其他的就会这样。」\n反直觉之处：**文件越小反而越慢**，而且**网盘链接比普通直链快**。\n根因：把「确定性结论」当「瞬时抖动」在重试\n`SegmentDownloader.probeWithRetry` 旧实现**只在 `supportsRange == true` 时提前返回**：\n对**确定性地不支持 Range** 的服务器（200 + Content-Length + 无 `Accept-Ranges`），\n每一轮都发…",
-      "assets": [
-        {
-          "name": "turbo-plugin-bootstrap-0.2.0-rc16.jar",
-          "size": 9355,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-bootstrap-0.2.0-rc16.jar",
-          "downloads": 1,
-          "sha256": "5882e1d85f282a56c249166209f59f4f3f6c7e07ce9b8edfe9f3601b5a1d66b8"
-        },
-        {
-          "name": "turbo-plugin-bootstrap-0.2.0-rc16.module",
-          "size": 3255,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-bootstrap-0.2.0-rc16.module",
-          "downloads": 1,
-          "sha256": "f8b8946b9f84645ff5447cefc9cf6d1cafa75cffeeb82f02c01bda156640e3b9"
-        },
-        {
-          "name": "turbo-plugin-bootstrap-0.2.0-rc16.pom",
-          "size": 1389,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-bootstrap-0.2.0-rc16.pom",
-          "downloads": 1,
-          "sha256": "0efa9276d564f3db0be8a0f5cf806527248a62a8c9ee12d5615e40cbff45bc87"
-        },
-        {
-          "name": "turbo-plugin-hls-0.2.0-rc16.jar",
-          "size": 61800,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-hls-0.2.0-rc16.jar",
-          "downloads": 1,
-          "sha256": "aa30f42259f0fd994933ff8a99e4520736550b8dcf9a71351cd906a2c7481523"
-        },
-        {
-          "name": "turbo-plugin-hls-0.2.0-rc16.module",
-          "size": 3406,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-hls-0.2.0-rc16.module",
-          "downloads": 1,
-          "sha256": "ba43a34c3e6906d5e77d8cc20e792ab7522bad147703f9f44792c603fc4d211f"
-        },
-        {
-          "name": "turbo-plugin-hls-0.2.0-rc16.pom",
-          "size": 1590,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-hls-0.2.0-rc16.pom",
-          "downloads": 1,
-          "sha256": "80e4ab8c374dd87e9cdf22d2da2001843f5905e857de3090a253a639f747e3d1"
-        },
-        {
-          "name": "turbo-plugin-runtime-0.2.0-rc16.jar",
-          "size": 55795,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-runtime-0.2.0-rc16.jar",
-          "downloads": 2,
-          "sha256": "1121c0a5cb599c8f7cb7a802638c914b790bf82537246d0521049456d560671a"
-        },
-        {
-          "name": "turbo-plugin-runtime-0.2.0-rc16.module",
-          "size": 3263,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-runtime-0.2.0-rc16.module",
-          "downloads": 1,
-          "sha256": "b11566dee79c0374e8c4f4266f3a29396c3cdced79a7b8afbbf8eb73c64466f9"
-        },
-        {
-          "name": "turbo-plugin-runtime-0.2.0-rc16.pom",
-          "size": 1399,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbo-plugin-runtime-0.2.0-rc16.pom",
-          "downloads": 1,
-          "sha256": "c31e69222832e9ae27854c4c0de849f0ef5a816fccbf0e8b5b8fa5f067eb19b5"
-        },
-        {
-          "name": "turbodl-core-0.2.0-rc16.jar",
-          "size": 215006,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbodl-core-0.2.0-rc16.jar",
-          "downloads": 1,
-          "sha256": "2f636ac2adc6bb54ab2932aedf6d1bf177a713660f652f7bb29bac008d196b5c"
-        },
-        {
-          "name": "turbodl-core-0.2.0-rc16.module",
-          "size": 3223,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbodl-core-0.2.0-rc16.module",
-          "downloads": 1,
-          "sha256": "b71f3cf381341b2c374b482692743180e5566a5edc9935ce795db1ef805b4cf7"
-        },
-        {
-          "name": "turbodl-core-0.2.0-rc16.pom",
-          "size": 1390,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/turbodl-core-0.2.0-rc16.pom",
-          "downloads": 1,
-          "sha256": "c67fb6fa720166887d29da6e7cf26cbc364fb49ec766bfef2fd161fc43be104a"
-        },
-        {
-          "name": "TurboDL-v0.2.0-rc16-mavenLocal.zip",
-          "size": 328633,
-          "url": "https://github.com/jiayuxuan123/TurboDL/releases/download/v0.2.0-rc16/TurboDL-v0.2.0-rc16-mavenLocal.zip",
-          "downloads": 1,
-          "sha256": "da54ac1e4c008cb2a5bd6e2264e57d371c25fe42d086b641918c97e79a1cd9b8"
         }
       ]
     }
