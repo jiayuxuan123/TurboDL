@@ -879,7 +879,11 @@ def _page_download(lang: str, href) -> str:
         for item in LATEST["assets"]
     ]
 
-    cli_commands = f"java -jar {CLI_ASSET} <url> -o out.bin -c 16\\njava -jar {CLI_ASSET} <url> --json\\njava -jar {CLI_ASSET} --batch tasks.txt"
+    cli_commands = (
+        f"java -jar {CLI_ASSET} <url> -o out.bin -c 16\\n"
+        f"java -jar {CLI_ASSET} <url> --known-size 32241380 -c 32 --json\\n"
+        f"java -jar {CLI_ASSET} --batch tasks.txt"
+    )
     offline_name = offline["name"] if offline else "TurboDL-mavenLocal.zip"
     install_commands = f'unzip {offline_name} -d "$HOME/.m2/repository"\\n./gradlew build'
 
@@ -1328,7 +1332,7 @@ val result = client.await(id)""".replace("VERSION", LATEST_VERSION),
             )
             + code_block(
                 f"""java -jar {CLI_ASSET} <url> -o out.bin -c 64
-java -jar {CLI_ASSET} <url> --json       # NDJSON
+java -jar {CLI_ASSET} <url> --known-size 32241380 -c 32 --json
 java -jar {CLI_ASSET} --batch tasks.txt  # one URL per line""",
                 "shell",
             )

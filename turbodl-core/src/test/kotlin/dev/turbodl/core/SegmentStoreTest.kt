@@ -3,6 +3,7 @@ package dev.turbodl.core
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -127,6 +128,191 @@ class SegmentStoreTest {
     }
 
     @Test
+    fun `打开之后被截断 再预留长度也不能让旧进度复活`() {
+        val dir = tmpDir("truncated-after-open")
+        val dest = File(dir, "out.bin")
+        val s = store(dir, 1000)
+        s.open()
+        try {
+            val pieces = s.buildGrid(500)
+            s.writeAt(0, ByteArray(500), 0, 500)
+            pieces[0].written = 500
+            s.persist(pieces)
+        } finally {
+            s.close()
+        }
+
+        val s2 = store(dir, 1000)
+        s2.open()
+        try {
+            java.io.RandomAccessFile(dest, "rw").use { it.setLength(0) }
+            s2.ensureLength()
+            assertNull(
+                s2.peek(1000),
+                "open 之后发生的截断不能被打开时缓存的长度掩盖",
+            )
+            val grid = s2.loadOrCreate(500)
+            assertEquals(0L, grid.sumOf { it.written })
+        } finally {
+            s2.close()
+        }
+    }
+
+    @Test
+    fun `loadOrCreate 之后被截断 调度器会重新加载空网格`() {
+        val dir = tmpDir("truncated-after-load")
+        val dest = File(dir, "out.bin")
+        val s = store(dir, 1000)
+        s.open()
+        try {
+            val pieces = s.buildGrid(500)
+            s.writeAt(0, ByteArray(500), 0, 500)
+            pieces[0].written = 500
+            s.persist(pieces)
+        } finally {
+            s.close()
+        }
+
+        val s2 = store(dir, 1000)
+        s2.open()
+        try {
+            val loaded = s2.loadOrCreate(500)
+            assertEquals(500L, loaded[0].written)
+            java.io.RandomAccessFile(dest, "rw").use { it.setLength(0) }
+            assertTrue(s2.ensureLengthChecked(), "应当发现 loadOrCreate 之后发生的截断")
+            val reloaded = s2.loadOrCreate(500)
+            assertEquals(0L, reloaded.sumOf { it.written })
+        } finally {
+            s2.close()
+        }
+    }
+
+    @Test
+    fun `目标文件比源文件长时会截断旧尾部`() {
+        val dir = tmpDir("truncate-longer")
+        val dest = File(dir, "out.bin")
+        dest.writeBytes(ByteArray(4096) { 7 })
+        val s = store(dir, 1000)
+        s.open()
+        try {
+            s.ensureLength()
+            assertEquals(1000L, dest.length())
+        } finally {
+            s.close()
+        }
+    }
+
+    @Test
+    fun `同长度替换目标文件会让旧侧车失效`() {
+        val dir = tmpDir("replace-same-length")
+        val dest = File(dir, "out.bin")
+        val s = store(dir, 1000)
+        s.open()
+        try {
+            val pieces = s.buildGrid(500)
+            s.writeAt(0, ByteArray(500) { 17 }, 0, 500)
+            pieces[0].written = 500
+            s.persist(pieces)
+        } finally {
+            s.close()
+        }
+
+        assertTrue(dest.delete())
+        dest.writeBytes(ByteArray(500) { 99 })
+
+        val s2 = store(dir, 1000)
+        s2.open()
+        try {
+            assertNull(s2.peek(1000), "同长度替换应通过文件身份识别为另一份文件")
+            val grid = s2.loadOrCreate(500)
+            assertEquals(0L, grid.sumOf { it.written })
+        } finally {
+            s2.close()
+        }
+    }
+
+    @Test
+    fun `旧版侧车缺少身份时不得接受同长度替换文件`() {
+        val dir = tmpDir("legacy-missing-identity")
+        val dest = File(dir, "out.bin")
+        dest.writeBytes(ByteArray(8) { 99 })
+        java.io.DataOutputStream(java.io.FileOutputStream(File(dir, "progress.tdlp"))).use { out ->
+            out.write(byteArrayOf('T'.code.toByte(), 'D'.code.toByte(), 'L'.code.toByte(), 'P'.code.toByte()))
+            out.writeInt(1) // legacy v1 carried identity in a separate file
+            out.writeLong(8)
+            out.writeInt(2)
+            out.writeLong(0)
+            out.writeLong(3)
+            out.writeLong(4)
+            out.writeLong(4)
+            out.writeLong(7)
+            out.writeLong(0)
+        }
+
+        val s = store(dir, 8)
+        s.open()
+        try {
+            assertNull(s.peek(8), "身份文件缺失时必须判定为 UNKNOWN，不能恢复")
+            assertFailsWith<ResumeVerificationException> { s.loadOrCreate(4) }
+            assertEquals(8L, dest.length(), "无法验证时必须保留目标文件")
+            assertTrue(File(dir, "progress.tdlp").isFile, "必须保留旧侧车")
+        } finally {
+            s.close()
+        }
+    }
+
+    @Test
+    fun `旧版侧车带有效身份时仍可安全续传`() {
+        val dir = tmpDir("legacy-valid-identity")
+        val dest = File(dir, "out.bin")
+        val s = store(dir, 8)
+        s.open()
+        try {
+            s.writeAt(0, byteArrayOf(1, 1, 1, 1), 0, 4)
+            s.persist(
+                listOf(
+                    SegmentStore.Piece(0, 3, written = 4),
+                    SegmentStore.Piece(4, 7, written = 0),
+                ),
+            )
+        } finally {
+            s.close()
+        }
+
+        val state = File(dir, "progress.tdlp")
+        val identity = java.io.DataInputStream(state.inputStream().buffered()).use { input ->
+            input.readNBytes(4)
+            assertEquals(2, input.readInt())
+            val length = input.readInt()
+            input.readNBytes(length).toString(Charsets.UTF_8)
+        }
+        assertTrue(identity.isNotBlank())
+
+        java.io.DataOutputStream(state.outputStream()).use { out ->
+            out.write(byteArrayOf('T'.code.toByte(), 'D'.code.toByte(), 'L'.code.toByte(), 'P'.code.toByte()))
+            out.writeInt(1)
+            out.writeLong(8)
+            out.writeInt(2)
+            out.writeLong(0)
+            out.writeLong(3)
+            out.writeLong(4)
+            out.writeLong(4)
+            out.writeLong(7)
+            out.writeLong(0)
+        }
+        File(dir, "progress.tdlp.identity").writeText("v1:$identity")
+
+        val s2 = store(dir, 8)
+        s2.open()
+        try {
+            val loaded = assertNotNull(s2.peek(8), "带有效身份的 v1 快照应继续兼容")
+            assertEquals(4L, loaded[0].written)
+        } finally {
+            s2.close()
+        }
+    }
+
+    @Test
     fun `总大小变了时旧进度作废`() {
         val dir = tmpDir("totalsize")
         val s = store(dir, 800)
@@ -181,6 +367,30 @@ class SegmentStoreTest {
             val grid = s.loadOrCreate(50)
             assertEquals(2, grid.size)
             assertEquals(100L, grid.sumOf { it.length })
+        } finally {
+            s.close()
+        }
+    }
+
+    @Test
+    fun `侧车中的 written 超过分片长度时整份快照被拒绝`() {
+        val dir = tmpDir("invalid-written")
+        File(dir, "out.bin").writeBytes(ByteArray(1000))
+        java.io.DataOutputStream(java.io.FileOutputStream(File(dir, "progress.tdlp"))).use { out ->
+            out.write(byteArrayOf('T'.code.toByte(), 'D'.code.toByte(), 'L'.code.toByte(), 'P'.code.toByte()))
+            out.writeInt(1)
+            out.writeLong(1000)
+            out.writeInt(1)
+            out.writeLong(0)
+            out.writeLong(999)
+            out.writeLong(1001) // 分片长度是 1000，故意越界 1
+        }
+        val s = store(dir, 1000)
+        s.open()
+        try {
+            assertNull(s.peek(1000), "written 超出分片长度时不能夹成已完成")
+            val grid = s.loadOrCreate(500)
+            assertEquals(0L, grid.sumOf { it.written })
         } finally {
             s.close()
         }

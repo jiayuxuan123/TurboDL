@@ -59,7 +59,9 @@ internal class BuiltinHttpBackend(
         // 进度记在侧车（progress.tdlp）上。这一处只需要回答"要不要为续传而探测"，
         // 所以看侧车在不在就够 —— 真正的有效性由 SegmentStore.loadOrCreate 判定
         // （它还会核对总大小与目标文件长度）。
-        val hasResumableParts = File(chunkDir, PROGRESS_FILE).isFile
+        val hasResumableParts =
+            File(chunkDir, PROGRESS_FILE).isFile ||
+                File(chunkDir, PROGRESS_FILE + ".bak").isFile
         // 【续传场景不得跳过探测】跳过探测就拿不到 ETag / Last-Modified，
         // `ProbeResult` 的 validator 会退化成 `len=N|weak`（[SegmentDownloader.ProbeResult.isWeak]），
         // 而下面的续传校验规定"弱校验器不足以支撑安全续传"→ **无条件下丢弃全部旧分片**。
@@ -75,12 +77,19 @@ internal class BuiltinHttpBackend(
             // 首个分片会拿到 200 整文件并走已有的 RANGE_IGNORED 回退链路，正确性不受影响。
             SegmentDownloader.ProbeResult(knownSize, true, request.url)
         } else {
-            downloader.probeWithRetry(
-                request.url,
-                request.headers,
-                timeoutMs = context.config.probeTimeoutMs,
-                retries = context.config.probeRetries,
-            )
+            val probeLease = connectionBudget?.acquire(1)
+            try {
+                downloader.probeWithRetry(
+                    request.url,
+                    request.headers,
+                    timeoutMs = context.config.probeTimeoutMs,
+                    retries = context.config.probeRetries,
+                    useSegmentClient = (request.connectionsOverride
+                        ?: context.config.maxConnectionsPerTask) > 1,
+                )
+            } finally {
+                probeLease?.let { connectionBudget?.release(it) }
+            }
         }
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
         context.reportTotalSize(total)
@@ -136,34 +145,81 @@ internal class BuiltinHttpBackend(
         //    这样既保住"防同大小不同内容静默损坏"的安全底线，又让续传真正可用。
         //  - 强校验器变化 → 丢弃旧分片（原行为）；
         //  - validator 必须在**任何分片写入之前**落盘；now 为空时清掉旧文件而非留着。
-        resumeNote = prepareResume(
-            chunkDir = chunkDir,
-            probe = probe,
-            store = store,
-            total = total,
-            effectiveUrl = effectiveUrl,
-            taskHeaders = taskHeaders,
-            destination = request.destination,
-            hasOldParts = hasResumableParts,
-            trustWeakValidator = context.config.trustWeakValidator,
-        )
+        val resumeLease = try {
+            connectionBudget?.acquire(1)
+        } catch (t: Throwable) {
+            store.close()
+            throw t
+        }
+        resumeNote = try {
+            val policy = (context as? ResumePolicyContext)?.unverifiableResumePolicy
+                ?: UnverifiableResumePolicy.ALLOW
+            val legacy = store.unverifiedLegacyPieces(total)
+            if (legacy != null) {
+                if (policy == UnverifiableResumePolicy.FAIL) throw ResumeVerificationException()
+                val identity = store.identityForMigration() ?: throw ResumeVerificationException()
+                if (
+                    verifyResumeFingerprint(store, total, effectiveUrl, taskHeaders, legacy, true) != ResumeDecision.MATCH) {
+                    throw ResumeVerificationException()
+                }
+                store.adoptVerifiedLegacyPieces(legacy, identity)
+            }
+            store.requireKnownProgressIdentity()
+            prepareResume(
+                chunkDir = chunkDir,
+                probe = probe,
+                store = store,
+                total = total,
+                effectiveUrl = effectiveUrl,
+                taskHeaders = taskHeaders,
+                destination = request.destination,
+                hasOldParts = hasResumableParts && store.hasRecordedBytes() != false,
+                trustWeakValidator = context.config.trustWeakValidator,
+                hasExpectedSha256 = request.expectedSha256 != null,
+                policy = policy,
+            )
+        } catch (e: Exception) {
+            store.close()
+            throw e
+        } finally {
+            resumeLease?.let { connectionBudget?.release(it) }
+        }
 
         // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
         // - probeMs   ：探测耗时（大=探测慢；≈0 跳过探测而首字节慢=慢在首连接）
         // - resumeNote：续传判定结果（parts/weak/lenChanged/validDiff/print/discard），用于定位"断点续传为什么不生效"
         runCatching {
-            context.reportMetadata(
+            try {
+                context.reportResolvedMetadata(
                 suggestedFileName = probe.suggestedFileName,
                 contentType = probe.contentType,
                 etag = probe.etag,
                 lastModified = probe.lastModified,
                 probeMs = probeMs,
                 resumeNote = resumeNote,
-            )
+                resolvedUrl = effectiveUrl,
+                supportsRange = supportsRange,
+                )
+            } catch (_: AbstractMethodError) {
+                context.reportMetadata(
+                    probe.suggestedFileName, probe.contentType, probe.etag,
+                    probe.lastModified, probeMs, resumeNote,
+                )
+            }
         }
 
         return try {
-            downloadWithStore(context, store, probe, total, supportsRange, effectiveUrl, taskHeaders, chunkDir)
+            downloadWithStore(
+                context,
+                store,
+                probe,
+                total,
+                supportsRange,
+                effectiveUrl,
+                taskHeaders,
+                chunkDir,
+                hasResumableParts,
+            )
         } finally {
             // 通道必须关：Windows 下不关会让目标文件一直被占住，用户挪不走也删不掉。
             store.close()
@@ -190,10 +246,22 @@ internal class BuiltinHttpBackend(
         destination: File,
         hasOldParts: Boolean,
         trustWeakValidator: Boolean,
+        hasExpectedSha256: Boolean,
+        policy: UnverifiableResumePolicy,
     ): String {
         val marker = File(chunkDir, VALIDATOR_FILE)
+        val markerBackup = File(chunkDir, VALIDATOR_FILE + ".bak")
         val now = probe.validator
-        val prev = runCatching { if (marker.isFile) marker.readText().trim() else "" }.getOrDefault("")
+        val prev = runCatching {
+            listOf(marker, markerBackup)
+                .asSequence()
+                .filter { it.isFile }
+                .mapNotNull { file ->
+                    file.readText().trim().takeIf { it.isNotEmpty() }
+                }
+                .firstOrNull()
+                .orEmpty()
+        }.getOrDefault("")
 
         // 【⛔ 真实事故，2026-09-28】这里曾把「探测失败」误判成「内容已变」并删光分片：
         //
@@ -209,7 +277,9 @@ internal class BuiltinHttpBackend(
         // 因此 `changed` 现在**要求 `now` 本身是完整可用的令牌**：
         // 至少要含 `len=` 或 `etag=`/`lm=` 之一；只有 `weak` 或空串一律不算"变了"。
         val nowUsable = now.contains("len=") || now.contains("etag=") || now.contains("lm=")
-        val weakButResuming = probe.isWeak && !trustWeakValidator
+        val weakButResuming = probe.isWeak &&
+            (!trustWeakValidator || policy == UnverifiableResumePolicy.FAIL)
+        val prevMissing = hasOldParts && prev.isEmpty()
         // hasOldParts 由调用方传入
 
         // 探测失败（令牌残缺）时：保留旧分片，但**不假装能续传** ——
@@ -242,13 +312,40 @@ internal class BuiltinHttpBackend(
         val nowLen = lenOf(now)
         val lenChanged = prevLen != null && nowLen != null && prevLen != nowLen
         val validatorDiffers = prev.isNotEmpty() && prev != now && nowUsable && !lenChanged
+        val strongEtagOf = fun(value: String): String? =
+            Regex("""(?:^|\|)etag=([^|]+)""")
+                .find(value)
+                ?.groupValues
+                ?.get(1)
+                ?.takeIf { !it.startsWith("W/", ignoreCase = true) }
+        val prevStrongEtag = strongEtagOf(prev)
+        val nowStrongEtag = strongEtagOf(now)
+        val strongEtagChanged =
+            prevStrongEtag != null &&
+                nowStrongEtag != null &&
+                prevStrongEtag != nowStrongEtag
 
         val needFingerprint = hasOldParts && !probeDegraded && !lenChanged &&
-            (weakButResuming || validatorDiffers)
+            (weakButResuming || validatorDiffers || prevMissing)
         val decision = if (needFingerprint) {
             verifyResumeFingerprint(store, total, effectiveUrl, taskHeaders)
         } else {
             ResumeDecision.NOT_ATTEMPTED
+        }
+
+        if (policy == UnverifiableResumePolicy.FAIL && hasOldParts && !lenChanged &&
+            ((strongEtagChanged && !hasExpectedSha256) || probeDegraded || decision == ResumeDecision.UNVERIFIABLE ||
+                decision == ResumeDecision.PARTIAL_UNVERIFIABLE ||
+                (prevMissing && decision != ResumeDecision.MATCH))) {
+            throw ResumeVerificationException()
+        }
+
+        // A changed strong ETag cannot be disproved by a few matching samples.
+        // Preserve the old progress unless a full checksum can catch a mismatch
+        // or the sampled bytes conclusively show that the source changed.
+        if (hasOldParts && strongEtagChanged && !hasExpectedSha256 &&
+            decision != ResumeDecision.MISMATCH) {
+            throw ResumeVerificationException()
         }
 
         // 【取证失败要分两种情形，不能一刀切】
@@ -264,15 +361,19 @@ internal class BuiltinHttpBackend(
         val unverifiableButSuspicious = decision == ResumeDecision.UNVERIFIABLE && validatorDiffers
         val discard = lenChanged ||
             decision == ResumeDecision.MISMATCH ||
-            unverifiableButSuspicious
+            decision == ResumeDecision.PARTIAL_UNVERIFIABLE ||
+            unverifiableButSuspicious ||
+            (prevMissing && decision != ResumeDecision.MATCH)
         if (discard) {
             // 丢弃过期/无法安全校验的进度，从头写（不报错，对用户透明）。
-            // 现在只有两样东西要清：侧车进度与目标文件本身。
-            runCatching { File(chunkDir, PROGRESS_FILE).delete() }
-            runCatching { destination.delete() }
+            // `reset()` also removes .bak/.tmp, closes all file handles, and
+            // truncates the destination so an old backup cannot resurrect the
+            // stale grid on the next open.
+            store.reset()
         }
         val note = "parts=$hasOldParts weak=$weakButResuming lenChanged=$lenChanged " +
-            "validDiff=$validatorDiffers " +
+            "validDiff=$validatorDiffers strongEtagDiff=$strongEtagChanged " +
+            "validatorMissing=$prevMissing " +
             "print=$decision discard=$discard" +
             if (probeDegraded) " probeDegraded=true(探测失效,已保留旧分片)" else ""
 
@@ -283,11 +384,42 @@ internal class BuiltinHttpBackend(
         runCatching {
             when {
                 probeDegraded -> Unit          // 保留旧令牌（现状更完整）
-                now.isEmpty() -> marker.delete() // 探测明确「无校验器」：清掉残留，避免下次误比
-                else -> marker.writeText(now)
+                now.isEmpty() -> {
+                    marker.delete()
+                    markerBackup.delete()
+                    File(chunkDir, VALIDATOR_FILE + ".tmp").delete()
+                }
+                else -> writeValidatorMarkerAtomically(chunkDir, now)
             }
         }
         return note
+    }
+
+    /**
+     * Persist the validator with a durable backup so a force-kill between
+     * rename steps can still leave a recoverable identity marker.
+     */
+    private fun writeValidatorMarkerAtomically(chunkDir: File, value: String) {
+        val marker = File(chunkDir, VALIDATOR_FILE)
+        val backup = File(chunkDir, VALIDATOR_FILE + ".bak")
+        val tmp = File(chunkDir, VALIDATOR_FILE + ".tmp")
+        chunkDir.mkdirs()
+        tmp.delete()
+        java.io.FileOutputStream(tmp).use { out ->
+            out.write(value.toByteArray(Charsets.UTF_8))
+            out.flush()
+            out.fd.sync()
+        }
+        backup.delete()
+        if (marker.exists() && !marker.renameTo(backup)) {
+            marker.copyTo(backup, overwrite = true)
+            marker.delete()
+        }
+        if (!tmp.renameTo(marker)) {
+            tmp.copyTo(marker, overwrite = true)
+            tmp.delete()
+        }
+        backup.delete()
     }
 
     /**
@@ -305,11 +437,18 @@ internal class BuiltinHttpBackend(
         effectiveUrl: String,
         taskHeaders: Map<String, String>,
         chunkDir: File,
+        hasOldParts: Boolean,
     ): BackendResult {
         val request = context.request
+        val connections = (request.connectionsOverride
+            ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
+        val singleConnectionFresh = connections == 1 && !hasOldParts
 
         // Server does not support Range, or size unknown -> whole-file fallback (cannot segment).
-        if (!supportsRange || total <= 0) {
+        // A fresh one-connection task should use a normal GET, matching curl/aria2:
+        // paying for a Range data request on a CDN is measurably slower than a
+        // single stream, while resume still takes the safe segmented path.
+        if (!supportsRange || total <= 0 || singleConnectionFresh) {
             // 【本版变化】整文件单流也**直接写目标文件**，不再写 whole.part 再合并：
             // 少一次全量拷贝，也少一个"下载完成但还在拷文件"的阶段。
             val outPart = request.destination
@@ -335,12 +474,17 @@ internal class BuiltinHttpBackend(
                 }
             } else null
             val ok = try {
-                downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
-                    context.throttle(d)
-                    acc += d
-                    progressed.set(acc)
-                    if (!context.isActive()) return@downloadWhole
-                    context.reportProgress(acc, 1)
+                val wholeLease = connectionBudget?.acquire(1)
+                try {
+                    downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
+                        context.throttle(d)
+                        acc += d
+                        progressed.set(acc)
+                        if (!context.isActive()) return@downloadWhole
+                        context.reportProgress(acc, 1)
+                    }
+                } finally {
+                    wholeLease?.let { connectionBudget?.release(it) }
                 }
             } finally {
                 watchdog?.cancel()
@@ -356,8 +500,6 @@ internal class BuiltinHttpBackend(
             }
             return BackendResult(listOf(outPart), if (total > 0) total else outPart.length())
         }
-
-        val connections = (request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
 
         // 【先拿预算，再预热】旧实现把预热放在 acquire 之前：maxTotalConnections=1 时
         // 仍然会额外建立 warmUpMaxParallel 条连接，预热变成了绕过全局预算的后门。
@@ -404,7 +546,14 @@ internal class BuiltinHttpBackend(
             add(effectiveUrl)
             request.mirrors.forEach { m -> m.trim().takeIf { it.isNotEmpty() }?.let { add(it) } }
         }.distinct()
-        val mirrorPool = if (mirrorUrls.size > 1 && total > 0) MirrorPool(mirrorUrls) else null
+        val mirrorPool = if (mirrorUrls.size > 1 && total > 0) {
+            MirrorPool(
+                urls = mirrorUrls,
+                perMirrorInFlightCap = context.config.maxConnectionsPerHost,
+            )
+        } else {
+            null
+        }
         // 真实并发数由调度器回报（而非直接用配置值），UI 才能看到实际跑满多少线程。
         val liveConnsRef = java.util.concurrent.atomic.AtomicInteger(effectiveConnections)
 
@@ -444,11 +593,16 @@ internal class BuiltinHttpBackend(
 
                 val outPart = request.destination
                 var acc = 0L
-                val ok = downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
-                    context.throttle(d)
-                    acc += d
-                    if (!context.isActive()) return@downloadWhole
-                    context.reportProgress(acc, 1)
+                val wholeLease = connectionBudget?.acquire(1)
+                val ok = try {
+                    downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
+                        context.throttle(d)
+                        acc += d
+                        if (!context.isActive()) return@downloadWhole
+                        context.reportProgress(acc, 1)
+                    }
+                } finally {
+                    wholeLease?.let { connectionBudget?.release(it) }
                 }
                 if (!ok) throw IllegalStateException("Whole-file fallback download failed")
                 BackendResult(listOf(outPart), total)
@@ -488,34 +642,80 @@ internal class BuiltinHttpBackend(
         total: Long,
         url: String,
         headers: Map<String, String>,
+        piecesOverride: List<SegmentStore.Piece>? = null,
+        stopOnUnavailable: Boolean = false,
     ): ResumeDecision {
-        val pieces = store.peek(total) ?: return ResumeDecision.UNVERIFIABLE
-        // 依次尝试最多 2 个候选分片（一个 CDN 节点偶发异常不该否掉整个续传）。
-        val candidates = pieces
+        val pieces = piecesOverride ?: store.peek(total) ?: return ResumeDecision.UNVERIFIABLE
+        val withData = pieces
             .filter { it.written > 0 }
             .sortedBy { it.start }
-            .take(2)
-        if (candidates.isEmpty()) return ResumeDecision.UNVERIFIABLE
+        if (withData.isEmpty()) return ResumeDecision.UNVERIFIABLE
 
-        var gotBytes = false
+        // A single matching prefix is not evidence for the rest of a block.
+        // Sample every completed piece for normal grids, or an evenly spread
+        // subset for very large grids. Any observed mismatch is conclusive.
+        val candidates = if (withData.size <= MAX_FINGERPRINT_PIECES) {
+            withData
+        } else {
+            (0 until MAX_FINGERPRINT_PIECES).map { index ->
+                withData[index * (withData.size - 1) / (MAX_FINGERPRINT_PIECES - 1)]
+            }.distinct()
+        }
+        val samples = mutableListOf<Pair<Long, Int>>()
         for (piece in candidates) {
             val len = minOf(FINGERPRINT_BYTES.toLong(), piece.written).toInt()
             if (len <= 0) continue
-            val local = runCatching { store.readAt(piece.start, len) }.getOrNull() ?: continue
-            if (local.size < len) continue
-
-            val remote = downloader.fetchPrefix(url, headers, piece.start, len, timeoutMs = 10_000)
-                ?: continue
-            if (remote.size < len) continue
-            gotBytes = true
-            if (remote.copyOf(len).contentEquals(local)) return ResumeDecision.MATCH
+            val middle = piece.start + (piece.written - len) / 2
+            val tail = piece.start + piece.written - len
+            samples += piece.start to len
+            if (middle != piece.start) samples += middle to len
+            if (tail != piece.start && tail != middle) samples += tail to len
         }
-        // 拿到过字节但都不一致 → 确证不匹配；一次都没拿到 → 无法取证。
-        return if (gotBytes) ResumeDecision.MISMATCH else ResumeDecision.UNVERIFIABLE
+        val uniqueSamples = samples
+            .groupBy { it.first }
+            .map { (start, variants) -> start to variants.maxOf { it.second } }
+            .sortedBy { it.first }
+            .take(MAX_FINGERPRINT_SAMPLES)
+        if (uniqueSamples.isEmpty()) return ResumeDecision.UNVERIFIABLE
+
+        var matchedSamples = 0
+        var failedSamples = 0
+        for ((start, len) in uniqueSamples) {
+            val local = runCatching { store.readAt(start, len) }.getOrNull()
+            if (local == null || local.size < len) {
+                if (stopOnUnavailable) return ResumeDecision.UNVERIFIABLE
+                failedSamples++
+                continue
+            }
+
+            val remote = downloader.fetchPrefix(url, headers, start, len, timeoutMs = 10_000)
+            if (remote == null || remote.size < len) {
+                if (stopOnUnavailable) return ResumeDecision.UNVERIFIABLE
+                failedSamples++
+                continue
+            }
+            if (!remote.copyOf(len).contentEquals(local)) {
+                return ResumeDecision.MISMATCH
+            }
+            matchedSamples++
+        }
+        // Every planned sample had to be fetched and match. A partial probe is
+        // not proof, especially after a strong validator changed.
+        return when {
+            failedSamples == 0 && matchedSamples > 0 -> ResumeDecision.MATCH
+            matchedSamples > 0 -> ResumeDecision.PARTIAL_UNVERIFIABLE
+            else -> ResumeDecision.UNVERIFIABLE
+        }
     }
 
     /** 续传指纹校验的判定结果（见 [verifyResumeFingerprint]）。 */
-    private enum class ResumeDecision { MATCH, MISMATCH, UNVERIFIABLE, NOT_ATTEMPTED }
+    private enum class ResumeDecision {
+        MATCH,
+        MISMATCH,
+        UNVERIFIABLE,
+        PARTIAL_UNVERIFIABLE,
+        NOT_ATTEMPTED,
+    }
 
     private companion object {
         /** 续传校验标记文件名。 */
@@ -531,5 +731,7 @@ internal class BuiltinHttpBackend(
 
         /** 续传内容指纹长度：64KB 足以区分不同文件，又不至于成为负担。 */
         const val FINGERPRINT_BYTES = 64 * 1024
+        const val MAX_FINGERPRINT_PIECES = 8
+        const val MAX_FINGERPRINT_SAMPLES = 24
     }
 }

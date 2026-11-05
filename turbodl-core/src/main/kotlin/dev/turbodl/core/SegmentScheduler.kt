@@ -51,7 +51,7 @@ internal class SegmentScheduler(
      * "每任务限速"：3 个任务各限 1MB/s，总吞吐就是 3MB/s。
      */
     private val throttle: suspend (Long) -> Unit,
-    ) {    private companion object {
+    ) {    internal companion object {
         /**
          * 每次上调的比例（相对当前目标并发）。
          *
@@ -103,6 +103,63 @@ internal class SegmentScheduler(
 
         /** UPWARD 模式的保守起始并发；DOWNWARD 模式直接使用用户上限。 */
         const val ADAPTIVE_GRID_START = 8
+
+        /**
+         * DOWNWARD 模式至少观察这么多字节后才允许第一次下探。
+         *
+         * 短文件（例如 30–40MB）在 CDN 上通常只持续几秒；如果按第一个 500ms 窗口就减半，
+         * 用户会看到“线程数刚起来又掉回去”，而且切换本身会打断在途请求。只有完成一段
+         * 足够长的稳态传输，吞吐比较才有意义。UPWARD 不受此门限影响，因为它需要尽快扩容。
+         */
+        const val ADAPTIVE_DOWNWARD_MIN_BYTES = 64L * 1024 * 1024
+
+        /** DOWNWARD 模式的额外稳态窗口；与字节门限取 AND。 */
+        const val ADAPTIVE_DOWNWARD_WARMUP_MS = 2_000L
+
+        internal fun downwardLearningReady(downloaded: Long, total: Long, elapsedMs: Long): Boolean {
+            if (elapsedMs < ADAPTIVE_DOWNWARD_WARMUP_MS) return false
+            // A file shorter than one full learning window should finish at the
+            // host-requested concurrency instead of paying for a half-finished
+            // baseline/probe cycle.
+            return total >= ADAPTIVE_DOWNWARD_MIN_BYTES &&
+                downloaded >= ADAPTIVE_DOWNWARD_MIN_BYTES
+        }
+
+        /**
+         * Initial worker target is part of the public policy contract, not a
+         * random implementation detail. Keep it in one production function so
+         * tests cannot pass by re-implementing a similar formula locally.
+         */
+        internal fun initialConcurrency(
+            config: TurboConfig,
+            workers: Int,
+            resuming: Boolean,
+            adaptiveEnabled: Boolean,
+        ): Int {
+            val boundedWorkers = workers.coerceAtLeast(1)
+            return when {
+                resuming -> boundedWorkers
+                !config.slowStart -> boundedWorkers
+                config.slowStartInitial > 0 -> min(config.slowStartInitial, boundedWorkers)
+                adaptiveEnabled && config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.DOWNWARD ->
+                    boundedWorkers
+                adaptiveEnabled && config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.UPWARD ->
+                    min(boundedWorkers, ADAPTIVE_GRID_START)
+                else -> min(boundedWorkers, max(4, boundedWorkers / 4))
+            }
+        }
+
+        internal fun targetSegmentCount(
+            workers: Int,
+            segmentsPerConnection: Int,
+            segmentCap: Long,
+        ): Long {
+            val boundedWorkers = workers.coerceAtLeast(1).toLong()
+            val perConnection =
+                if (workers <= 1) 1
+                else segmentsPerConnection.coerceIn(1, 64).toLong()
+            return (boundedWorkers * perConnection).coerceAtMost(segmentCap)
+        }
 
         /**
          * 判定窗口有效时，「在飞连接数相对目标并发」的最低比例。
@@ -316,7 +373,12 @@ internal class SegmentScheduler(
         // 警告：若对所有下载统一设一个小值（如 16），会把单个下载（全部同一 host）直接限死到该值，
         // 表现为“设 64 线程却只跑 16 / 速度骤降”。这里仅当 >0 时限幅。
         val hostCap = config.maxConnectionsPerHost.takeIf { it > 0 } ?: Int.MAX_VALUE
-        val workers = connections.coerceIn(1, 256).coerceAtMost(hostCap).coerceAtLeast(1)
+        // A single source can be capped directly. With multiple mirrors,
+        // maxConnectionsPerHost is enforced per selected source below instead
+        // of incorrectly limiting the whole task.
+        val workers = connections.coerceIn(1, 256)
+            .coerceAtMost(if (mirrors == null) hostCap else Int.MAX_VALUE)
+            .coerceAtLeast(1)
         val debugScheduler = System.getenv("TURBODL_DEBUG_SCHED") == "1"
 
         // ---------- 专用阻塞 IO 调度器（关键吞吐修正）----------
@@ -343,9 +405,15 @@ internal class SegmentScheduler(
         // （原因、实测与"收益尚未可靠量化"的警告见 TurboConfig.maxSegmentsPerTask）。
         val segCap = if (config.maxSegmentsPerTask <= 0) Long.MAX_VALUE
         else config.maxSegmentsPerTask.toLong()
-        val targetSegments = (gridConcurrency.toLong() *
-            config.segmentsPerConnection.coerceIn(1, 64).toLong())
-            .coerceAtMost(segCap)
+        // With one worker there is no work stealing or parallel write benefit
+        // from pre-splitting: a single HTTP Range request is cheaper and matches
+        // the ordinary single-stream download path. Keep the configured
+        // segments-per-connection behavior for every parallel case.
+        val targetSegments = targetSegmentCount(
+            workers = gridConcurrency,
+            segmentsPerConnection = config.segmentsPerConnection,
+            segmentCap = segCap,
+        )
         val effBlock = run {
             // blockSize 是**硬上限**，永远优先；minSegmentSize 是**软下限**，被上限压制。
             // 二者取"上限优先"是为了让 `minSegmentSize > blockSize` 这种组合仍能表达
@@ -360,11 +428,17 @@ internal class SegmentScheduler(
         // ---------- 网格：优先沿用侧车里的旧网格 ----------
         // 分片边界由**首次**创建时决定并写进侧车；续传时照抄。
         // 否则换了连接数就会得到不同边界，进度记录对不上 → 续传失效。
-        val restoredPieces = store.loadOrCreate(effBlock)
+        var restoredPieces = store.loadOrCreate(effBlock)
         // Validation must see the on-disk length before we reserve the final
         // logical size. Extending first would make a deleted/recreated file look
         // like it still covered old progress and could leave holes on resume.
-        store.ensureLength()
+        if (store.ensureLengthChecked()) {
+            // The destination shrank between loadOrCreate() and ensureLength().
+            // Reload now that the store knows the shorter observed length; this
+            // resets the stale grid rather than keeping completed pieces from a
+            // file that no longer exists in its old form.
+            restoredPieces = store.loadOrCreate(effBlock)
+        }
         val allSegments = restoredPieces.map { Segment(it) }
         // Splits can be appended by the controller while another worker snapshots
         // the grid. Copy-on-write gives both paths a safe iteration view.
@@ -400,6 +474,14 @@ internal class SegmentScheduler(
 
         val needWholeFallback = AtomicBoolean(false)
         val failReason = AtomicReference<String?>(null)
+        fun failTask(reason: String) {
+            if (failReason.compareAndSet(null, reason)) {
+                // A terminal failure must stop every in-flight read. Otherwise a
+                // slow-but-not-stalled response can keep the scheduler alive
+                // forever even though the task is already doomed.
+                downloader.cancelCalls(taskId)
+            }
+        }
         val rangeIgnoredCount = AtomicInteger(0)
         val consecutiveFailures = AtomicInteger(0)
         /**
@@ -438,15 +520,12 @@ internal class SegmentScheduler(
          * 判据用"有任一分片已写入过字节"，因为那只可能来自上一轮的进度。
          */
         val resuming = allSegments.any { it.written > 0 }
-        val slowStartInit = when {
-            resuming -> workers                       // 续传：直接到顶
-            !config.slowStart -> workers
-            config.slowStartInitial > 0 -> min(config.slowStartInitial, workers)
-            adaptiveEnabled && config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.UPWARD ->
-                min(workers, ADAPTIVE_GRID_START)
-            // 传统慢启动的默认起点随并发缩放，至少 4。
-            else -> min(workers, max(4, workers / 4))
-        }
+        val slowStartInit = initialConcurrency(
+            config = config,
+            workers = workers,
+            resuming = resuming,
+            adaptiveEnabled = adaptiveEnabled,
+        )
         /** 动态目标并发（慢启动从 slowStartInit 升、背压时降；自适应时由控制器定档）。 */
         val desired = AtomicInteger(slowStartInit)
         /**
@@ -464,6 +543,9 @@ internal class SegmentScheduler(
             probeDownFirst =
                 config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.DOWNWARD,
         ) else null
+        val adaptiveDownward =
+            adaptiveEnabled && config.adaptiveConcurrencyMode == AdaptiveConcurrencyMode.DOWNWARD
+        val adaptiveStartedAt = System.nanoTime()
         val throughputLock = Any()
         var throughputWindowBytes = 0L
         var throughputWindowStartedAt = System.nanoTime()
@@ -633,7 +715,16 @@ internal class SegmentScheduler(
                     // 窗口不合格（收尾/限速/失败/并发刚变）：不做任何档位判断。
                     return
                 }
-                val rampFinished = desired.get() >= min(workers, ceiling.get())
+                val learningWarmupDone = if (adaptiveDownward) {
+                    downwardLearningReady(
+                        downloaded = downloaded.get(),
+                        total = total,
+                        elapsedMs = (nowNanos - adaptiveStartedAt) / 1_000_000L,
+                    )
+                } else {
+                    true
+                }
+                val rampFinished = desired.get() >= min(workers, ceiling.get()) && learningWarmupDone
                 val decision = adaptive.observe(
                     throughput = throughput,
                     rampDone = rampFinished,
@@ -689,7 +780,7 @@ internal class SegmentScheduler(
          * @return 是否发生了托管
          */
         fun tryTailAssist(): Boolean {
-            if (!config.tailAssist) return false
+            if (!config.effectiveTailAssist) return false
             if (inFlightSegments.isEmpty()) return false
             // 候选：预计完成最晚、且足够大、且未超拆分次数。
             // 只按“剩余最多”会在慢连接已经快完成时错误地拆一块大而快的分片；
@@ -1028,7 +1119,31 @@ internal class SegmentScheduler(
                         inFlightSegments.add(seg)
                         reportConns()
                         // 每个分片自己挑来源：快的镜像多派，失败的镜像进退避窗口。
-                        val attemptUrl = mirrors?.pick() ?: url
+                        val attemptUrl = if (mirrors == null) {
+                            url
+                        } else {
+                            var picked: String? = null
+                            while (isActive() && picked == null && failReason.get() == null) {
+                                picked = mirrors.pickWithLimit()
+                                if (picked == null) {
+                                    if (!mirrors.hasUsableSources()) {
+                                        failTask(
+                                            "所有镜像来源均已判定为不同文件，无法安全继续",
+                                        )
+                                        break
+                                    }
+                                    delay(10)
+                                }
+                            }
+                            picked ?: url
+                        }
+                        if (failReason.get() != null) {
+                            inFlight.decrementAndGet()
+                            activeConns.decrementAndGet()
+                            inFlightSegments.remove(seg)
+                            reportConns()
+                            continue
+                        }
                         val attemptHeaders = MirrorHeaderPolicy.headersFor(url, attemptUrl, headers)
                         val attemptStartedAtMs = System.currentTimeMillis()
                         val bytesAtAttemptStart = seg.written
@@ -1074,6 +1189,7 @@ internal class SegmentScheduler(
                                 ok = res == SegmentResult.OK,
                                 bytes = (seg.written - bytesAtAttemptStart).coerceAtLeast(0),
                                 elapsedMs = System.currentTimeMillis() - attemptStartedAtMs,
+                                structuralFailure = res == SegmentResult.SOURCE_MISMATCH,
                             )
                             mirrorReported = true
                             when (res) {
@@ -1098,7 +1214,12 @@ internal class SegmentScheduler(
                                     // 单分片被返回整文件：容忍偶发，反复出现才判定服务器不支持 Range。
                                     offer(seg)  // 回投，可能只是该 CDN 节点抖动
                                     if (rangeIgnoredCount.incrementAndGet() >= RANGE_IGNORED_TOLERANCE) {
-                                        needWholeFallback.compareAndSet(false, true)
+                                        if (needWholeFallback.compareAndSet(false, true)) {
+                                            // The Range strategy is finished; stop any
+                                            // slow companion request before the whole-file
+                                            // fallback takes over.
+                                            downloader.cancelCalls(taskId)
+                                        }
                                     }
                                 }
                                 SegmentResult.AUTH_EXPIRED -> {
@@ -1111,8 +1232,7 @@ internal class SegmentScheduler(
                                     consecutiveSuccesses.set(0)
                                     seg.attempts++
                                     if (seg.attempts > config.maxRetries) {
-                                        failReason.compareAndSet(
-                                            null,
+                                        failTask(
                                             "分片 ${seg.start}-${seg.end} 授权/时效失败（401/403/410）" +
                                                 "重试 ${seg.attempts} 次仍失败",
                                         )
@@ -1150,8 +1270,7 @@ internal class SegmentScheduler(
                                     // 而 FAILED =「这次没拿到」。把前者当后者处理，就等于拒绝执行服务器的要求。
                                     seg.throttleAttempts++
                                     if (seg.throttleAttempts > throttleRetryBudget) {
-                                        failReason.compareAndSet(
-                                            null,
+                                        failTask(
                                             "分片 ${seg.start}-${seg.end} 持续被限流（429/503），" +
                                                 "并发已降至 ${desired.get()} 仍失败 ${seg.throttleAttempts} 次"
                                         )
@@ -1183,6 +1302,22 @@ internal class SegmentScheduler(
                                         if (failReason.get() == null && isActive()) offer(seg)
                                     }
                                 }
+                                SegmentResult.SOURCE_MISMATCH -> {
+                                    windowHadFailure.set(true)
+                                    consecutiveSuccesses.set(0)
+                                    // The source is already permanently quarantined
+                                    // by MirrorPool.report. Do not consume the
+                                    // segment's ordinary retry budget for a bad
+                                    // source; hand the same segment to a healthy
+                                    // source if one remains.
+                                    if (mirrors?.hasUsableSources() == true) {
+                                        offer(seg)
+                                    } else {
+                                        failTask(
+                                            "镜像文件大小不一致，且没有可用来源",
+                                        )
+                                    }
+                                }
                                 SegmentResult.FAILED -> {
                                     // 【必须区分"自己的失败"与"连坐"】
                                     // 某个分片耗尽重试后，代码会 cancelCalls 掉所有在飞请求
@@ -1201,14 +1336,10 @@ internal class SegmentScheduler(
                                     seg.attempts++
                                     val n = consecutiveFailures.incrementAndGet()
                                     if (seg.attempts > config.maxRetries) {
-                                        failReason.compareAndSet(
-                                            null,
+                                        failTask(
                                             "分片 ${seg.start}-${seg.end} 重试 ${seg.attempts} 次仍失败" +
                                                 (seg.lastFailure?.let { "（$it）" } ?: "")
                                         )
-                                        // 立刻断开所有在飞请求：否则其它 worker 手里那些
-                                        // 同样卡住的连接还要各等自己的读超时，`awaitAll()` 被拖着。
-                                        downloader.cancelCalls(taskId)
                                     } else {
                                         // 网络类失败也做轻度退避，避免瞬时故障下的密集重投。
                                         // 退避期间可能已被判定失败（别的分片耗尽预算），所以要能被

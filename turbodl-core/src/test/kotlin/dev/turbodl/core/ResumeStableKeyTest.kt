@@ -18,7 +18,29 @@ import kotlin.test.assertTrue
  */
 class ResumeStableKeyTest {
 
-    private class RangeServer(private val payload: ByteArray) {
+    @Test
+    fun `ambiguous legacy key retains progress and target`() = runBlocking {
+        val root = kotlin.io.path.createTempDirectory("legacy-key").toFile()
+        val oldDir = File(root, "key_task_1").apply { mkdirs() }
+        val oldProgress = File(oldDir, "progress.tdlp").apply { writeText("saved") }
+        val output = File(root, "output.bin").apply { writeText("partial") }
+        val client = TurboClient(TurboConfig(workDir = root))
+        try {
+            val id = client.submit(DownloadRequest("http://127.0.0.1:1/file", output, stableKey = "task:1"))
+            val failure = client.await(id).exceptionOrNull()
+            assertTrue(failure?.message?.contains("LEGACY_STABLE_KEY_AMBIGUOUS") == true)
+            assertEquals("saved", oldProgress.readText())
+            assertEquals("partial", output.readText())
+        } finally {
+            client.shutdown()
+            root.deleteRecursively()
+        }
+    }
+
+    private class RangeServer(
+        private val payload: ByteArray,
+        private val chunkDelayMs: Long = 0,
+    ) {
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
         private val total = payload.size
@@ -38,7 +60,16 @@ class ResumeStableKeyTest {
                 ex.responseHeaders.add("Content-Range", "bytes $s-$e/$total")
                 ex.responseHeaders.add("Accept-Ranges", "bytes")
                 ex.sendResponseHeaders(206, len.toLong())
-                ex.responseBody.use { it.write(payload, s, len) }
+                ex.responseBody.use { out ->
+                    var position = s
+                    val end = s + len - 1
+                    while (position <= end) {
+                        val count = minOf(64 * 1024, end - position + 1)
+                        out.write(payload, position, count)
+                        position += count
+                        if (chunkDelayMs > 0) Thread.sleep(chunkDelayMs)
+                    }
+                }
             }
             server.executor = Executors.newFixedThreadPool(64)
             server.start()
@@ -111,6 +142,51 @@ class ResumeStableKeyTest {
             client.shutdown()
             srv.stop()
             workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `unsafe stable keys remain distinct after sanitization`() {
+        val slash = stableKeyDirectoryName("a/b")
+        val question = stableKeyDirectoryName("a?b")
+        val controls = stableKeyDirectoryName("a\u0000b")
+        assertEquals("key_same-key", stableKeyDirectoryName("same-key"))
+        assertEquals("key_room_123", stableKeyDirectoryName("room_123"))
+        assertTrue(slash != question, "a/b 与 a?b 不得折叠到同一个断点目录")
+        assertTrue(question != controls)
+        assertTrue(slash != controls)
+    }
+
+    @Test
+    fun `same stableKey cannot run twice concurrently`() = runBlocking {
+        val size = 8 * 1024 * 1024
+        val payload = ByteArray(size) { (it % 239).toByte() }
+        val srv = RangeServer(payload, chunkDelayMs = 15)
+        val workDir = File(System.getProperty("java.io.tmpdir"), "turbodl-lease-${System.nanoTime()}")
+        workDir.mkdirs()
+        val client = TurboClient(
+            TurboConfig(maxConnectionsPerTask = 4, maxConcurrentTasks = 2, workDir = workDir)
+        )
+        val outA = File.createTempFile("lease-a", ".bin").apply { deleteOnExit() }
+        val outB = File.createTempFile("lease-b", ".bin").apply { deleteOnExit() }
+        try {
+            val url = "http://127.0.0.1:${srv.port}/f.bin"
+            val first = client.submit(DownloadRequest(url, outA, stableKey = "same-owner"))
+            val second = client.submit(DownloadRequest(url, outB, stableKey = "same-owner"))
+            val results = listOf(client.await(first), client.await(second))
+            assertEquals(1, results.count { it.isSuccess })
+            assertEquals(1, results.count { it.isFailure })
+            val failure = results.first { it.isFailure }.exceptionOrNull()
+            assertTrue(
+                failure?.message.orEmpty().contains("STABLE_KEY_BUSY"),
+                "第二个 owner 必须以明确的断点目录冲突失败：${failure?.message}",
+            )
+        } finally {
+            client.shutdown()
+            srv.stop()
+            workDir.deleteRecursively()
+            outA.delete()
+            outB.delete()
         }
     }
 }

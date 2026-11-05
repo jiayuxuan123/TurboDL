@@ -1,13 +1,15 @@
 package dev.turbodl.core
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Process-wide connection budget shared by all built-in HTTP tasks.
+ * Per-client connection budget shared by its built-in HTTP tasks.
  *
  * `maxConnectionsPerTask` alone lets N concurrent tasks multiply the connection
  * count by N. This budget grants a task only the permits currently available;
@@ -36,14 +38,12 @@ internal class ConnectionBudget(
 
     suspend fun acquire(requested: Int): Lease {
         val wanted = requested.coerceAtLeast(1)
-        val limit = limitProvider()
-        if (limit <= 0) return Lease(wanted)
-
         var immediate: Lease? = null
         var waiter: Waiter? = null
         lock.withLock {
-            if (activePermits < limit) {
-                val granted = minOf(wanted, limit - activePermits)
+            val limit = limitProvider()
+            if (limit <= 0 || activePermits < limit) {
+                val granted = if (limit <= 0) wanted else minOf(wanted, limit - activePermits)
                 activePermits += granted
                 immediate = Lease(granted)
             } else {
@@ -56,32 +56,33 @@ internal class ConnectionBudget(
         try {
             return queued.result.await()
         } catch (e: kotlinx.coroutines.CancellationException) {
-            lock.withLock { waiters.remove(queued) }
-            queued.grantedLease?.let { release(it) }
+            withContext(NonCancellable) {
+                lock.withLock { waiters.remove(queued) }
+                queued.grantedLease?.let { release(it) }
+            }
             throw e
         }
     }
 
     suspend fun release(lease: Lease) {
         if (!lease.released.compareAndSet(false, true)) return
-        val limit = limitProvider()
-        lock.withLock {
-            activePermits = (activePermits - lease.permits).coerceAtLeast(0)
-            if (limit > 0) grantWaitersLocked(limit)
+        withContext(NonCancellable) {
+            lock.withLock {
+                activePermits = (activePermits - lease.permits).coerceAtLeast(0)
+                grantWaitersLocked(limitProvider())
+            }
         }
     }
 
     /** Wake queued tasks when the configured global limit increases. */
     suspend fun limitChanged() {
-        val limit = limitProvider()
-        if (limit <= 0) return
-        lock.withLock { grantWaitersLocked(limit) }
+        lock.withLock { grantWaitersLocked(limitProvider()) }
     }
 
     private fun grantWaitersLocked(limit: Int) {
-        while (waiters.isNotEmpty() && activePermits < limit) {
+        while (waiters.isNotEmpty() && (limit <= 0 || activePermits < limit)) {
             val waiter = waiters.pollFirst() ?: break
-            val granted = minOf(waiter.requested, limit - activePermits)
+            val granted = if (limit <= 0) waiter.requested else minOf(waiter.requested, limit - activePermits)
             activePermits += granted
             val lease = Lease(granted)
             waiter.grantedLease = lease

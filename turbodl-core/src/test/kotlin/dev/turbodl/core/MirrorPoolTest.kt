@@ -9,6 +9,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -20,6 +21,31 @@ import kotlin.test.assertTrue
  */
 class MirrorPoolTest {
 
+    @Test
+    fun `per source cap is strict until a request completes`() {
+        val pool = MirrorPool(
+            urls = listOf("http://mirror-a/file", "http://mirror-b/file"),
+            perMirrorInFlightCap = 1,
+        )
+        val first = pool.pickWithLimit()
+        val second = pool.pickWithLimit()
+        assertTrue(first != null && second != null)
+        assertTrue(first != second, "两个来源应各拿到一次，而不是超发同一个来源")
+        assertNull(pool.pickWithLimit(), "两个来源都达到上限时应让调度器等待")
+        pool.report(first!!, ok = true, bytes = 1, elapsedMs = 1)
+        assertEquals(first, pool.pickWithLimit(), "完成后该来源应重新可领取")
+    }
+
+    @Test
+    fun `all sources in backoff still returns a fallback source`() {
+        val urls = listOf("http://mirror-a/file", "http://mirror-b/file")
+        val pool = MirrorPool(urls = urls, perMirrorInFlightCap = 1)
+        urls.forEach { pool.report(it, ok = false, bytes = 0, elapsedMs = 1) }
+        val picked = pool.pickWithLimit()
+        assertTrue(picked != null, "全来源退避时不能永久返回 null 让 worker 饿死")
+        assertTrue(picked in urls)
+    }
+
     private class RangeServer(
         private val payload: ByteArray,
         private val chunkSleepMs: Long,
@@ -27,14 +53,20 @@ class MirrorPoolTest {
         private val executor = Executors.newFixedThreadPool(64)
         val served = AtomicLong(0)
         val requests = AtomicLong(0)
+        private val active = java.util.concurrent.atomic.AtomicInteger(0)
+        val peak = java.util.concurrent.atomic.AtomicInteger(0)
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
 
         init {
             server.createContext("/f.bin") { ex ->
                 requests.incrementAndGet()
+                val rangeHeader = ex.requestHeaders.getFirst("Range")
+                val probeRequest = rangeHeader == "bytes=0-0" || rangeHeader == "bytes=0-"
+                val now = if (probeRequest) active.get() else active.incrementAndGet()
+                if (!probeRequest) peak.updateAndGet { maxOf(it, now) }
                 try {
-                    val range = ex.requestHeaders.getFirst("Range")
+                    val range = rangeHeader
                     if (range == null) {
                         ex.responseHeaders.add("Accept-Ranges", "bytes")
                         ex.sendResponseHeaders(200, payload.size.toLong())
@@ -62,6 +94,7 @@ class MirrorPoolTest {
                         }
                     }
                 } finally {
+                    if (!probeRequest) active.decrementAndGet()
                     runCatching { ex.close() }
                 }
             }
@@ -140,6 +173,36 @@ class MirrorPoolTest {
             )
         } finally {
             client.shutdown(); good.stop(); impostor.stop(); out.delete()
+        }
+    }
+
+    @Test
+    fun `max connections per host is applied independently to mirrors`() = runBlocking {
+        val size = 4 * 1024 * 1024
+        val payload = ByteArray(size) { ((it * 37 + 9) % 256).toByte() }
+        val first = RangeServer(payload, chunkSleepMs = 8)
+        val second = RangeServer(payload, chunkSleepMs = 8)
+        val out = File.createTempFile("mirror-cap", ".bin").apply { deleteOnExit() }
+        val client = TurboClient(
+            cfg().copy(
+                maxConnectionsPerTask = 8,
+                maxConnectionsPerHost = 2,
+            )
+        )
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    url = "http://127.0.0.1:${first.port}/f.bin",
+                    mirrors = listOf("http://127.0.0.1:${second.port}/f.bin"),
+                    destination = out,
+                )
+            )
+            withTimeout(120_000) { client.await(id) }.getOrThrow()
+            assertTrue(out.readBytes().contentEquals(payload))
+            assertTrue(first.peak.get() <= 2, "主源峰值 ${first.peak.get()} 超过 per-host 上限 2")
+            assertTrue(second.peak.get() <= 2, "镜像峰值 ${second.peak.get()} 超过 per-host 上限 2")
+        } finally {
+            client.shutdown(); first.stop(); second.stop(); out.delete()
         }
     }
 }

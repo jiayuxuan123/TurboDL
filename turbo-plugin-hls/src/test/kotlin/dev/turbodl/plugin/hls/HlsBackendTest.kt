@@ -7,7 +7,9 @@ import dev.turbodl.core.TurboConfig
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -15,6 +17,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class HlsBackendTest {
@@ -23,13 +26,17 @@ class HlsBackendTest {
     private var port = 0
     private lateinit var tmpDir: File
     private val routes = HashMap<String, Pair<String, ByteArray>>() // path -> (contentType, bytes)
+    private val requestCounts = ConcurrentHashMap<String, AtomicInteger>()
 
     @BeforeTest
     fun setup() {
         tmpDir = File(System.getProperty("java.io.tmpdir"), "hls-be-${System.nanoTime()}").apply { mkdirs() }
+        requestCounts.clear()
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { ex ->
-            val entry = routes[ex.requestURI.path]
+            val path = ex.requestURI.path
+            requestCounts.computeIfAbsent(path) { AtomicInteger() }.incrementAndGet()
+            val entry = routes[path]
             if (entry == null) {
                 ex.sendResponseHeaders(404, -1); ex.close(); return@createContext
             }
@@ -100,6 +107,106 @@ class HlsBackendTest {
     }
 
     @Test
+    fun downloadsFmp4InitMapFirstAndReusesItsCache() = runBlocking {
+        val init = ByteArray(12_000) { ((it * 17) % 251).toByte() }
+        val seg0 = ByteArray(30_000) { (it % 251).toByte() }
+        val seg1 = ByteArray(25_000) { ((it * 11) % 251).toByte() }
+        routes["/init.mp4"] = "video/mp4" to init
+        routes["/seg0.m4s"] = "video/iso.segment" to seg0
+        routes["/seg1.m4s"] = "video/iso.segment" to seg1
+        routes["/fmp4.m3u8"] = "application/vnd.apple.mpegurl" to """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:URI="init.mp4"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXTINF:6.0,
+            seg1.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent().toByteArray()
+
+        val request = DownloadRequest(url("/fmp4.m3u8"), File(tmpDir, "out.mp4"))
+        val ctx = context(request)
+        val backend = HlsBackend()
+        val first = backend.download(ctx)
+
+        assertEquals(3, first.orderedParts.size)
+        assertTrue(first.orderedParts[0].readBytes().contentEquals(init), "init map must be the first part")
+        val merged = first.orderedParts.fold(ByteArray(0)) { acc, file -> acc + file.readBytes() }
+        assertTrue(merged.contentEquals(init + seg0 + seg1), "init map and media segments must stay in order")
+        assertEquals((init.size + seg0.size + seg1.size).toLong(), first.totalBytes)
+        assertEquals(first.totalBytes, ctx.lastTotal)
+        assertEquals(1, requestCounts.getValue("/init.mp4").get())
+
+        val partsDir = File(ctx.workDir, "hls-segments")
+        partsDir.listFiles()
+            ?.filter { it.name.startsWith("seg-") && it.extension == "part" }
+            ?.forEach { it.delete() }
+
+        val second = backend.download(ctx)
+        assertEquals(first.totalBytes, second.totalBytes)
+        assertEquals(1, requestCounts.getValue("/init.mp4").get(), "second run must reuse the init map cache")
+        assertTrue(second.orderedParts[0].readBytes().contentEquals(init))
+    }
+
+    @Test
+    fun changedPlaylistDoesNotReuseOldSegmentIndexes() = runBlocking {
+        val old0 = ByteArray(20_000) { 1 }
+        val old1 = ByteArray(30_000) { 2 }
+        val new0 = ByteArray(40_000) { 3 }
+        val new1 = ByteArray(50_000) { 4 }
+
+        fun media(first: String, second: String) = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-TARGETDURATION:6
+            #EXTINF:6.0,
+            $first
+            #EXTINF:6.0,
+            $second
+            #EXT-X-ENDLIST
+        """.trimIndent().toByteArray()
+
+        routes["/old-0.ts"] = "video/mp2t" to old0
+        routes["/old-1.ts"] = "video/mp2t" to old1
+        routes["/media.m3u8"] = "application/vnd.apple.mpegurl" to media("old-0.ts", "old-1.ts")
+
+        val work = File(tmpDir, "resume-work").apply { mkdirs() }
+        val request = DownloadRequest(url("/media.m3u8"), File(tmpDir, "out.ts"))
+        val ctx = TestBackendContext(request, work)
+        val backend = HlsBackend()
+
+        val first = backend.download(ctx).orderedParts
+            .fold(ByteArray(0)) { acc, file -> acc + file.readBytes() }
+        assertTrue(first.contentEquals(old0 + old1))
+
+        routes["/new-0.ts"] = "video/mp2t" to new0
+        routes["/new-1.ts"] = "video/mp2t" to new1
+        routes["/media.m3u8"] = "application/vnd.apple.mpegurl" to media("new-0.ts", "new-1.ts")
+
+        val second = backend.download(ctx).orderedParts
+            .fold(ByteArray(0)) { acc, file -> acc + file.readBytes() }
+        assertTrue(
+            second.contentEquals(new0 + new1),
+            "a changed playlist must invalidate old indexed media parts",
+        )
+        assertEquals(1, requestCounts.getValue("/new-0.ts").get())
+        assertEquals(1, requestCounts.getValue("/new-1.ts").get())
+    }
+
+    @Test
+    fun oversizedPlaylistFailsAtTheBoundedReadInsteadOfAllocatingItAll() = runBlocking {
+        val oversized = ByteArray(HlsIo.MAX_TEXT_BYTES.toInt() + 1) { '#'.code.toByte() }
+        routes["/oversized.m3u8"] = "application/vnd.apple.mpegurl" to oversized
+
+        val request = DownloadRequest(url("/oversized.m3u8"), File(tmpDir, "out.ts"))
+        val error = assertFailsWith<IllegalStateException> {
+            HlsBackend().download(context(request))
+        }
+        assertTrue(error.message.orEmpty().contains("response exceeds byte limit"))
+    }
+
+    @Test
     fun selectsHighestBandwidthVariantThenDownloads() = runBlocking {
         val seg = ByteArray(30_000) { (it % 251).toByte() }
         routes["/hi/seg0.ts"] = "video/mp2t" to seg
@@ -122,6 +229,27 @@ class HlsBackendTest {
         val result = HlsBackend().download(context(request))
         assertEquals(1, result.orderedParts.size)
         assertTrue(result.orderedParts[0].readBytes().contentEquals(seg))
+    }
+
+    @Test
+    fun fallsBackToAPlaylistMirrorWhenThePrimaryManifestFails() = runBlocking {
+        val segment = ByteArray(24_000) { ((it * 19) % 251).toByte() }
+        routes["/mirror/seg0.ts"] = "video/mp2t" to segment
+        routes["/mirror/index.m3u8"] = "application/vnd.apple.mpegurl" to """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXTINF:6.0,
+            seg0.ts
+            #EXT-X-ENDLIST
+        """.trimIndent().toByteArray()
+
+        val request = DownloadRequest(
+            url = url("/missing/index.m3u8"),
+            destination = File(tmpDir, "mirror.ts"),
+            mirrors = listOf(url("/mirror/index.m3u8")),
+        )
+        val result = HlsBackend().download(context(request))
+        assertTrue(result.orderedParts.single().readBytes().contentEquals(segment))
     }
 
     @Test

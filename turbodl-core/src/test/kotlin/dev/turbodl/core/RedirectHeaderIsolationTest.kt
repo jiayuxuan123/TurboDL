@@ -69,12 +69,15 @@ class RedirectHeaderIsolationTest {
                 val client = TurboClient(
                     TurboConfig(
                         workDir = File(dir, "work"),
-                        maxConnectionsPerTask = 1,
+                        maxConnectionsPerTask = 2,
                         maxConcurrentTasks = 1,
                         slowStart = false,
                         adaptiveConcurrency = false,
                         warmUpConnections = false,
                         skipProbeWhenSizeKnown = true,
+                        segmentsPerConnection = 1,
+                        blockSize = 64 * 1024,
+                        minSegmentSize = 32 * 1024,
                     )
                 )
                 try {

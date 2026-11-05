@@ -30,3 +30,6 @@ __pycache__/
 _bench/results/
 _bench/runs/
 .playwright-cli/
+.turbodl-parts/
+_audit/turbodl-site-*/
+'_bench/

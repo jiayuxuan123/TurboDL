@@ -9,13 +9,19 @@ import dev.turbodl.core.ProxyType
 import dev.turbodl.core.TurboClient
 import dev.turbodl.core.TurboConfig
 import dev.turbodl.core.TaskProgress
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileInputStream
 import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.system.exitProcess
 
 /**
@@ -48,10 +54,14 @@ private class Options {
     var connections = 16
     var maxTotalConnections = 0
     var expectedSha256: String? = null
+    /** Known exact object size. Supplying it lets the engine skip the separate probe RTT. */
+    var knownSize: Long? = null
     /** 额外镜像来源（-M/--mirror，可重复）。 */
     val mirrors = mutableListOf<String>()
     var speedLimit: Long = 0L            // 字节/秒，0=不限
     var retry = 5
+    /** 批量任务同时运行的下载任务数；全局连接/限速预算由同一个 client 共享。 */
+    var jobs = 1
     var output: File? = null             // -o
     var dir: File? = null                // -d
     var batchFile: File? = null          // --batch
@@ -90,6 +100,7 @@ private class Options {
 }
 
 fun main(args: Array<String>) {
+    val processTimingStart = System.currentTimeMillis()
     val opts = Options()
     val tasks = mutableListOf<Task>()
 
@@ -126,11 +137,20 @@ fun main(args: Array<String>) {
                 }
                 opts.expectedSha256 = value.lowercase()
             }
+            "--known-size" -> {
+                val value = take().toLongOrNull()
+                    ?: usageError("--known-size 需为非负整数")
+                if (value < 0) usageError("--known-size 需为非负整数")
+                opts.knownSize = value
+            }
             "-l", "--limit", "--speed-limit" ->
                 opts.speedLimit = parseSize(take())
             "-r", "--retry" ->
                 opts.retry = take().toIntOrNull()?.coerceIn(0, 50)
                     ?: usageError("--retry 需为 0..50 的整数")
+            "--jobs" ->
+                opts.jobs = take().toIntOrNull()?.coerceIn(1, 64)
+                    ?: usageError("--jobs 需为 1..64 的整数")
             "-b", "--batch" -> opts.batchFile = File(take())
             "-H", "--header" -> {
                 val h = take()
@@ -215,8 +235,16 @@ fun main(args: Array<String>) {
     }
 
     if (!opts.json && !opts.quiet) {
-        println("TurboDL $BUILD_VERSION ｜ ${resolved.size} 个任务 ｜ ${opts.connections} 连接/任务")
+        println(
+            "TurboDL $BUILD_VERSION ｜ ${resolved.size} 个任务 ｜ " +
+                "${opts.connections} 连接/任务 ｜ ${opts.jobs} 任务并发"
+        )
     }
+
+    // One client owns the connection/speed budgets and all batch tasks. Creating
+    // a client per task made maxTotalConnections and the global speed limit
+    // effectively per-task, which is not what the public CLI promises.
+    val client = TurboClient(buildConfig(opts))
 
     // Ctrl+C：保留分片，提示可续传（正常完成时 downloading=false，不误报）
     val interrupted = AtomicBoolean(false)
@@ -226,31 +254,93 @@ fun main(args: Array<String>) {
             if (opts.json) println("\n{\"type\":\"interrupted\",\"hint\":\"重跑同一命令可从断点续传\"}")
             else if (!opts.quiet) println("\n已中断：重跑同一命令可从断点续传。")
         }
+        // The hook may run while the main coroutine is still unwinding. shutdown()
+        // is idempotent and releases sockets/dispatchers for both paths.
+        runCatching { client.shutdown() }
     })
 
-    var failed = 0
-    for ((index, task) in resolved.withIndex()) {
-        if (interrupted.get()) break
-        if (resolved.size > 1 && !opts.json && !opts.quiet) {
-            println("--- [${index + 1}/${resolved.size}] ${task.url}")
+    downloading.set(true)
+    val results = try {
+        runBlocking {
+            coroutineScope {
+                resolved.mapIndexed { index, task ->
+                    async {
+                        if (interrupted.get()) {
+                            false
+                        } else {
+                            if (resolved.size > 1 && !opts.json && !opts.quiet) {
+                                println("--- [${index + 1}/${resolved.size}] ${task.url}")
+                            }
+                            runCatching {
+                                downloadOne(client, task, opts, resolved.size)
+                            }.getOrElse { e ->
+                                if (System.getenv("TURBODL_DEBUG_STACK") == "1") e.printStackTrace()
+                                if (opts.json) {
+                                    println(
+                                        """{"type":"failed","url":"${jsonEscForJson(task.url)}",""" +
+                                            """"error":"${jsonEscForJson(e.message ?: e.javaClass.simpleName)}"}"""
+                                    )
+                                } else if (!opts.quiet) {
+                                    System.err.println("下载失败：${e.message}")
+                                }
+                                false
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
         }
-        val ok = runCatching { downloadOne(task, opts) }.getOrElse { e ->
-            if (System.getenv("TURBODL_DEBUG_STACK") == "1") e.printStackTrace()
-            if (opts.json) println("""{"type":"failed","url":"${jsonEsc(task.url)}","error":"${jsonEsc(e.message ?: e.javaClass.simpleName)}"}""")
-            else if (!opts.quiet) System.err.println("下载失败：${e.message}")
-            false
+    } finally {
+        downloading.set(false)
+        runCatching { client.shutdown() }
+        if (opts.timing) {
+            println(
+                """{"type":"timing","stage":"cli_shutdown",""" +
+                    """"t_ms":${System.currentTimeMillis() - processTimingStart}}"""
+            )
         }
-        if (!ok) failed++
     }
 
+    val failed = results.count { !it }
     if (failed > 0) {
         if (opts.json) println("""{"type":"summary","total":${resolved.size},"failed":$failed}""")
         exitProcess(1)
     }
 }
 
+private fun buildConfig(opts: Options): TurboConfig = TurboConfig(
+    maxConnectionsPerTask = opts.connections,
+    maxConcurrentTasks = opts.jobs,
+    maxTotalConnections = opts.maxTotalConnections,
+    globalSpeedLimitBytesPerSec = opts.speedLimit,
+    maxRetries = opts.retry,
+    httpVersionPolicy = opts.httpPolicy,
+    warmUpConnections = opts.warmUp,
+    slowStart = opts.slowStart,
+    dns = opts.dohUrl?.let { DnsMode.DoH(it) } ?: DnsMode.System,
+    proxy = opts.proxy ?: ProxyMode.Direct,
+    trustAllCerts = opts.insecure,
+    connectTimeoutMs = opts.connectTimeoutMs,
+    readTimeoutMs = opts.readTimeoutMs,
+    // 调优旋钮：仅在显式给出时覆盖默认值
+    segmentsPerConnection = opts.segmentsPerConnection ?: TurboConfig().segmentsPerConnection,
+    blockSize = opts.blockSize ?: TurboConfig().blockSize,
+    minSegmentSize = opts.minSegmentSize ?: TurboConfig().minSegmentSize,
+    slowStartInitial = opts.slowStartInitial ?: TurboConfig().slowStartInitial,
+    adaptiveConcurrency = opts.adaptive,
+    adaptiveConcurrencyMode = opts.adaptiveMode,
+    tailAssist = !opts.noTailAssist,
+    overlapMerge = !opts.noOverlap,
+    stallTimeoutMs = opts.stallTimeoutMs ?: TurboConfig().stallTimeoutMs,
+)
+
 /** 下载单个任务；返回是否成功。 */
-private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
+private suspend fun downloadOne(
+    client: TurboClient,
+    task: Task,
+    opts: Options,
+    taskCount: Int,
+): Boolean = coroutineScope {
     val out = task.output.absoluteFile
     out.parentFile?.mkdirs()
 
@@ -258,67 +348,34 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
     val workDir = File(out.parentFile ?: File("."), ".turbodl-parts")
     val stableKey = "cli-" + sha16("${task.url}|${out.path}")
 
-    val client = TurboClient(
-        TurboConfig(
-            maxConnectionsPerTask = opts.connections,
-            maxConcurrentTasks = 1,
-            maxTotalConnections = opts.maxTotalConnections,
-            globalSpeedLimitBytesPerSec = opts.speedLimit,
-            maxRetries = opts.retry,
-            httpVersionPolicy = opts.httpPolicy,
-            warmUpConnections = opts.warmUp,
-            slowStart = opts.slowStart,
-            workDir = workDir,
-            dns = opts.dohUrl?.let { DnsMode.DoH(it) } ?: DnsMode.System,
-            proxy = opts.proxy ?: ProxyMode.Direct,
-            trustAllCerts = opts.insecure,
-            connectTimeoutMs = opts.connectTimeoutMs,
-            readTimeoutMs = opts.readTimeoutMs,
-            // 调优旋钮：仅在显式给出时覆盖默认值
-            segmentsPerConnection = opts.segmentsPerConnection ?: TurboConfig().segmentsPerConnection,
-            blockSize = opts.blockSize ?: TurboConfig().blockSize,
-            minSegmentSize = opts.minSegmentSize ?: TurboConfig().minSegmentSize,
-            slowStartInitial = opts.slowStartInitial ?: TurboConfig().slowStartInitial,
-            adaptiveConcurrency = opts.adaptive,
-            adaptiveConcurrencyMode = opts.adaptiveMode,
-            tailAssist = !opts.noTailAssist,
-            overlapMerge = !opts.noOverlap,
-            stallTimeoutMs = opts.stallTimeoutMs ?: TurboConfig().stallTimeoutMs,
-        )
-    )
-    // 中断时立即释放，分片保留供下次续传
-    java.lang.Runtime.getRuntime().addShutdownHook(Thread { runCatching { client.shutdown() } })
-
     val headers = opts.headers.toMutableMap()
     opts.userAgent?.let { headers.putIfAbsent("User-Agent", it) }
 
-    downloading.set(true)
-
     // 【启动段诊断】把引擎自报的阶段耗时打到 stdout，供基准脚本归因（`--timing` 开启）。
     // 只读事件、不改行为；与下面的进度轮询并行运行。
-    if (opts.timing) {
-        val tStart = System.currentTimeMillis()
-        Thread {
-            kotlinx.coroutines.runBlocking {
-                runCatching {
-                    client.events.collect { ev ->
-                        when (ev) {
-                            is dev.turbodl.core.TurboEvent.Metadata -> println(
-                                """{"type":"timing","stage":"metadata",""" +
-                                    """"t_ms":${System.currentTimeMillis() - tStart},""" +
-                                    """"probe_ms":${ev.probeMs},"resume":"${jsonEsc(ev.resumeNote ?: "")}"}"""
-                            )
-                            is dev.turbodl.core.TurboEvent.StateChanged -> println(
-                                """{"type":"timing","stage":"state","state":"${ev.state}",""" +
-                                    """"t_ms":${System.currentTimeMillis() - tStart}}"""
-                            )
-                            else -> Unit
-                        }
-                    }
+    val timingStart = System.currentTimeMillis()
+    val taskIdRef = AtomicLong(-1)
+    val timingJob = if (opts.timing) {
+        // UNDISPATCHED establishes the SharedFlow subscription before submit(),
+        // closing the replay=0 startup-event race without another thread.
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            client.events.collect { ev ->
+                if (ev.taskId != taskIdRef.get()) return@collect
+                when (ev) {
+                    is dev.turbodl.core.TurboEvent.Metadata -> println(
+                        """{"type":"timing","taskId":${ev.taskId},"stage":"metadata",""" +
+                            """"t_ms":${System.currentTimeMillis() - timingStart},""" +
+                            """"probe_ms":${ev.probeMs},"resume":"${jsonEscForJson(ev.resumeNote ?: "")}"}"""
+                    )
+                    is dev.turbodl.core.TurboEvent.StateChanged -> println(
+                        """{"type":"timing","taskId":${ev.taskId},"stage":"state","state":"${ev.state}",""" +
+                            """"t_ms":${System.currentTimeMillis() - timingStart}}"""
+                    )
+                    else -> Unit
                 }
             }
-        }.apply { isDaemon = true }.start()
-    }
+        }
+    } else null
 
     val id = client.submit(
         DownloadRequest(
@@ -328,21 +385,27 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
             mirrors = opts.mirrors.toList(),
             stableKey = stableKey,
             expectedSha256 = opts.expectedSha256,
-        )
+            knownSize = opts.knownSize ?: -1L,
+        ),
+        workDir,
     )
+    taskIdRef.set(id)
     if (opts.json) {
-        println("""{"type":"start","url":"${jsonEsc(task.url)}","output":"${jsonEsc(out.path)}"}""")
+        println(
+            """{"type":"start","taskId":$id,"url":"${jsonEscForJson(task.url)}",""" +
+                """"output":"${jsonEscForJson(out.path)}"}"""
+        )
     }
 
     // 进度输出：轮询 progress StateFlow，天然节流
     var lastPrint = 0L
-    val result = run {
+    val result = try {
         while (true) {
             val p = client.progress.value[id]
             val now = System.currentTimeMillis()
             if (p != null && now - lastPrint >= opts.progressIntervalMs) {
                 lastPrint = now
-                printProgress(opts, p)
+                printProgress(opts, p, id, if (taskCount > 1) "task-$id " else "")
             }
             if (p != null && p.state != dev.turbodl.core.TaskState.QUEUED &&
                 p.state != dev.turbodl.core.TaskState.PROBING &&
@@ -352,18 +415,17 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
             delay(100)
         }
         client.await(id)
+    } finally {
+        timingJob?.cancel()
     }
-
-    client.shutdown()
-    downloading.set(false)
 
     result.fold(
         onSuccess = { f ->
             if (opts.json) {
                 val digest = sha256File(f)
                 println(
-                    """{"type":"completed","url":"${jsonEsc(task.url)}",""" +
-                        """"file":"${jsonEsc(f.absolutePath)}","bytes":${f.length()},""" +
+                    """{"type":"completed","taskId":$id,"url":"${jsonEscForJson(task.url)}",""" +
+                        """"file":"${jsonEscForJson(f.absolutePath)}","bytes":${f.length()},""" +
                         """"sha256":"$digest","stableKey":"$stableKey"}"""
                 )
             } else if (!opts.quiet) {
@@ -374,7 +436,10 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
         onFailure = { e ->
             if (System.getenv("TURBODL_DEBUG_STACK") == "1") e.printStackTrace()
             if (opts.json) {
-                println("""{"type":"failed","url":"${jsonEsc(task.url)}","error":"${jsonEsc(e.message ?: e.javaClass.simpleName)}"}""")
+                println(
+                    """{"type":"failed","taskId":$id,"url":"${jsonEscForJson(task.url)}",""" +
+                        """"error":"${jsonEscForJson(e.message ?: e.javaClass.simpleName)}"}"""
+                )
             } else if (!opts.quiet) {
                 System.err.println("失败：${e.message}（重跑同一命令可从断点续传）")
             }
@@ -384,10 +449,10 @@ private fun downloadOne(task: Task, opts: Options): Boolean = runBlocking {
 }
 
 /** 人类可读的单行进度（原地刷新）。 */
-private fun printProgress(opts: Options, p: TaskProgress) {
+private fun printProgress(opts: Options, p: TaskProgress, taskId: Long, label: String = "") {
     if (opts.json) {
         println(
-            """{"type":"progress","state":"${p.state}","downloaded":${p.downloadedBytes},"total":${p.totalBytes},""" +
+            """{"type":"progress","taskId":$taskId,"state":"${p.state}","downloaded":${p.downloadedBytes},"total":${p.totalBytes},""" +
                 """"percent":${if (p.percent >= 0) p.percent else -1},"speed":${p.speedBytesPerSec},"connections":${p.activeConnections},"eta_ms":${p.etaMillis}}"""
         )
         return
@@ -397,7 +462,11 @@ private fun printProgress(opts: Options, p: TaskProgress) {
     val total = if (p.totalBytes > 0) formatBytes(p.totalBytes) else "?"
     val speed = formatBytes(p.speedBytesPerSec) + "/s"
     val eta = if (p.etaMillis > 0) " eta=${formatDuration(p.etaMillis)}" else ""
-    print("\r[$pct] ${formatBytes(p.downloadedBytes)}/$total  $speed  conns=${p.activeConnections}$eta   ")
+    print(
+        "\r${if (label.isBlank()) "" else "[$label] "}" +
+            "[$pct] ${formatBytes(p.downloadedBytes)}/$total  $speed  " +
+            "conns=${p.activeConnections}$eta   "
+    )
     if (p.state == dev.turbodl.core.TaskState.MERGING) print(" 合并中…")
 }
 
@@ -422,9 +491,11 @@ private fun printHelp(out: java.io.PrintStream = System.out) {
           -o, --output <路径>        输出文件（单任务时可用；默认取 URL 文件名）
           -d, --dir <目录>           输出目录（默认当前目录）
           -b, --batch <文件>         批量下载，每行「URL」或「URL 输出路径」，# 为注释
+              --jobs <N>             批量同时下载的任务数（1..64，默认 1）
           -c, --connections <N>      每任务连接数（1..256，默认 16）
               --max-total-connections <N>  所有任务合计连接上限（0=不限）
               --sha256 <hex>             完成后校验 SHA-256（64 位十六进制）
+              --known-size <字节>        已知精确文件大小时跳过独立探测 RTT
           -l, --limit <大小>         限速，如 10MB、500KB、1048576（字节）
           -r, --retry <N>            分片失败重试次数（默认 5）
           -H, --header "K: V"        附加请求头，可重复
@@ -539,7 +610,7 @@ private fun sha256File(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-private fun jsonEsc(s: String): String =
+internal fun jsonEscForJson(s: String): String =
     buildString {
         for (c in s) when (c) {
             '\\' -> append("\\\\")
@@ -547,6 +618,10 @@ private fun jsonEsc(s: String): String =
             '\n' -> append("\\n")
             '\r' -> append("\\r")
             '\t' -> append("\\t")
-            else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+            else -> if (c.code < 0x20 || c.code > 0x7e) {
+                append("\\u%04x".format(c.code))
+            } else {
+                append(c)
+            }
         }
     }

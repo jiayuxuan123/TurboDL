@@ -172,4 +172,51 @@ class ConcurrencySaturationTest {
             srv.stop()
         }
     }
+
+    @Test
+    fun `downward learning waits for a meaningful steady-state sample`() {
+        assertTrue(
+            !SegmentScheduler.downwardLearningReady(
+                downloaded = 32L * 1024 * 1024,
+                total = 32L * 1024 * 1024,
+                elapsedMs = 10_000,
+            ),
+            "文件本身小于下探门限时不应在收尾阶段降档",
+        )
+        assertTrue(
+            !SegmentScheduler.downwardLearningReady(
+                downloaded = 128L * 1024 * 1024,
+                total = 1024L * 1024 * 1024,
+                elapsedMs = 1_999,
+            ),
+            "即使字节足够，也要经过最短稳态窗口",
+        )
+        assertTrue(
+            SegmentScheduler.downwardLearningReady(
+                downloaded = 64L * 1024 * 1024,
+                total = 1024L * 1024 * 1024,
+                elapsedMs = 2_000,
+            ),
+            "达到字节和时间门限后应允许学习",
+        )
+    }
+
+    @Test
+    fun `single-connection scheduling keeps one segment`() {
+        val workers = 1
+        val config = TurboConfig(
+            maxConnectionsPerTask = 1,
+            maxConcurrentTasks = 1,
+            segmentsPerConnection = 8,
+        )
+        assertEquals(
+            1L,
+            SegmentScheduler.targetSegmentCount(
+                workers = workers,
+                segmentsPerConnection = config.segmentsPerConnection,
+                segmentCap = Long.MAX_VALUE,
+            ),
+            "单连接不应被拆成多个串行分片；实际传输是否使用 GET 由后端选择",
+        )
+    }
 }

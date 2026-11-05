@@ -167,7 +167,7 @@ def _operating_defaults(lang: str) -> str:
         ],
         [
             '<span class="mono">tailAssistMinBytes</span>',
-            '<span class="data-value">256 KiB</span>',
+            '<span class="data-value">8 KiB</span>',
             "tail threshold" if en else "收尾阈值",
             "Below this, splitting costs more than it saves." if en else "低于此值继续拆分得不偿失。",
         ],

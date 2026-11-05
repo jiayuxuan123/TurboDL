@@ -89,7 +89,7 @@ class MirrorSourceIsolationTest {
                     val client = TurboClient(
                         TurboConfig(
                             workDir = File(dir, "work"),
-                            maxConnectionsPerTask = 1,
+                            maxConnectionsPerTask = 2,
                             maxConcurrentTasks = 1,
                             blockSize = 128 * 1024,
                             minSegmentSize = 64 * 1024,

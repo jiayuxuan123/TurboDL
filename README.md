@@ -6,6 +6,8 @@
 
 **Website:** [jiayuxuan123.github.io/TurboDL](https://jiayuxuan123.github.io/TurboDL/) — documentation, plugin authoring guide, download page
 
+**Engineering plan:** [Industrial execution roadmap](engineering/industrial/ROADMAP.md) · [Execution board and 8 GiB network budget](engineering/industrial/EXECUTION_BOARD.md) · [Risk register](engineering/industrial/RISK_REGISTER.md) · [Network and competitor acceptance](engineering/industrial/NETWORK_ACCEPTANCE.md) · [First engine evidence pass](engineering/industrial/evidence/2026-11-04-engine-pass1.md) · [Model handoff](engineering/industrial/HANDOFF.md). These are planned acceptance requirements, not claims that all targets have already passed.
+
 **Languages:** English · [简体中文](docs/i18n/README_zh-CN.md) · [繁體中文](docs/i18n/README_zh-TW.md) · [日本語](docs/i18n/README_ja.md) · [한국어](docs/i18n/README_ko.md) · [Deutsch](docs/i18n/README_de.md)
 
 TurboDL is a download core written from scratch. It **only draws on the architectural and algorithmic ideas** of mature download managers (aria2, IDM/XDM, axel, Persepolis, Motrix, ab-download-manager) **without copying any of their source code**, and is therefore released under the permissive **MIT license (with supplemental plugin-ecosystem terms)**, free to use in open-source or commercial projects.
@@ -14,7 +16,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 
 - **Multi-threaded segmented download**: HTTP Range parallel segments written **directly into the destination file at their offsets** (positional writes), connection reuse (HTTP/2 multiplexing + keep-alive).
 - **No merge phase**: segments are not separate temp files that get concatenated afterwards. Measured on one disk, 16 MB: creating 512 segment files costs 627 ms while writing the same bytes positionally into one file costs 11 ms — 57x. On loopback this took 128-connection throughput from 20 MB/s to 88 MB/s, and it no longer degrades as connection count rises. There is also no "stuck at 99 %" step, because nothing is left to assemble.
-- **Progress survives crashes without inflated claims**: a small sidecar records each segment's written byte count, and it is always persisted *after* the data lands. A crash can only lose the seconds since the last flush, and re-downloading that range is idempotent.
+- **Resumable progress**: a sidecar records segment offsets and is persisted after the engine flushes the destination. Process-kill recovery is tested; actual power-loss durability also depends on the operating system, filesystem, and storage hardware.
 - **Failure attribution without collateral damage**: every segment keeps its own last error, and a request cancelled because *another* segment exhausted its retries does not consume the cancelled segment's retry budget. A single flaky connection therefore neither fails the task nor produces a misleading "retry N times failed (Canceled)" message.
 - **Dynamic segmentation**: fine-grained pre-splitting + work stealing, so slow connections don't drag down the whole transfer and the "last segment finishing on a single thread" long tail is eliminated (IDM/XDM idea).
 - **Host-controlled adaptive concurrency**: the configured connection count is a ceiling. `DOWNWARD` starts at the caller's requested count and reduces only when repeated throughput measurements prove the connections are wasted; `UPWARD` starts conservatively and doubles only after aggregate throughput improves by at least 30%. The selected policy is a host decision, not a provider-specific rule baked into the engine.
@@ -22,7 +24,7 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Global resource budgets**: task slots are FIFO and atomic, and `maxTotalConnections` caps the aggregate connection count across every built-in HTTP task. Three 64-connection tasks can no longer silently create 192 sockets when the host or router should only see a smaller budget.
 - **Desktop I/O path**: JVM hosts use direct ByteBuffers; Android/Dalvik falls back to heap buffers and `RandomAccessFile`. Sidecar replacement keeps a durable backup instead of deleting the old progress before the new one is visible.
 - **Caller-supplied SHA-256**: `DownloadRequest.expectedSha256` streams the finished file through SHA-256 before completion; a mismatch fails the task and drops the resume snapshot so bad bytes are never reused.
-- **Multi-source mirrors** (`0.4.0.0`): `DownloadRequest.mirrors` adds alternate URLs for the same file. The engine samples each source, then routes segments toward the fastest one by measured throughput, drops a source into exponential back-off when it fails, and rejects any mirror whose `Content-Range` total disagrees with the task size — so a mislabelled mirror can never write wrong bytes into the file. CLI: `--mirror <URL>` (repeatable).
+- **Multi-source mirrors** (`0.4.0.0`): `DownloadRequest.mirrors` adds alternate URLs for the same file. The engine samples sources, routes segments toward faster ones, and rejects a source whose reported size disagrees with the task size. A same-size different file is not detected by size alone; provide `expectedSha256` to check the completed output. CLI: `--mirror <URL>` (repeatable).
 - **Sequential segment priority**: earlier segments are downloaded first, enabling progressive preview/playback (axel/Persepolis idea).
 - **Robust fallback & retry**:
   - Server does not support / ignores Range → automatic fallback to whole-file single-stream download;
@@ -30,7 +32,15 @@ TurboDL is a download core written from scratch. It **only draws on the architec
   - Verifies that the actually returned bytes match the requested Range (guards against servers tampering with Range and returning the whole file).
 - **Restrained adaptivity**: a task starts at the caller's connection ceiling. A lower tier is accepted only when a clean, post-switch window still retains at least 90% of aggregate throughput; stale requests from the previous tier are excluded. 429/503 backpressure always takes priority.
 - **Resumable downloads**: segments are persisted; pause/resume continues from the real on-disk progress.
-- **Byte-level integrity check**: total size is verified after merge, rejecting corrupted files.
+- **Final verification**: the output length is checked. When `expectedSha256` is provided, its SHA-256 is also checked before the task is marked complete; length alone cannot detect same-size corruption.
+
+## 0.5.0.0 — resume and HTTP reliability
+
+- Store file identity with each progress snapshot to detect a replaced destination. Legacy snapshots without identity are sampled before being adopted; if sampling fails, the old data is retained. Sampling is not full-file proof.
+- Add an opt-in policy that stops and retains saved progress when resume verification is unavailable. Sampling cannot establish full-file identity; provide a trusted SHA-256 when possible.
+- Isolate structurally invalid mirrors and plugin capability failures; stop in-flight requests when a download reaches a terminal failure.
+- Improve connection reuse, short-file startup and tail assistance. Batch CLI jobs share one client and its built-in HTTP connection and speed budgets.
+- Support one initial `EXT-X-MAP` for HLS fMP4 byte concatenation, with bounded playlist reads and workers. Live streams, changing maps, discontinuities and DRM remain unsupported.
 
 ## 0.4.1.0 — industrial reliability pass
 
@@ -127,11 +137,18 @@ val result = client.await(id)   // Result<File>
 
 // Controls
 client.pause(id)
-client.resume(id)
+client.resume(id)                 // legacy synchronous compatibility
+// client.resumeAsync(id)         // preferred from Android/UI coroutines
 client.cancel(id, deleteOutput = true)
 
 client.shutdown()
 ```
+
+For the built-in HTTP backend, hosts can call
+`client.submit(request, UnverifiableResumePolicy.FAIL)` to fail and retain
+saved progress when resume verification cannot be performed. Unsupported
+custom backends reject this policy. A matching sampled fingerprint does not
+guarantee complete file integrity; supply `expectedSha256` when available.
 
 ## Command line
 
@@ -157,15 +174,15 @@ turbodl <url> -p http://127.0.0.1:7890 --doh https://dns.alidns.com/dns-query -l
 # Machine-readable NDJSON events (start/progress/completed/failed) for scripts & agents
 turbodl <url> --json
 
-# Batch download (each line: <URL> [output])
-turbodl --batch tasks.txt -c 128
+# Batch download (each line: <URL> [output]); one client shares global limits
+turbodl --batch tasks.txt -c 128 --jobs 4
 
 # Custom headers / UA / ignore TLS
 turbodl <url> -H "Cookie: k=v" -A "MyAgent/1.0" --insecure
 ```
 
 Notes:
-- Interrupted downloads resume automatically when re-running the same command (segments kept in `.turbodl-parts/` next to the output, cleaned up after merge).
+- Interrupted downloads resume automatically when re-running the same command (segments kept in `.turbodl-parts/` next to the output, cleaned up after merge). Batch tasks share one client, so `--max-total-connections` and `-l/--limit` apply to the whole batch; `--jobs` controls task concurrency.
 - Exit codes: `0` success, `1` download failed, `2` usage error.
 - `--json` emits one JSON object per line; the final `completed` line contains the absolute file path and size.
 

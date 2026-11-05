@@ -127,8 +127,28 @@ internal class SegmentStore(
      * deliberate one-time tradeoff rather than a promise of sparse storage.
      */
     fun ensureLength() {
-        if (total <= 0 || dest.length() >= total) return
+        ensureLengthChecked()
+    }
+
+    /**
+     * Variant used by the scheduler to learn whether the destination shrank
+     * between `loadOrCreate()` and this call. In that case the restored grid
+     * must be reloaded/discarded instead of trusting its completed pieces.
+     */
+    internal fun ensureLengthChecked(): Boolean {
+        // A caller may truncate/replace the destination after open() but before
+        // the grid is loaded. Preserve that shorter observation so ensureLength
+        // cannot turn a freshly extended hole back into a false resume hit.
+        val invalidated = lengthAtOpen >= 0 && dest.length() < lengthAtOpen
+        if (invalidated) {
+            lengthAtOpen = 0L
+        }
+        if (total <= 0) return invalidated
         val ch = channel ?: error("SegmentStore 未 open()")
+        if (dest.length() > total) {
+            ch.truncate(total)
+        }
+        if (dest.length() >= total) return invalidated
         val marker = ByteBuffer.wrap(byteArrayOf(0))
         var position = total - 1
         while (marker.hasRemaining()) {
@@ -136,6 +156,7 @@ internal class SegmentStore(
             if (n <= 0) throw java.io.IOException("无法预留目标文件长度：$total")
             position += n
         }
+        return invalidated
     }
 
     fun close() {
@@ -161,6 +182,25 @@ internal class SegmentStore(
      */
     fun loadOrCreate(blockSize: Long): List<Piece> {
         val existing = readState()
+        if (existing != null) {
+            when (identityStatus(existing)) {
+                IdentityStatus.MATCH -> Unit
+                IdentityStatus.UNKNOWN -> {
+                    if (existing.pieces.any { it.written > 0 } && destCovers(existing.pieces)) {
+                        throw ResumeVerificationException()
+                    }
+                    reset()
+                    return buildGrid(blockSize)
+                }
+                IdentityStatus.MISMATCH -> {
+                    // A same-length replacement is invisible to length checks.
+                    // Missing/unreadable identity is also unsafe: without proof,
+                    // old progress must never be accepted.
+                    reset()
+                    return buildGrid(blockSize)
+                }
+            }
+        }
         if (existing != null && existing.total == total && existing.pieces.isNotEmpty() &&
             destCovers(existing.pieces)
         ) {
@@ -168,8 +208,10 @@ internal class SegmentStore(
         }
         // 目标文件撑不起记录里的进度（被删过/被截断）：清空重来，绝不在空洞上续传。
         if (existing != null && !destCovers(existing.pieces)) {
-            runCatching { stateFile.delete() }
-            runCatching { dest.delete() }
+            // reset() removes the primary snapshot, backup and temp file, then
+            // closes/reopens the destination so Windows does not keep a stale
+            // handle that prevents replacement.
+            reset()
         }
         return buildGrid(blockSize)
     }
@@ -194,7 +236,9 @@ internal class SegmentStore(
         // Use the length observed at open time. `ensureLength()` may run before
         // `peek/loadOrCreate` and must not turn a deleted/recreated file into a
         // false-positive resume candidate.
-        val available = if (lengthAtOpen >= 0) lengthAtOpen else dest.length()
+        val available =
+            if (lengthAtOpen >= 0) minOf(lengthAtOpen, dest.length())
+            else dest.length()
         return available >= need
     }
 
@@ -205,9 +249,38 @@ internal class SegmentStore(
      */
     fun peek(expectedTotal: Long): List<Piece>? {
         val st = readState() ?: return null
+        if (identityStatus(st) != IdentityStatus.MATCH) return null
         if (st.total != expectedTotal || st.pieces.isEmpty()) return null
         if (!destCovers(st.pieces)) return null
         return st.pieces
+    }
+
+    internal fun hasRecordedBytes(): Boolean? =
+        readState()?.pieces?.any { it.written > 0 }
+
+    /** Existing bytes without a usable identity; callers must verify before adopting. */
+    internal fun unverifiedLegacyPieces(expectedTotal: Long): List<Piece>? {
+        val state = readState() ?: return null
+        if (state.embeddedIdentity != null || state.total != expectedTotal ||
+            state.pieces.none { it.written > 0 } || !destCovers(state.pieces) ||
+            identityStatus(state) != IdentityStatus.UNKNOWN) return null
+        return state.pieces
+    }
+
+    internal fun identityForMigration(): String? = currentFileIdentity(createIfMissing = true)
+
+    internal fun adoptVerifiedLegacyPieces(pieces: List<Piece>, identity: String) {
+        if (currentFileIdentity() != identity) throw ResumeVerificationException()
+        persist(pieces)
+        if (currentFileIdentity() != identity || peek(total) == null) throw ResumeVerificationException()
+    }
+
+    internal fun requireKnownProgressIdentity() {
+        val state = readState() ?: return
+        if (state.pieces.any { it.written > 0 } && destCovers(state.pieces) &&
+            identityStatus(state) == IdentityStatus.UNKNOWN) {
+            throw ResumeVerificationException()
+        }
     }
 
     /** 按固定块大小切网格（最后一片可能更短）。 */
@@ -293,13 +366,23 @@ internal class SegmentStore(
         // 轻则丢断点，重则生成"可解析但混合了两个时刻"的快照。
         synchronized(persistLock) {
         val snapshot = canonicalSnapshot(pieces) ?: return
+        val identity = currentFileIdentity(createIfMissing = true) ?: return
         runCatching {
+            // A checkpoint must never become durable before the bytes it
+            // claims. Flush the destination data first, then fsync the sidecar
+            // temp file and atomically publish it. Without this order, sudden
+            // power loss can leave a sidecar claiming ranges that are still
+            // only page-cache writes.
+            channel?.force(false)
             val tmp = File(stateFile.parentFile, stateFile.name + ".tmp")
             stateFile.parentFile?.mkdirs()
             RandomAccessFile(tmp, "rw").use { f ->
                 f.setLength(0)
                 f.write(MAGIC)
                 f.writeInt(VERSION)
+                val identityBytes = identity.toByteArray(Charsets.UTF_8)
+                f.writeInt(identityBytes.size)
+                f.write(identityBytes)
                 f.writeLong(total)
                 f.writeInt(snapshot.size)
                 for (p in snapshot) {
@@ -362,19 +445,118 @@ internal class SegmentStore(
 
     /** 清掉进度记录与目标文件（内容已变、无法安全续传时）。 */
     fun reset() {
+        // Close destination handles before trying to delete on Windows. Keep
+        // sidecars intact until the destination deletion is known to succeed,
+        // otherwise a permission/lock failure would destroy the only recovery
+        // metadata while leaving the old file in place.
+        close()
+        if (dest.exists() && !dest.delete()) {
+            throw java.io.IOException(
+                "无法丢弃失效的目标文件：${dest.absolutePath}",
+            )
+        }
         synchronized(persistLock) {
             // 【三件一起删】readState 会自动回退到 .bak：只删主文件的话，
             // 明确丢弃旧进度之后仍然可能把旧备份读回来，等于没重置。
-            runCatching { stateFile.delete() }
-            runCatching { File(stateFile.parentFile, stateFile.name + ".bak").delete() }
-            runCatching { File(stateFile.parentFile, stateFile.name + ".tmp").delete() }
+            listOf(
+                stateFile,
+                File(stateFile.parentFile, stateFile.name + ".bak"),
+                File(stateFile.parentFile, stateFile.name + ".tmp"),
+                identityFile(),
+                File(identityFile().parentFile, identityFile().name + ".tmp"),
+            ).forEach { file ->
+                if (file.exists() && !file.delete()) {
+                    throw java.io.IOException(
+                        "无法删除失效的进度侧车：${file.absolutePath}",
+                    )
+                }
+            }
         }
-        close()
-        runCatching { dest.delete() }
         open()
     }
 
-    private class Loaded(val total: Long, val pieces: List<Piece>)
+    private enum class IdentityStatus { MATCH, MISMATCH, UNKNOWN }
+
+    private class Loaded(
+        val total: Long,
+        val pieces: List<Piece>,
+        val embeddedIdentity: String?,
+    )
+
+    private fun identityFile(): File =
+        File(stateFile.parentFile, stateFile.name + ".identity")
+
+    private fun currentFileIdentity(createIfMissing: Boolean = false): String? = runCatching {
+        // Android API 24/25 does not expose java.nio.file.Files. Its public
+        // android.system.Os.stat API provides the filesystem device and inode.
+        val vm = System.getProperty("java.vm.name").orEmpty()
+        if (vm.contains("Dalvik", ignoreCase = true) || vm.contains("ART", ignoreCase = true)) {
+            val os = Class.forName("android.system.Os")
+            val stat = os.getMethod("stat", String::class.java).invoke(null, dest.absolutePath)
+            val dev = stat.javaClass.getField("st_dev").getLong(stat)
+            val ino = stat.javaClass.getField("st_ino").getLong(stat)
+            return@runCatching if (ino != 0L) "android-inode:$dev:$ino" else null
+        }
+        val attrs = java.nio.file.Files.readAttributes(
+            dest.toPath(),
+            java.nio.file.attribute.BasicFileAttributes::class.java,
+        )
+        val created = attrs.creationTime().toMillis()
+        val key = attrs.fileKey()?.toString()?.takeIf { it.isNotBlank() }
+        if (key != null) return@runCatching "$key|$created"
+        if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            return@runCatching null
+        }
+
+        // Windows' default FileSystemProvider returns fileKey=null. Use an NTFS
+        // alternate data stream as a persistent token for this destination.
+        val ads = File(dest.absolutePath + ":turbodl.id")
+        val existing = runCatching {
+            RandomAccessFile(ads, "r").use { handle ->
+                val length = handle.length().coerceAtMost(128).toInt()
+                val bytes = ByteArray(length)
+                handle.readFully(bytes)
+                String(bytes, Charsets.UTF_8).trim()
+            }
+        }.getOrNull()
+        if (!existing.isNullOrEmpty()) return@runCatching "ads:$existing"
+        if (!createIfMissing) return@runCatching "ads-absent"
+
+        val token = java.util.UUID.randomUUID().toString()
+        RandomAccessFile(ads, "rw").use { handle ->
+            handle.setLength(0)
+            handle.write(token.toByteArray(Charsets.UTF_8))
+            handle.fd.sync()
+        }
+        "ads:$token"
+    }.getOrNull()
+
+    private fun identityStatus(state: Loaded): IdentityStatus {
+        val current = currentFileIdentity() ?: return IdentityStatus.UNKNOWN
+        val embedded = state.embeddedIdentity
+        if (embedded != null) {
+            return if (embedded == current) {
+                IdentityStatus.MATCH
+            } else {
+                IdentityStatus.MISMATCH
+            }
+        }
+
+        // Version 1 snapshots stored identity in a separate file. If that file
+        // is missing/unreadable, the state cannot prove which destination it
+        // belongs to; refuse to resume instead of silently accepting it.
+        val stored = runCatching {
+            identityFile().takeIf { it.isFile }?.readText()?.trim()
+        }.getOrNull()
+        if (stored.isNullOrEmpty() || !stored.startsWith("v1:")) {
+            return IdentityStatus.UNKNOWN
+        }
+        return if (stored == "v1:$current") {
+            IdentityStatus.MATCH
+        } else {
+            IdentityStatus.MISMATCH
+        }
+    }
 
     private fun readState(): Loaded? =
         readStateFile(stateFile)
@@ -385,7 +567,18 @@ internal class SegmentStore(
         RandomAccessFile(source, "r").use { f ->
             val magic = ByteArray(MAGIC.size)
             if (f.read(magic) != magic.size || !magic.contentEquals(MAGIC)) return@runCatching null
-            if (f.readInt() != VERSION) return@runCatching null
+            val version = f.readInt()
+            if (version !in 1..VERSION) return@runCatching null
+            val embeddedIdentity = if (version >= 2) {
+                val identityLength = f.readInt()
+                if (identityLength !in 1..MAX_IDENTITY_BYTES) return@runCatching null
+                val bytes = ByteArray(identityLength)
+                f.readFully(bytes)
+                String(bytes, Charsets.UTF_8).takeIf { it.isNotBlank() }
+                    ?: return@runCatching null
+            } else {
+                null
+            }
             val totalRead = f.readLong()
             val count = f.readInt()
             // 防御：损坏的计数不该导致巨额分配。
@@ -395,8 +588,10 @@ internal class SegmentStore(
                 val s = f.readLong()
                 val e = f.readLong()
                 val w = f.readLong()
-                if (s < 0 || e < s || w < 0) return@runCatching null
-                list.add(Piece(s, e, w.coerceAtMost(e - s + 1)))
+                if (s < 0 || e < s || w < 0 || w > e - s + 1) {
+                    return@runCatching null
+                }
+                list.add(Piece(s, e, w))
             }
             // 【整网格校验】只检查单条区间不够：一个损坏但可解析的快照可以声明
             // "整文件已完成"，实际留下零/旧数据，而长度校验照样通过。
@@ -409,15 +604,28 @@ internal class SegmentStore(
                 }
                 if (expectedStart != totalRead) return@runCatching null
             }
-            Loaded(totalRead, list)
+            Loaded(totalRead, list, embeddedIdentity)
         }
     }.getOrNull()
 
     private companion object {
         val MAGIC = byteArrayOf('T'.code.toByte(), 'D'.code.toByte(), 'L'.code.toByte(), 'P'.code.toByte())
-        const val VERSION = 1
+        const val VERSION = 2
+        const val MAX_IDENTITY_BYTES = 512
 
         /** 网格上限：正常文件几千片足够；超过这个数说明记录已损坏。 */
         const val MAX_PIECES = 2_000_000
     }
+}
+
+/**
+ * Remove the Windows-only persistent identity token when a task reaches a
+ * terminal state. The sidecar itself is deleted with the chunk directory; the
+ * ADS lives on the destination and must be cleaned separately.
+ */
+internal fun clearTurbodlFileIdentity(destination: File) {
+    if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        return
+    }
+    runCatching { File(destination.absolutePath + ":turbodl.id").delete() }
 }

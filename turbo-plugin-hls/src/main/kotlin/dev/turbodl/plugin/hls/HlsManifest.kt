@@ -1,12 +1,22 @@
 package dev.turbodl.plugin.hls
 
 import java.net.URI
+import java.security.MessageDigest
 
 /** Parsed, immutable HLS VOD media playlist. */
 internal data class HlsMediaPlaylist(
     val sourceUri: URI,
     val mediaSequence: Long,
+    val initSegment: HlsInitSegment?,
     val segments: List<HlsSegment>,
+    val identity: String,
+)
+
+/** One fMP4 media initialization section declared by EXT-X-MAP. */
+internal data class HlsInitSegment(
+    val uri: URI,
+    val byteRange: HlsByteRange?,
+    val encryption: HlsEncryption?,
 )
 
 /** One media segment in playlist order. */
@@ -34,12 +44,14 @@ internal class HlsUnsupportedException(message: String) : IllegalArgumentExcepti
  *
  * This adapter intentionally supports the reliable download path: master playlists selecting a
  * variant, static media playlists ending in EXT-X-ENDLIST, EXTINF segments, BYTERANGE, and
- * AES-128 CBC encryption. Constructs that require a media pipeline rather than byte assembly
- * fail explicitly instead of producing a deceptively corrupt output.
+ * AES-128 CBC encryption. A single EXT-X-MAP initialization section at the start of an fMP4
+ * playlist is prepended to the ordered segment parts. Constructs that require a media pipeline
+ * rather than byte assembly fail explicitly instead of producing a deceptively corrupt output.
  */
 internal object HlsManifestParser {
     private const val MASTER_TAG = "#EXT-X-STREAM-INF:"
     private const val KEY_TAG = "#EXT-X-KEY:"
+    private const val MAP_TAG = "#EXT-X-MAP:"
     private const val RANGE_TAG = "#EXT-X-BYTERANGE:"
     private const val MEDIA_SEQUENCE_TAG = "#EXT-X-MEDIA-SEQUENCE:"
 
@@ -72,9 +84,6 @@ internal object HlsManifestParser {
         if (lines.any { it.startsWith(MASTER_TAG) }) {
             throw HlsUnsupportedException("HLS nested master playlists are not supported")
         }
-        if (lines.any { it.startsWith("#EXT-X-MAP:") }) {
-            throw HlsUnsupportedException("HLS EXT-X-MAP/fMP4 playlists are not supported by the raw segment merger")
-        }
         if (lines.any { it.startsWith("#EXT-X-DISCONTINUITY") }) {
             throw HlsUnsupportedException("HLS discontinuity playlists are not supported by the raw segment merger")
         }
@@ -84,9 +93,11 @@ internal object HlsManifestParser {
 
         var mediaSequence = 0L
         var currentKey: HlsKey? = null
+        var initMap: HlsInitMap? = null
         var pendingRange: PendingRange? = null
         var previousRangeEnd: Long? = null
         var sawExtInf = false
+        var sawMediaSegment = false
         val segments = mutableListOf<HlsSegment>()
 
         for (line in lines) {
@@ -103,6 +114,14 @@ internal object HlsManifestParser {
                 }
                 line.startsWith(KEY_TAG) -> {
                     currentKey = parseEncryption(attributes(line.removePrefix(KEY_TAG)), sourceUri)
+                }
+                line.startsWith(MAP_TAG) -> {
+                    if (initMap != null || sawMediaSegment) {
+                        throw HlsUnsupportedException(
+                            "HLS playlists with multiple or midstream EXT-X-MAP declarations are not supported",
+                        )
+                    }
+                    initMap = parseInitMap(attributes(line.removePrefix(MAP_TAG)), sourceUri, currentKey)
                 }
                 line.startsWith(RANGE_TAG) -> {
                     pendingRange = parsePendingRange(line.removePrefix(RANGE_TAG))
@@ -129,6 +148,7 @@ internal object HlsManifestParser {
                         byteRange = byteRange,
                         encryption = encryption,
                     )
+                    sawMediaSegment = true
                     pendingRange = null
                     sawExtInf = false
                 }
@@ -138,7 +158,41 @@ internal object HlsManifestParser {
             throw HlsUnsupportedException("HLS playlist ended before its pending segment URI")
         }
         if (segments.isEmpty()) throw HlsUnsupportedException("HLS media playlist has no segments")
-        return HlsMediaPlaylist(sourceUri, mediaSequence, segments)
+        val initSegment = initMap?.let { map ->
+            HlsInitSegment(
+                uri = map.uri,
+                byteRange = map.byteRange,
+                encryption = map.key?.let { key ->
+                    val iv = key.explicitIv ?: throw HlsUnsupportedException(
+                        "HLS AES-128 encrypted EXT-X-MAP requires an explicit IV",
+                    )
+                    HlsEncryption(key.keyUri, iv)
+                },
+            )
+        }
+        return HlsMediaPlaylist(
+            sourceUri = sourceUri,
+            mediaSequence = mediaSequence,
+            initSegment = initSegment,
+            segments = segments,
+            identity = manifestIdentity(sourceUri, lines),
+        )
+    }
+
+    /**
+     * Stable identity for the fully resolved media playlist. Cache entries must
+     * never survive a playlist version change merely because their positional
+     * index stayed the same.
+     */
+    private fun manifestIdentity(sourceUri: URI, lines: List<String>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(sourceUri.toString().toByteArray(Charsets.UTF_8))
+        digest.update(0)
+        lines.forEach { line ->
+            digest.update(line.toByteArray(Charsets.UTF_8))
+            digest.update('\n'.code.toByte())
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
     private fun parseEncryption(attrs: Map<String, String>, playlistUri: URI): HlsKey? {
@@ -161,6 +215,34 @@ internal object HlsManifestParser {
         val length = match.groupValues[1].toLong()
         if (length <= 0) throw HlsUnsupportedException("HLS EXT-X-BYTERANGE length must be positive")
         return PendingRange(length, match.groupValues[2].takeIf { it.isNotEmpty() }?.toLong())
+    }
+
+    private fun parseInitMap(
+        attrs: Map<String, String>,
+        playlistUri: URI,
+        key: HlsKey?,
+    ): HlsInitMap {
+        val uriValue = attrs["URI"] ?: throw HlsUnsupportedException("HLS EXT-X-MAP is missing URI")
+        if (uriValue.isBlank()) throw HlsUnsupportedException("HLS EXT-X-MAP URI must not be blank")
+        val byteRange = attrs["BYTERANGE"]?.let(::parseInitMapRange)
+        return HlsInitMap(resolve(playlistUri, uriValue), byteRange, key)
+    }
+
+    private fun parseInitMapRange(raw: String): HlsByteRange {
+        val match = Regex("^(\\d+)(?:@(\\d+))?$").matchEntire(raw.trim())
+            ?: throw HlsUnsupportedException("Invalid HLS EXT-X-MAP BYTERANGE '$raw'")
+        val length = match.groupValues[1].toLongOrNull()
+            ?: throw HlsUnsupportedException("HLS EXT-X-MAP BYTERANGE length is too large: '$raw'")
+        if (length <= 0) throw HlsUnsupportedException("HLS EXT-X-MAP BYTERANGE length must be positive")
+        val offsetValue = match.groupValues[2]
+        if (offsetValue.isEmpty()) {
+            throw HlsUnsupportedException(
+                "HLS EXT-X-MAP BYTERANGE requires an explicit offset: '$raw'",
+            )
+        }
+        val offset = offsetValue.toLongOrNull()
+            ?: throw HlsUnsupportedException("HLS EXT-X-MAP BYTERANGE offset is too large: '$raw'")
+        return HlsByteRange(length, offset)
     }
 
     private fun parseIv(raw: String): ByteArray {
@@ -216,12 +298,19 @@ internal object HlsManifestParser {
     }
 
     private fun resolve(base: URI, value: String): URI {
-        val uri = base.resolve(value.trim())
+        val target = value.trim()
+        if (target.isEmpty()) throw HlsUnsupportedException("HLS URI must not be blank")
+        val uri = try {
+            base.resolve(target)
+        } catch (t: IllegalArgumentException) {
+            throw HlsUnsupportedException("Invalid HLS URI '$target': ${t.message}")
+        }
         if (uri.scheme !in setOf("http", "https")) {
             throw HlsUnsupportedException("HLS URI must use http or https: $uri")
         }
         return uri
     }
 
+    private data class HlsInitMap(val uri: URI, val byteRange: HlsByteRange?, val key: HlsKey?)
     private data class PendingRange(val length: Long, val offset: Long?)
 }

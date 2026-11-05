@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -45,11 +46,13 @@ class ResumeProbeTest {
          * （探测用的 1 字节区间仍然放行）。用于验证「指纹取不到 → 应该保留旧分片」。
          */
         private val rejectSmallRanges: Boolean = false,
+        private val rejectRangeStarts: LongRange? = null,
     ) {
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
         /** 实际吐出的响应体字节数（不含头部）——用来判断旧分片到底有没有被重下。 */
         val bodyBytes = AtomicLong(0)
+        val ranges = java.util.concurrent.ConcurrentLinkedQueue<Pair<Int, Int>>()
 
         init {
             server.createContext("/f.bin") { ex: HttpExchange ->
@@ -68,6 +71,15 @@ class ResumeProbeTest {
                 val s = m.groupValues[1].toInt()
                 val e = m.groupValues[2].toIntOrNull() ?: (size - 1)
                 if (s >= size) { ex.sendResponseHeaders(416, -1); ex.close(); return@createContext }
+                if (
+                    rejectRangeStarts != null &&
+                    s.toLong() in rejectRangeStarts &&
+                    e - s + 1 <= 64 * 1024
+                ) {
+                    ex.sendResponseHeaders(403, -1)
+                    ex.close()
+                    return@createContext
+                }
                 val end = minOf(e, size - 1)
                 val len = end - s + 1
                 // 拒绝"小但非退化"的区间（模拟 CDN 对指纹请求的拒绝）；探测的 bytes=0-0 仍放行。
@@ -75,6 +87,7 @@ class ResumeProbeTest {
                     ex.sendResponseHeaders(403, -1); ex.close(); return@createContext
                 }
                 ex.responseHeaders.add("Content-Range", "bytes $s-$end/$size")
+                ranges.add(s to end)
                 bodyBytes.addAndGet(len.toLong())
                 ex.sendResponseHeaders(206, len.toLong())
                 ex.responseBody.use { it.write(payload, s, len) }
@@ -99,7 +112,13 @@ class ResumeProbeTest {
      * ★ 存储结构已变：数据写在**目标文件**里、进度记在侧车，不再是 `seg_*.part`。
      *   所以这里要连目标文件一起铺（否则引擎会判定"文件不够长 → 进度失效"）。
      */
-    private fun stageOldPart(payload: ByteArray, validator: String, dest: File): Pair<File, File> {
+    private fun stageOldPart(
+        payload: ByteArray,
+        validator: String,
+        dest: File,
+        completedPieces: Int = 1,
+        blockBytes: Int = BLOCK,
+    ): Pair<File, File> {
         val workDir = File(System.getProperty("java.io.tmpdir"), "turbodl-resume-${System.nanoTime()}")
         workDir.mkdirs()
         val safe = "key_" + KEY.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }.joinToString("")
@@ -109,10 +128,14 @@ class ResumeProbeTest {
         val store = SegmentStore(dest = dest, stateFile = File(chunkDir, "progress.tdlp"), total = SIZE.toLong())
         store.open()
         try {
-            val pieces = store.buildGrid(BLOCK.toLong())
-            val head = payload.copyOfRange(0, BLOCK)
-            store.writeAt(0, head, 0, head.size)
-            pieces.first().written = head.size.toLong()
+            val pieces = store.buildGrid(blockBytes.toLong())
+            repeat(completedPieces.coerceIn(0, pieces.size)) { index ->
+                val start = pieces[index].start.toInt()
+                val length = (pieces[index].end - pieces[index].start + 1).toInt()
+                val bytes = payload.copyOfRange(start, start + length)
+                store.writeAt(start.toLong(), bytes, 0, bytes.size)
+                pieces[index].written = length.toLong()
+            }
             store.persist(pieces)
         } finally {
             store.close()
@@ -180,10 +203,133 @@ class ResumeProbeTest {
             // 【本次修复】旧行为是"弱校验器 → 一律丢弃 → 从 0 重下"，用户实报：
             // 夸克链接一暂停就整包重下。现在改用内容指纹（前 64KB 比对），一致就该复用。
             assertTrue(
-                served <= SIZE - BLOCK + (128 * 1024),
+                served <= SIZE - BLOCK + (512 * 1024),
                 "服务器吐了 $served 字节：弱校验器场景仍然丢弃了旧分片（应为指纹一致 → 复用）。" +
                     "这正是『暂停就重新下载』的根因。"
             )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `zero byte checkpoint does not block checked resume`() = runBlocking {
+        val payload = ByteArray(SIZE) { ((it * 13 + 6) % 256).toByte() }
+        val srv = RangeServer(payload, etag = null, lastModified = null, rejectSmallRanges = true)
+        val out = File.createTempFile("resume-empty", ".bin")
+        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak", out, completedPieces = 0)
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong()),
+                UnverifiableResumePolicy.FAIL,
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(payload))
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy progress is adopted after its saved bytes match the source`() = runBlocking {
+        val payload = ByteArray(SIZE) { ((it * 17 + 9) % 256).toByte() }
+        val srv = RangeServer(payload, etag = "\"v1\"")
+        val out = File.createTempFile("resume-legacy-adopt", ".bin")
+        val (workDir, chunkDir) = stageOldPart(
+            payload, "len=$SIZE|etag=\"v1\"|lm=Wed, 21 Oct 2026 07:28:00 GMT", out,
+        )
+        java.io.DataOutputStream(File(chunkDir, "progress.tdlp").outputStream()).use { state ->
+            state.writeBytes("TDLP"); state.writeInt(1); state.writeLong(SIZE.toLong()); state.writeInt(2)
+            state.writeLong(0); state.writeLong((SIZE / 2 - 1).toLong()); state.writeLong(BLOCK.toLong())
+            state.writeLong((SIZE / 2).toLong()); state.writeLong((SIZE - 1).toLong()); state.writeLong(0)
+        }
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(DownloadRequest(
+                "http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong(),
+            ))
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(payload))
+            assertTrue(srv.ranges.none { (start, end) -> start == 0 && end - start + 1 > 64 * 1024 },
+                "legacy adoption should not fetch the saved block again")
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy progress without identity remains intact even with matching strong etag`() = runBlocking {
+        val payload = ByteArray(SIZE) { ((it * 13 + 6) % 256).toByte() }
+        val srv = RangeServer(payload, etag = "\"v1\"", rejectSmallRanges = true)
+        val out = File.createTempFile("resume-legacy-v1", ".bin")
+        val (workDir, chunkDir) = stageOldPart(
+            payload, "len=$SIZE|etag=\"v1\"|lm=Wed, 21 Oct 2026 07:28:00 GMT", out,
+        )
+        val progress = File(chunkDir, "progress.tdlp")
+        java.io.DataOutputStream(progress.outputStream()).use { state ->
+            state.writeBytes("TDLP"); state.writeInt(1); state.writeLong(SIZE.toLong()); state.writeInt(2)
+            state.writeLong(0); state.writeLong((SIZE / 2 - 1).toLong()); state.writeLong(BLOCK.toLong())
+            state.writeLong((SIZE / 2).toLong()); state.writeLong((SIZE - 1).toLong()); state.writeLong(0)
+        }
+        val beforeProgress = progress.readBytes()
+        val beforeOutput = out.readBytes()
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(DownloadRequest(
+                "http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong(),
+            ))
+            assertTrue(client.await(id).exceptionOrNull() is ResumeVerificationException)
+            assertTrue(progress.readBytes().contentEquals(beforeProgress))
+            assertTrue(out.readBytes().contentEquals(beforeOutput))
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `unverifiable resume can fail without destroying saved bytes`() = runBlocking {
+        val old = ByteArray(SIZE) { ((it * 53 + 6) % 256).toByte() }
+        val replacement = ByteArray(SIZE) { ((it * 37 + 3) % 256).toByte() }
+        val srv = RangeServer(replacement, etag = null, lastModified = null, rejectSmallRanges = true)
+        val out = File.createTempFile("resume-strict", ".bin")
+        val (workDir, chunkDir) = stageOldPart(old, "len=$SIZE|weak", out)
+        val sidecar = File(chunkDir, "progress.tdlp")
+        val savedProgress = sidecar.readBytes()
+        val savedPrefix = out.readBytes().copyOfRange(0, BLOCK)
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong()),
+                UnverifiableResumePolicy.FAIL,
+            )
+            val result = client.await(id)
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull() is ResumeVerificationException)
+            assertTrue(sidecar.readBytes().contentEquals(savedProgress))
+            assertTrue(out.readBytes().copyOfRange(0, BLOCK).contentEquals(savedPrefix))
+            assertTrue(client.resumeAsync(id))
+            assertTrue(client.await(id).exceptionOrNull() is ResumeVerificationException)
+            assertTrue(sidecar.readBytes().contentEquals(savedProgress))
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `verification policy allows a matching resume fingerprint`() = runBlocking {
+        val payload = ByteArray(SIZE) { ((it * 53 + 6) % 256).toByte() }
+        val srv = RangeServer(payload, etag = null, lastModified = null)
+        val out = File.createTempFile("resume-checkable", ".bin")
+        val (workDir, _) = stageOldPart(payload, "len=$SIZE|weak", out)
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong()),
+                UnverifiableResumePolicy.FAIL,
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(payload))
         } finally {
             client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
         }
@@ -244,6 +390,324 @@ class ResumeProbeTest {
                 served >= SIZE,
                 "服务器只吐了 $served 字节（完整=$SIZE）：旧分片被复用了 —— " +
                     "这会让「同大小不同内容」的新文件合并出损坏结果。指纹校验必须拦住它。"
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `changed strong etag cannot be overruled by sampled bytes`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 37 + 11) % 256).toByte() }
+        val fresh = stale.copyOf().also { it[128 * 1024] = (it[128 * 1024] + 1).toByte() }
+        val srv = RangeServer(fresh, etag = "\"v2\"")
+        val out = File.createTempFile("resume-strong-unsampled", ".bin")
+        val (workDir, chunkDir) = stageOldPart(
+            stale, "len=$SIZE|etag=\"v1\"|lm=Wed, 21 Oct 2026 07:28:00 GMT", out,
+            blockBytes = 512 * 1024,
+        )
+        val original = out.readBytes()
+        val oldProgress = File(chunkDir, "progress.tdlp").readBytes()
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(DownloadRequest(
+                "http://127.0.0.1:${srv.port}/f.bin", out, stableKey = KEY, knownSize = SIZE.toLong(),
+            ))
+            assertTrue(client.await(id).exceptionOrNull() is ResumeVerificationException)
+            assertTrue(out.readBytes().contentEquals(original), "unverified progress must remain intact")
+            assertTrue(File(chunkDir, "progress.tdlp").readBytes().contentEquals(oldProgress))
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `strong validator change is not cleared by a matching first block prefix`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 37 + 11) % 256).toByte() }
+        val fresh = stale.copyOf().also { bytes ->
+            // Keep the 64 KiB fingerprint prefix identical while changing the
+            // rest of the already-written 128 KiB block. A strong ETag change
+            // must not be overridden by a single-prefix match.
+            for (index in 64 * 1024 until BLOCK) {
+                bytes[index] = (bytes[index] + 1).toByte()
+            }
+        }
+        val srv = RangeServer(fresh, etag = "\"v2\"")
+        val out = File.createTempFile("resume-strong-validator", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(
+            stale,
+            "len=$SIZE|etag=\"v1\"|lm=Wed, 21 Oct 2026 07:28:00 GMT",
+            out,
+        )
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(
+                out.readBytes().contentEquals(fresh),
+                "强校验器已变化且块内非前缀字节不同，旧分片不得因前 64 KiB 相同而被复用",
+            )
+            assertTrue(
+                srv.bodyBytes.get() >= SIZE,
+                "检测到强校验器变化后必须整体重下；服务器只发了 ${srv.bodyBytes.get()} / $SIZE",
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `weak ETag is fingerprinted even when the tag text is unchanged`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 67 + 3) % 256).toByte() }
+        val fresh = ByteArray(SIZE) { ((it * 89 + 41) % 256).toByte() }
+        val srv = RangeServer(fresh, etag = "W/\"same-weak-tag\"", lastModified = null)
+        val out = File.createTempFile("resume-weak-etag", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(
+            stale,
+            "len=$SIZE|etag=W/\"same-weak-tag\"|weak",
+            out,
+        )
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(
+                out.readBytes().contentEquals(fresh),
+                "W/ 弱 ETag 不能单独证明内容未变，必须走内容指纹",
+            )
+            assertTrue(
+                srv.bodyBytes.get() >= SIZE,
+                "弱 ETag 且内容不同时必须整体重下；服务器只发了 ${srv.bodyBytes.get()} / $SIZE",
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `weak ETag with an unchanged Last-Modified still requires fingerprinting`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 17 + 61) % 256).toByte() }
+        val fresh = ByteArray(SIZE) { ((it * 101 + 13) % 256).toByte() }
+        val lastModified = "Wed, 04 Nov 2026 08:00:00 GMT"
+        val srv = RangeServer(
+            fresh,
+            etag = "W/\"same-with-date\"",
+            lastModified = lastModified,
+        )
+        val out = File.createTempFile("resume-weak-etag-date", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(
+            stale,
+            "len=$SIZE|etag=W/\"same-with-date\"|lm=$lastModified|weak",
+            out,
+        )
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(fresh))
+            assertTrue(
+                srv.bodyBytes.get() >= SIZE,
+                "W/ ETag + Last-Modified 仍不是强校验器，内容不同必须重下",
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `missing validator with old parts is never treated as an implicit match`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 19 + 7) % 256).toByte() }
+        val fresh = ByteArray(SIZE) { ((it * 43 + 81) % 256).toByte() }
+        val srv = RangeServer(fresh, etag = "\"fresh\"")
+        val out = File.createTempFile("resume-missing-validator", ".bin").apply { deleteOnExit() }
+        val (workDir, chunkDir) = stageOldPart(
+            stale,
+            "len=$SIZE|etag=\"stale\"",
+            out,
+        )
+        File(chunkDir, ".validator").delete()
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(fresh))
+            assertTrue(
+                srv.bodyBytes.get() >= SIZE,
+                "缺少 .validator 时旧分片身份未知，必须重新下载",
+            )
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `backup-only progress is fingerprinted and a mismatch removes the backup`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 13 + 5) % 256).toByte() }
+        val fresh = ByteArray(SIZE) { ((it * 71 + 23) % 256).toByte() }
+        val srv = RangeServer(fresh, etag = null, lastModified = null)
+        val out = File.createTempFile("resume-backup-only", ".bin").apply { deleteOnExit() }
+        val (workDir, chunkDir) = stageOldPart(stale, "len=$SIZE|weak", out)
+        val primary = File(chunkDir, "progress.tdlp")
+        val backup = File(chunkDir, "progress.tdlp.bak")
+        assertTrue(primary.renameTo(backup))
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(fresh))
+            assertFalse(backup.exists(), "丢弃旧进度时必须同时删除 .bak")
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `one mismatching sampled piece cannot be hidden by another matching piece`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 31 + 17) % 256).toByte() }
+        val fresh = stale.copyOf().also { bytes ->
+            for (index in 64 * 1024 until BLOCK) {
+                bytes[index] = (bytes[index] + 9).toByte()
+            }
+        }
+        val srv = RangeServer(fresh, etag = null, lastModified = null)
+        val out = File.createTempFile("resume-two-pieces", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(
+            stale,
+            "len=$SIZE|weak",
+            out,
+            completedPieces = 2,
+        )
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(
+                out.readBytes().contentEquals(fresh),
+                "第一片已确认不一致，第二片相同不能把整体判回 MATCH",
+            )
+            assertTrue(srv.bodyBytes.get() >= SIZE)
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a changed interior piece is detected when outer pieces are unchanged`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 7 + 29) % 256).toByte() }
+        val fresh = stale.copyOf().also { bytes ->
+            val changed = 2 * BLOCK
+            for (index in changed until changed + BLOCK) {
+                bytes[index] = (bytes[index] + 37).toByte()
+            }
+        }
+        val srv = RangeServer(fresh, etag = null, lastModified = null)
+        val out = File.createTempFile("resume-interior-piece", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(
+            stale,
+            "len=$SIZE|weak",
+            out,
+            completedPieces = 4,
+        )
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(
+                out.readBytes().contentEquals(fresh),
+                "即使首/中/尾样本相同，任何已完成分片出现变化也必须整体重下",
+            )
+            assertTrue(srv.bodyBytes.get() >= SIZE)
+        } finally {
+            client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `partial fingerprint failure cannot be upgraded to a full match`() = runBlocking {
+        val stale = ByteArray(SIZE) { ((it * 61 + 19) % 256).toByte() }
+        val fresh = stale.copyOf().also { bytes ->
+            val changed = 2 * BLOCK
+            for (index in changed until changed + BLOCK) {
+                bytes[index] = (bytes[index] + 73).toByte()
+            }
+        }
+        val srv = RangeServer(
+            fresh,
+            etag = null,
+            lastModified = null,
+            rejectRangeStarts = (2L * BLOCK) until (3L * BLOCK),
+        )
+        val out = File.createTempFile("resume-partial-fingerprint", ".bin").apply { deleteOnExit() }
+        val (workDir, _) = stageOldPart(
+            stale,
+            "len=$SIZE|weak",
+            out,
+            completedPieces = 4,
+        )
+        val client = TurboClient(cfg(workDir))
+        try {
+            val id = client.submit(
+                DownloadRequest(
+                    "http://127.0.0.1:${srv.port}/f.bin",
+                    out,
+                    stableKey = KEY,
+                    knownSize = SIZE.toLong(),
+                )
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(fresh))
+            assertTrue(
+                srv.bodyBytes.get() >= SIZE,
+                "部分指纹请求失败时不得把其余匹配样本升级为 MATCH",
             )
         } finally {
             client.shutdown(); srv.stop(); out.delete(); workDir.deleteRecursively()

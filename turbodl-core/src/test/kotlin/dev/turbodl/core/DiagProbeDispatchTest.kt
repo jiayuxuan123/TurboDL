@@ -54,6 +54,7 @@ class DiagProbeDispatchTest {
         }.asCoroutineDispatcher()
 
         var threw: Throwable? = null
+        val startedAt = System.currentTimeMillis()
         val result = try {
             withContext(single) {
                 // 断言协程体确实跑在模拟主线程上（否则本测试没有意义）
@@ -80,6 +81,10 @@ class DiagProbeDispatchTest {
         assertTrue(
             result is String,
             "不可达地址应返回**可读原因文本**而不是抛异常（实际：$result）",
+        )
+        assertTrue(
+            System.currentTimeMillis() - startedAt < 12_000,
+            "不可达诊断必须有硬上限，不能把界面挂住",
         )
     }
 

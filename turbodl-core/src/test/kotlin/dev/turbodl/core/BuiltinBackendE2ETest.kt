@@ -3,8 +3,10 @@ package dev.turbodl.core
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.InetSocketAddress
@@ -267,6 +269,41 @@ class BuiltinBackendE2ETest {
                 "resume 后 await 应看到成功，而不是旧的暂停失败：${result.exceptionOrNull()?.message}",
             )
             assertEquals(payload.size.toLong(), result.getOrThrow().length())
+            assertContentEquals(payload, result.getOrThrow().readBytes())
+        } finally {
+            client.shutdown()
+            srv.stop()
+            out.delete()
+        }
+    }
+
+    @Test
+    fun `resumeAsync keeps the caller coroutine off the blocking join`() = runBlocking {
+        tmpDir = tmp()
+        val payload = payloadOf(4 * 1024 * 1024, 29)
+        val srv = RangeServer(payload, chunkDelayMs = 3)
+        val client = TurboClient(
+            TurboConfig(
+                maxConnectionsPerTask = 4,
+                maxConcurrentTasks = 1,
+                adaptiveConcurrency = false,
+                slowStart = false,
+            )
+        )
+        val out = File(tmpDir, "async-resume.bin")
+        try {
+            val id = client.submit(DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out))
+            awaitSomeProgress(client, id)
+            client.pause(id)
+            Thread.sleep(300)
+
+            val accepted = withContext(Dispatchers.Default) {
+                client.resumeAsync(id)
+            }
+            assertTrue(accepted, "resumeAsync 应接受恢复请求")
+
+            val result = client.await(id)
+            assertTrue(result.isSuccess, "异步恢复后应完成：${result.exceptionOrNull()?.message}")
             assertContentEquals(payload, result.getOrThrow().readBytes())
         } finally {
             client.shutdown()

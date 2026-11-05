@@ -8,20 +8,19 @@ import dev.turbodl.core.TurboHttpClients
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -36,14 +35,14 @@ import kotlin.math.min
  * Handles an HTTP(S) M3U8 request as a protocol rather than letting the generic HTTP backend
  * download the playlist text. It resolves a master playlist to its highest-bandwidth variant,
  * validates a static VOD media playlist, downloads its segments concurrently, optionally
- * decrypts AES-128 CBC segments, and returns the ordered segment parts to TurboClient for its
- * normal merge/state/integrity pipeline.
+ * decrypts AES-128 CBC segments, downloads one optional fMP4 initialization section, and returns
+ * the ordered init/media parts to TurboClient for its normal merge/state/integrity pipeline.
  *
  * Intentional scope boundary:
  *  - supported: HTTP(S), master/media playlists, VOD ENDLIST, EXTINF, relative URIs,
- *    EXT-X-BYTERANGE, AES-128 identity keys;
- *  - rejected explicitly: live/event streams, DRM/SAMPLE-AES, fMP4 EXT-X-MAP, discontinuities,
- *    nested masters, non-HTTP URIs.
+ *    EXT-X-BYTERANGE, AES-128 identity keys, and one leading fMP4 EXT-X-MAP;
+ *  - rejected explicitly: live/event streams, DRM/SAMPLE-AES, multiple/midstream EXT-X-MAP
+ *    declarations, discontinuities, nested masters, non-HTTP URIs.
  *
  * This produces a concatenated transport/media stream (normally .ts). It does not pretend to
  * remux into MP4; packaging/remuxing belongs to a separate post-processing plugin.
@@ -71,8 +70,8 @@ class HlsBackend : DownloadBackend {
             // -1 and is made authoritative once all completed segment files are known.
             context.reportTotalSize(-1)
             val keyCache = ConcurrentHashMap<URI, kotlinx.coroutines.CompletableDeferred<ByteArray>>()
-            preloadKeys(client, context, playlist.segments, keyCache)
-            downloadSegments(client, context, playlist.segments, keyCache)
+            preloadKeys(client, context, playlist.initSegment, playlist.segments, keyCache)
+            downloadSegments(client, context, playlist, keyCache)
         } finally {
             // 【逐句兜底，别用一条裸顺序链】两点理由：
             // 1. `evictAll()` 会真的 close 每条空闲连接的 socket（TLS 还要写 close_notify），
@@ -87,20 +86,44 @@ class HlsBackend : DownloadBackend {
     }
 
     private suspend fun resolvePlaylist(client: OkHttpClient, context: BackendContext): HlsMediaPlaylist {
-        val inputUri = URI(context.request.url)
-        val initial = fetchText(client, context, inputUri)
-        val mediaUri = HlsManifestParser.selectVariant(initial, inputUri) ?: inputUri
-        val mediaText = if (mediaUri == inputUri) initial else fetchText(client, context, mediaUri)
-        return HlsManifestParser.parseMedia(mediaText, mediaUri)
+        val candidates = buildList {
+            add(context.request.url)
+            addAll(context.request.mirrors)
+        }.map(String::trim).filter(String::isNotEmpty).distinct()
+        var lastFailure: Throwable? = null
+        for (candidate in candidates) {
+            ensureBackendActive(context)
+            try {
+                val inputUri = URI(candidate)
+                val initial = fetchText(client, context, inputUri)
+                val mediaUri = HlsManifestParser.selectVariant(initial, inputUri) ?: inputUri
+                val mediaText =
+                    if (mediaUri == inputUri) initial else fetchText(client, context, mediaUri)
+                return HlsManifestParser.parseMedia(mediaText, mediaUri)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                lastFailure = t
+            }
+        }
+        throw IllegalStateException(
+            "HLS playlist unavailable from all ${candidates.size} source(s): " +
+                (lastFailure?.message ?: "unknown failure"),
+            lastFailure,
+        )
     }
 
     private suspend fun preloadKeys(
         client: OkHttpClient,
         context: BackendContext,
+        initSegment: HlsInitSegment?,
         segments: List<HlsSegment>,
         keyCache: ConcurrentHashMap<URI, kotlinx.coroutines.CompletableDeferred<ByteArray>>,
     ) {
-        for (keyUri in segments.mapNotNull { it.encryption?.keyUri }.distinct()) {
+        val keyUris = buildList {
+            initSegment?.encryption?.keyUri?.let(::add)
+            addAll(segments.mapNotNull { it.encryption?.keyUri })
+        }.distinct()
+        for (keyUri in keyUris) {
             keyFor(client, context, keyUri, keyCache)
         }
     }
@@ -108,111 +131,158 @@ class HlsBackend : DownloadBackend {
     private suspend fun downloadSegments(
         client: OkHttpClient,
         context: BackendContext,
-        segments: List<HlsSegment>,
+        playlist: HlsMediaPlaylist,
         keyCache: ConcurrentHashMap<URI, kotlinx.coroutines.CompletableDeferred<ByteArray>>,
     ): BackendResult = coroutineScope {
         val partsDir = File(context.workDir, "hls-segments").apply { mkdirs() }
+        preparePartsCache(partsDir, playlist.identity)
         val concurrency = (context.request.connectionsOverride ?: context.config.maxConnectionsPerTask)
             .coerceIn(1, 256)
-        val gate = Semaphore(concurrency)
         val activeConnections = AtomicInteger(0)
-        val progressBytes = AtomicLong(completedBytes(partsDir, segments))
+        val progressBytes = AtomicLong(completedBytes(partsDir, playlist))
         context.reportProgress(progressBytes.get(), 0)
 
-        segments.map { segment ->
-            async {
-                gate.withPermit {
-                    downloadSegmentWithRetry(
+        playlist.initSegment?.let { init ->
+            val complete = initPart(partsDir, init)
+            downloadPartWithRetry(
+                client = client,
+                context = context,
+                label = "initialization map",
+                uri = init.uri,
+                byteRange = init.byteRange,
+                encryption = init.encryption,
+                complete = complete,
+                temp = File(partsDir, "${complete.name}.downloading"),
+                keyCache = keyCache,
+                activeConnections = activeConnections,
+                progressBytes = progressBytes,
+            )
+        }
+
+        // One worker per permitted connection, not one coroutine per playlist
+        // entry. A malicious or unusually large VOD playlist can contain
+        // hundreds of thousands of segments; creating a Job for each of them
+        // would exhaust memory before the Semaphore ever throttled them.
+        val queue = Channel<HlsSegment>(capacity = concurrency * 2)
+        val workers = List(minOf(concurrency, playlist.segments.size)) {
+            launch {
+                for (segment in queue) {
+                    val complete = segmentPart(partsDir, segment)
+                    downloadPartWithRetry(
                         client = client,
                         context = context,
-                        partsDir = partsDir,
-                        segment = segment,
+                        label = "segment ${segment.index}",
+                        uri = segment.uri,
+                        byteRange = segment.byteRange,
+                        encryption = segment.encryption,
+                        complete = complete,
+                        temp = File(partsDir, "${complete.name}.downloading"),
                         keyCache = keyCache,
                         activeConnections = activeConnections,
                         progressBytes = progressBytes,
                     )
                 }
             }
-        }.awaitAll()
+        }
+        try {
+            playlist.segments.forEach { queue.send(it) }
+        } finally {
+            queue.close()
+            workers.forEach { it.join() }
+        }
 
-        val orderedParts = segments.map { segmentPart(partsDir, it.index) }
+        val orderedParts = buildList {
+            playlist.initSegment?.let { add(initPart(partsDir, it)) }
+            addAll(playlist.segments.map { segmentPart(partsDir, it) })
+        }
         val total = orderedParts.sumOf { it.length() }
         context.reportTotalSize(total)
         context.reportProgress(total, 0)
         BackendResult(orderedParts, total)
     }
 
-    private suspend fun downloadSegmentWithRetry(
+    private suspend fun downloadPartWithRetry(
         client: OkHttpClient,
         context: BackendContext,
-        partsDir: File,
-        segment: HlsSegment,
+        label: String,
+        uri: URI,
+        byteRange: HlsByteRange?,
+        encryption: HlsEncryption?,
+        complete: File,
+        temp: File,
         keyCache: ConcurrentHashMap<URI, kotlinx.coroutines.CompletableDeferred<ByteArray>>,
         activeConnections: AtomicInteger,
         progressBytes: AtomicLong,
     ) {
-        val complete = segmentPart(partsDir, segment.index)
         if (complete.isFile && complete.length() > 0L) return
 
         val attempts = context.config.maxRetries + 1
         var lastFailure: Throwable? = null
+        val decrypting = File(complete.parentFile, "${complete.name}.decrypting")
         repeat(attempts) { attempt ->
             ensureBackendActive(context)
-            val temp = File(partsDir, "${segment.index}.downloading")
             temp.delete()
+            decrypting.delete()
             var attemptBytes = 0L
             try {
-                fetchSegmentToFile(client, context, segment, temp, activeConnections) { delta ->
+                fetchPartToFile(client, context, label, uri, byteRange, temp, activeConnections) { delta ->
                     attemptBytes += delta
                     context.throttle(delta)
                     context.reportProgress(progressBytes.addAndGet(delta), activeConnections.get())
                 }
-                if (segment.encryption != null) {
-                    val key = keyFor(client, context, segment.encryption.keyUri, keyCache)
-                    decryptAes128(temp, complete, key, segment.encryption.iv)
+                if (encryption != null) {
+                    val key = keyFor(client, context, encryption.keyUri, keyCache)
+                    decryptAes128(temp, decrypting, key, encryption.iv)
                     temp.delete()
+                    if (!decrypting.renameTo(complete)) {
+                        decrypting.copyTo(complete, overwrite = true)
+                        decrypting.delete()
+                    }
                 } else if (!temp.renameTo(complete)) {
                     temp.copyTo(complete, overwrite = true)
                     temp.delete()
                 }
                 if (!complete.isFile || complete.length() <= 0L) {
-                    throw IllegalStateException("HLS segment ${segment.index} was empty after download")
+                    throw IllegalStateException("HLS $label was empty after download")
                 }
                 return
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 progressBytes.addAndGet(-attemptBytes)
                 temp.delete()
+                decrypting.delete()
                 complete.delete()
                 lastFailure = t
                 if (attempt + 1 < attempts) delay(retryDelayMillis(attempt))
             }
         }
         throw IllegalStateException(
-            "HLS segment ${segment.index} failed after $attempts attempt(s): ${lastFailure?.message}",
+            "HLS $label failed after $attempts attempt(s): ${lastFailure?.message}",
             lastFailure,
         )
     }
 
-    private suspend fun fetchSegmentToFile(
+    private suspend fun fetchPartToFile(
         client: OkHttpClient,
         context: BackendContext,
-        segment: HlsSegment,
+        label: String,
+        uri: URI,
+        byteRange: HlsByteRange?,
         output: File,
         activeConnections: AtomicInteger,
         onBytes: suspend (Long) -> Unit,
     ) {
-        val requestBuilder = requestBuilder(segment.uri, context.request)
-        segment.byteRange?.let { range ->
+        val requestBuilder = requestBuilder(uri, context.request)
+        byteRange?.let { range ->
             requestBuilder.header("Range", "bytes=${range.offset}-${range.offset + range.length - 1}")
         }
         val request = requestBuilder.build()
         execute(client, request, activeConnections) { response ->
-            if (!response.isSuccessful) throw IllegalStateException("HLS segment ${segment.index} HTTP ${response.code}")
-            if (segment.byteRange != null && response.code != 206) {
-                throw IllegalStateException("HLS segment ${segment.index} ignored EXT-X-BYTERANGE")
+            if (!response.isSuccessful) throw IllegalStateException("HLS $label HTTP ${response.code}")
+            if (byteRange != null && response.code != 206) {
+                throw IllegalStateException("HLS $label ignored EXT-X-BYTERANGE")
             }
-            val body = response.body ?: throw IllegalStateException("HLS segment ${segment.index} has no response body")
+            val body = response.body ?: throw IllegalStateException("HLS $label has no response body")
             FileOutputStream(output, false).use { file ->
                 body.byteStream().use { input ->
                     val buffer = ByteArray(BUFFER_SIZE)
@@ -228,10 +298,10 @@ class HlsBackend : DownloadBackend {
                     }
                 }
             }
-            segment.byteRange?.let { range ->
+            byteRange?.let { range ->
                 if (output.length() != range.length) {
                     throw IllegalStateException(
-                        "HLS segment ${segment.index} byte range size mismatch: expected ${range.length}, got ${output.length()}",
+                        "HLS $label byte range size mismatch: expected ${range.length}, got ${output.length()}",
                     )
                 }
             }
@@ -268,7 +338,9 @@ class HlsBackend : DownloadBackend {
         return execute(client, request, null) { response ->
             if (!response.isSuccessful) throw IllegalStateException("HLS resource $uri HTTP ${response.code}")
             val body = response.body ?: throw IllegalStateException("HLS resource $uri has no response body")
-            body.bytes().also { context.throttle(it.size.toLong()) }
+            body.byteStream().use { input ->
+                HlsIo.readBounded(input, HlsIo.MAX_TEXT_BYTES)
+            }.also { context.throttle(it.size.toLong()) }
         }
     }
 
@@ -350,10 +422,72 @@ class HlsBackend : DownloadBackend {
         FileOutputStream(output, false).use { it.write(plain) }
     }
 
-    private fun completedBytes(partsDir: File, segments: List<HlsSegment>): Long =
-        segments.sumOf { segmentPart(partsDir, it.index).takeIf { it.isFile }?.length() ?: 0L }
+    private fun completedBytes(partsDir: File, playlist: HlsMediaPlaylist): Long =
+        (playlist.initSegment?.let { initPart(partsDir, it) }?.takeIf { it.isFile }?.length() ?: 0L) +
+            playlist.segments.sumOf { segmentPart(partsDir, it).takeIf { it.isFile }?.length() ?: 0L }
 
-    private fun segmentPart(partsDir: File, index: Int): File = File(partsDir, "%06d.part".format(index))
+    private fun segmentPart(partsDir: File, segment: HlsSegment): File {
+        val identity = buildString {
+            append(segment.index).append('|').append(segment.uri)
+            segment.byteRange?.let { append('|').append(it.length).append('@').append(it.offset) }
+            segment.encryption?.let { encryption ->
+                append('|').append(encryption.keyUri).append('|')
+                encryption.iv.forEach { byte -> append("%02x".format(byte)) }
+            }
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(identity.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+        return File(partsDir, "seg-%06d-%s.part".format(segment.index, digest))
+    }
+
+    /**
+     * HLS parts are only reusable while the resolved playlist identity is
+     * unchanged. A missing identity is treated as unsafe (for example after
+     * upgrading an older plugin build) and forces a clean start instead of
+     * risking a mixed-version media file.
+     */
+    private fun preparePartsCache(partsDir: File, identity: String) {
+        val marker = File(partsDir, PLAYLIST_IDENTITY_FILE)
+        val previous = runCatching {
+            marker.takeIf { it.isFile }?.readText(Charsets.UTF_8)?.trim()
+        }.getOrNull()
+        val hasCachedFiles = partsDir.listFiles()?.any { it.name != PLAYLIST_IDENTITY_FILE } == true
+        if (previous != identity && (hasCachedFiles || previous != null)) {
+            val entries = partsDir.listFiles().orEmpty()
+            entries.forEach { entry ->
+                check(entry.deleteRecursively()) {
+                    "Unable to clear stale HLS cache entry: ${entry.name}"
+                }
+            }
+        }
+
+        val temp = File(partsDir, "$PLAYLIST_IDENTITY_FILE.tmp")
+        FileOutputStream(temp, false).use { output ->
+            output.write(identity.toByteArray(Charsets.UTF_8))
+            output.flush()
+            output.fd.sync()
+        }
+        if (!temp.renameTo(marker)) {
+            temp.copyTo(marker, overwrite = true)
+            temp.delete()
+        }
+    }
+
+    private fun initPart(partsDir: File, init: HlsInitSegment): File {
+        val identity = buildString {
+            append(init.uri)
+            init.byteRange?.let { append('|').append(it.length).append('@').append(it.offset) }
+            init.encryption?.let { encryption ->
+                append('|').append(encryption.keyUri).append('|')
+                encryption.iv.forEach { byte -> append("%02x".format(byte)) }
+            }
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(identity.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+        return File(partsDir, "init-$digest.part")
+    }
 
     private fun ensureBackendActive(context: BackendContext) {
         if (!context.isActive()) throw CancellationException("HLS task is no longer active")
@@ -366,5 +500,6 @@ class HlsBackend : DownloadBackend {
 
         /** 重定向上限：正常 HLS 最多 1~2 跳，超过即视为异常链路。 */
         const val MAX_REDIRECTS = 5
+        const val PLAYLIST_IDENTITY_FILE = ".playlist-id"
     }
 }

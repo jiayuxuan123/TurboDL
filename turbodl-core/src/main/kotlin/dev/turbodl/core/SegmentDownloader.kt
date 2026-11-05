@@ -1,6 +1,7 @@
 package dev.turbodl.core
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -9,6 +10,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -32,6 +34,9 @@ internal enum class SegmentResult {
 
     /** 遇到 429 / 503：服务器过载信号 → 上层可下调并发。 */
     THROTTLED,
+
+    /** 来源声明的总大小与任务总大小不一致：这是另一个文件，不能继续使用该来源。 */
+    SOURCE_MISMATCH,
 
     /**
      * 授权/时效类失败（401 / 403 / 410）：**不是**"你太快了"的信号。
@@ -91,6 +96,21 @@ internal class SegmentDownloader(
      * CDN 直链且已过期，下一次尝试会自动回到原始 URL 重新解析，而不是抱着失效地址反复撞。
      */
     private val resolvedUrlByTask = ConcurrentHashMap<Long, ConcurrentHashMap<String, String>>()
+
+    /**
+     * 首请求单飞门。
+     *
+     * 跳过探测时，32/64 个 worker 会同时请求原始 URL，于是同一份 302
+     * 会被跟随几十次，既增加前端连接数也增加签名/限流风险。第一个 worker
+     * 负责拿到重定向终址，其余 worker 最多等一个小 RTT；之后直接复用终址。
+     * 门只按 task + 原始 URL 保存，任务释放时清除，不随分片数增长。
+     */
+    private val firstRequestGates =
+        ConcurrentHashMap<Pair<Long, String>, CompletableDeferred<Unit>>()
+    private val firstRequestOwners =
+        ConcurrentHashMap<Pair<Long, String>, Boolean>()
+    /** Tasks whose already-started segment phase has been terminated. */
+    private val cancelledSegmentTasks = ConcurrentHashMap.newKeySet<Long>()
 
     /**
      * 最近一次整文件下载失败的具体原因（按 taskId）。
@@ -162,7 +182,12 @@ internal class SegmentDownloader(
     }
 
     fun cancelCalls(taskId: Long) {
+        cancelledSegmentTasks.add(taskId)
         resolvedUrlByTask.remove(taskId)
+        firstRequestGates.keys.filter { it.first == taskId }.forEach { key ->
+            firstRequestGates.remove(key)?.complete(Unit)
+            firstRequestOwners.remove(key)
+        }
         activeCalls.remove(taskId)?.forEach { runCatching { it.cancel() } }
     }
 
@@ -178,7 +203,12 @@ internal class SegmentDownloader(
      * 残留的请求也已随协程作用域一同取消。
      */
     fun releaseTask(taskId: Long) {
+        cancelledSegmentTasks.remove(taskId)
         resolvedUrlByTask.remove(taskId)
+        firstRequestGates.keys.filter { it.first == taskId }.forEach { key ->
+            firstRequestGates.remove(key)?.complete(Unit)
+            firstRequestOwners.remove(key)
+        }
         activeCalls.remove(taskId)
     }
 
@@ -347,7 +377,16 @@ internal class SegmentDownloader(
          * 因此弱校验器**不足以支撑安全续传**：上层应据此丢弃旧分片（或做内容指纹校验）。
          */
         val isWeak: Boolean
-            get() = etag.isNullOrBlank() && lastModified.isNullOrBlank()
+            get() {
+                val hasStrongEtag =
+                    !etag.isNullOrBlank() &&
+                        !etag.startsWith("W/", ignoreCase = true)
+                // Last-Modified may accompany a weak ETag, but it is only a
+                // one-second timestamp and cannot prove byte identity. Content
+                // verification is still required whenever no strong ETag is
+                // available.
+                return !hasStrongEtag
+            }
     }
 
     /**
@@ -397,6 +436,8 @@ internal class SegmentDownloader(
         rangeSpec: String = RANGE_MIN,
         /** 覆盖 UA（UA 协商用）；null 表示沿用 [headers] 或配置里的默认值。 */
         userAgentOverride: String? = null,
+        /** Use the segment client so its pool can reuse the probe connection. */
+        useSegmentClient: Boolean = false,
     ): ProbeResult =
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
@@ -414,13 +455,15 @@ internal class SegmentDownloader(
             // 关键：用 OkHttp 自己的 callTimeout 做**硬止时**。
             // 协程的 withTimeout 无法中断阻塞中的 call.execute()（服务器接受连接但不响应时，
             // connect+read 可叠加到近分钟），callTimeout 覆盖整个请求生命周期，能真正卡住。
+            val baseClient = if (useSegmentClient) client else streamClient
             val effClient = if (timeoutMs > 0)
-                client.newBuilder().callTimeout(timeoutMs, TimeUnit.MILLISECONDS).build()
-            else client
+                baseClient.newBuilder().callTimeout(timeoutMs, TimeUnit.MILLISECONDS).build()
+            else baseClient
             val call = effClient.newCall(req)
             val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+            var callCompleted = false
             try {
-                call.execute().use { resp ->
+                val result = call.execute().use { resp ->
                     // resp.request.url 是跟随所有 3xx 之后的最终地址（原始链接 302→CDN 临时直链）。
                     val finalUrl = resp.request.url.toString()
                     // 元数据均为“尽力而为”：拿不到不影响下载，仅用于续传校验与命名。
@@ -440,6 +483,12 @@ internal class SegmentDownloader(
                         206 -> {
                             val total = resp.header("Content-Range")
                                 ?.substringAfter('/')?.toLongOrNull()
+                            // bytes=0-0 is a one-byte response. Consume it so
+                            // closing the response does not force OkHttp to
+                            // discard a reusable HTTP/1.1 connection.
+                            if (rangeSpec == RANGE_MIN) {
+                                runCatching { resp.body?.byteStream()?.read() }
+                            }
                             ProbeResult(total, true, finalUrl, etag, lastMod, suggested, ctype,
                                 statusCode = resp.code)
                         }
@@ -457,12 +506,17 @@ internal class SegmentDownloader(
                             statusCode = resp.code)
                     }
                 }
+                callCompleted = true
+                // A successful probe must not cancel its Call. Cancel after a
+                // response caused OkHttp to close the socket and made the
+                // following segment pay for another DNS/TLS connection.
+                result
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 ProbeResult(null, false, url)
             } finally {
-                runCatching { if (!call.isCanceled()) call.cancel() }
+                if (!callCompleted) runCatching { call.cancel() }
                 handle?.dispose()
             }
         }
@@ -521,6 +575,7 @@ internal class SegmentDownloader(
         headers: Map<String, String>,
         timeoutMs: Long,
         initial: ProbeResult,
+        useSegmentClient: Boolean,
     ): ProbeResult {
         val explicit = headers.keys.any { it.equals("User-Agent", ignoreCase = true) }
         if (explicit) return initial
@@ -529,7 +584,14 @@ internal class SegmentDownloader(
             initial.statusCode == 401 || initial.statusCode == 403
         if (!blocked) return initial
         for (ua in uaFallbacks) {
-            val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN, userAgentOverride = ua)
+            val r = probe(
+                url,
+                headers,
+                timeoutMs = timeoutMs,
+                rangeSpec = RANGE_MIN,
+                userAgentOverride = ua,
+                useSegmentClient = useSegmentClient,
+            )
             // 换到 UA 之后必须**真的能下**才算数：拿到 Range 支持，或至少不再是 HTML/401/403。
             val stillBlocked = r.contentType.orEmpty().contains("text/html", ignoreCase = true) ||
                 r.statusCode == 401 || r.statusCode == 403
@@ -571,6 +633,13 @@ internal class SegmentDownloader(
             call.execute().use { resp ->
                 // 只认 206（精确区间）；start==0 时允许 200（部分服务器对 bytes=0- 回整文件）。
                 if (resp.code != 206 && !(resp.code == 200 && start == 0L)) return@use null
+                if (resp.code == 206) {
+                    val range = resp.header("Content-Range")?.let {
+                        Regex("""^bytes\s+(\d+)-(\d+)/(?:\d+|\*)$""", RegexOption.IGNORE_CASE).matchEntire(it.trim())
+                    } ?: return@use null
+                    if (range.groupValues[1].toLongOrNull() != start ||
+                        range.groupValues[2].toLongOrNull() != end) return@use null
+                }
                 val body = resp.body ?: return@use null
                 val buf = ByteArray(len)
                 var off = 0
@@ -604,6 +673,7 @@ internal class SegmentDownloader(
         headers: Map<String, String>,
         timeoutMs: Long,
         retries: Int,
+        useSegmentClient: Boolean = false,
     ): ProbeResult {
         var last = ProbeResult(null, false, url)
         // UA 协商只做一次（结论对一个域名是稳定的），协商出结果就贯穿整个任务。
@@ -614,8 +684,14 @@ internal class SegmentDownloader(
         repeat(retries + 1) { attempt ->
             // ① 最小探测（bytes=0-0）：代价最低，健康服务器回 206 即可确认支持分片。
             // 已协商出 UA 时用它 —— 否则这一轮又会用默认 UA 撞同一堵墙。
-            val r = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_MIN,
-                userAgentOverride = negotiated)
+            val r = probe(
+                url,
+                headers,
+                timeoutMs = timeoutMs,
+                rangeSpec = RANGE_MIN,
+                userAgentOverride = negotiated,
+                useSegmentClient = useSegmentClient,
+            )
             last = r
             if (r.supportsRange) return r
 
@@ -628,7 +704,7 @@ internal class SegmentDownloader(
             if (r.statusCode == 401 || r.statusCode == 403 ||
                 r.contentType.orEmpty().contains("text/html", ignoreCase = true)
             ) {
-                val n = negotiateUserAgent(url, headers, timeoutMs, r)
+                val n = negotiateUserAgent(url, headers, timeoutMs, r, useSegmentClient)
                 if (n.negotiatedUserAgent != null) {
                     negotiated = n.negotiatedUserAgent
                     last = n
@@ -655,8 +731,14 @@ internal class SegmentDownloader(
                 reprobed = true
                 // 复探**必须**带上协商出的 UA：否则「换 UA 通过了 → 复探又用回默认 UA → 再次被拦」，
                 // 前面那次协商白做，还会把结论误判成"不支持 Range"（真实镜像站上就是这么发生的）。
-                val r2 = probe(url, headers, timeoutMs = timeoutMs, rangeSpec = RANGE_FROM_START,
-                    userAgentOverride = negotiated)
+                val r2 = probe(
+                    url,
+                    headers,
+                    timeoutMs = timeoutMs,
+                    rangeSpec = RANGE_FROM_START,
+                    userAgentOverride = negotiated,
+                    useSegmentClient = useSegmentClient,
+                )
                 if (r2.supportsRange) return r2
                 if (r2.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r2
                 // 复探仍不支持：保留两次探测中信息更全的一份（大小/元数据）。
@@ -738,12 +820,25 @@ internal class SegmentDownloader(
             failureByTask[taskId] = reason
             onFailure?.invoke(reason)
         }
+        if (taskId in cancelledSegmentTasks) return SegmentResult.FAILED
         var end = endProvider()
         var expected = end - pieceStart + 1
         var done = alreadyWritten.coerceAtLeast(0)
         if (done >= expected) return SegmentResult.OK
         val from = pieceStart + done
 
+        val gateKey = taskId to url
+        val gate = firstRequestGates.computeIfAbsent(gateKey) { CompletableDeferred() }
+        val isFirstRequest = firstRequestOwners.putIfAbsent(gateKey, true) == null
+        if (!isFirstRequest) {
+            // Bound the wait: a broken origin must not stall all workers behind
+            // the redirect learner. If it fails, they can retry the original URL.
+            withTimeoutOrNull(300) { gate.await() }
+        }
+        // failTask() may run while this worker is waiting for the redirect
+        // learner. Recheck before creating a Call so cancellation cannot race
+        // past an unregistered request.
+        if (taskId in cancelledSegmentTasks) return SegmentResult.FAILED
         val target = urlFor(taskId, url)
         val req = Request.Builder()
             .url(target)
@@ -790,7 +885,7 @@ internal class SegmentDownloader(
                             reportFailure(
                                 "镜像文件大小不一致：该来源 $crTotal 字节，本任务 $expectedTotal 字节",
                             )
-                            return@use SegmentResult.FAILED
+                            return@use SegmentResult.SOURCE_MISMATCH
                         }
                         val body = resp.body ?: return@use SegmentResult.FAILED
                         // 收尾托管可能已缩短区间：以**当前**末端为准，多读到的丢弃。
@@ -865,6 +960,9 @@ internal class SegmentDownloader(
             reportFailure(describeIoFailure(e))
             SegmentResult.FAILED
         } finally {
+            if (isFirstRequest) {
+                gate.complete(Unit)
+            }
             activeCalls[taskId]?.remove(call)
             handle?.dispose()
         }
@@ -1192,6 +1290,8 @@ internal class SegmentDownloader(
         total: Long,
         onBytes: suspend (Long) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
+        // Range handling may hand off to this fallback after cancelCalls().
+        cancelledSegmentTasks.remove(taskId)
         // 每次进入都先清掉上一次的原因，避免把上一轮的错误带给这一轮。
         failureByTask.remove(taskId)
         val existing = outFile.length()

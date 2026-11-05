@@ -84,4 +84,63 @@ class GlobalConnectionBudgetIntegrationTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun `probe and single-stream data obey a one-connection global budget`() = runBlocking {
+        val payload = ByteArray(512 * 1024) { (it % 233).toByte() }
+        val active = AtomicInteger(0)
+        val peak = AtomicInteger(0)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/f.bin") { ex ->
+            val current = active.incrementAndGet()
+            peak.updateAndGet { maxOf(it, current) }
+            try {
+                val range = ex.requestHeaders.getFirst("Range")
+                if (range != null) {
+                    val match = Regex("bytes=(\\d+)-(\\d*)").find(range)
+                    val start = match?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    val end = match?.groupValues?.get(2)?.toIntOrNull()
+                        ?.coerceAtMost(payload.size - 1) ?: (payload.size - 1)
+                    ex.responseHeaders.add("Content-Range", "bytes $start-$end/${payload.size}")
+                    ex.responseHeaders.add("Accept-Ranges", "bytes")
+                    ex.sendResponseHeaders(206, (end - start + 1).toLong())
+                    Thread.sleep(20)
+                    ex.responseBody.use { it.write(payload, start, end - start + 1) }
+                } else {
+                    ex.sendResponseHeaders(200, payload.size.toLong())
+                    Thread.sleep(20)
+                    ex.responseBody.use { it.write(payload) }
+                }
+            } finally {
+                active.decrementAndGet()
+            }
+        }
+        server.executor = Executors.newFixedThreadPool(8)
+        server.start()
+        val dir = File(System.getProperty("java.io.tmpdir"), "probe-budget-${System.nanoTime()}")
+            .apply { mkdirs(); deleteOnExit() }
+        val client = TurboClient(
+            TurboConfig(
+                maxConnectionsPerTask = 1,
+                maxConcurrentTasks = 2,
+                maxTotalConnections = 1,
+                warmUpConnections = false,
+                slowStart = false,
+                adaptiveConcurrency = false,
+                workDir = dir,
+            ),
+        )
+        try {
+            val url = "http://127.0.0.1:${server.address.port}/f.bin"
+            val first = client.submit(DownloadRequest(url, File(dir, "first.bin")))
+            val second = client.submit(DownloadRequest(url, File(dir, "second.bin")))
+            assertTrue(client.await(first).isSuccess)
+            assertTrue(client.await(second).isSuccess)
+            assertTrue(peak.get() <= 1, "probe/data exceeded maxTotalConnections=1: peak=${peak.get()}")
+        } finally {
+            client.shutdown()
+            server.stop(0)
+            dir.deleteRecursively()
+        }
+    }
 }

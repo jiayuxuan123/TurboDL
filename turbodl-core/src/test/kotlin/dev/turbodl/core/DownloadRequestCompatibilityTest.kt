@@ -5,6 +5,7 @@ import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class DownloadRequestCompatibilityTest {
     @Test
@@ -53,5 +54,17 @@ class DownloadRequestCompatibilityTest {
         assertEquals("room-1", request.component7())
         assertEquals(mapOf("kind" to "test"), request.component8())
         assertEquals(listOf("https://mirror.test/file"), request.component9())
+    }
+
+    @Test
+    fun `legacy Kotlin constructor and copy ABI remain available`() {
+        val names = DownloadRequest::class.java.declaredMethods.map { it.name }
+        assertTrue("copy\$default" in names)
+        val copy = DownloadRequest::class.java.declaredMethods.single { it.name == "copy\$default" }
+        assertEquals(12, copy.parameterCount)
+        val synthetic = DownloadRequest::class.java.declaredConstructors.single {
+            it.parameterTypes.lastOrNull()?.name == "kotlin.jvm.internal.DefaultConstructorMarker"
+        }
+        assertEquals(11, synthetic.parameterCount)
     }
 }

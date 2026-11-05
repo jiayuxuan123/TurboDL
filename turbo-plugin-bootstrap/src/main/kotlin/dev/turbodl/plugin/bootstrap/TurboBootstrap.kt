@@ -45,7 +45,9 @@ class TurboBootstrap private constructor(
             val client = TurboClient(config)
 
             // (2) Route downloads through plugin backends; null → client's built-in fallback.
-            client.backendResolver = BackendRegistry(host.extensions)
+            client.backendResolver = BackendRegistry(host.extensions) { owner, operation, error ->
+                host.reportExtensionFailure(owner, operation, error)
+            }
 
             val boot = TurboBootstrap(host, client)
 

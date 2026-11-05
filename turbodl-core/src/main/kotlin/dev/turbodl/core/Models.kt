@@ -74,6 +74,19 @@ data class DownloadRequest @JvmOverloads constructor(
     }
 }
 
+/** Action when the built-in HTTP backend cannot check existing resume data. */
+enum class UnverifiableResumePolicy {
+    /** Preserve the historical behavior, which can reuse unverifiable data. */
+    ALLOW,
+    /** Fail the task and retain the existing file and resume data. */
+    FAIL,
+}
+
+/** Existing resume data could not be checked; it has been retained. */
+class ResumeVerificationException : IllegalStateException(
+    "Cannot verify existing download progress; retained for a later retry"
+)
+
 /** 任务状态。 */
 enum class TaskState {
     QUEUED,        // 已入队等待并发槽

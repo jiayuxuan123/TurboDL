@@ -5,12 +5,41 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ConnectionBudgetTest {
+
+    @Test
+    fun `switching between unlimited and limited budgets accounts for existing leases`() = runBlocking {
+        val limit = AtomicInteger(0)
+        val budget = ConnectionBudget { limit.get() }
+        val existing = budget.acquire(3)
+        limit.set(2)
+        budget.limitChanged()
+        val waiting = async { budget.acquire(1) }
+        delay(20)
+        assertTrue(!waiting.isCompleted)
+        budget.release(existing)
+        val acquired = withTimeoutOrNull(500) { waiting.await() }
+        assertTrue(acquired != null)
+        budget.release(acquired!!)
+
+        limit.set(1)
+        val held = budget.acquire(1)
+        val unblocked = async { budget.acquire(3) }
+        delay(20)
+        assertTrue(!unblocked.isCompleted)
+        limit.set(0)
+        budget.limitChanged()
+        val unlimited = withTimeoutOrNull(500) { unblocked.await() }
+        assertEquals(3, unlimited?.permits)
+        budget.release(held)
+        budget.release(unlimited!!)
+    }
 
     @Test
     fun `partial grants stay inside the global limit and wake FIFO waiters`() = runBlocking {

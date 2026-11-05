@@ -154,10 +154,112 @@ class HlsManifestParserTest {
     }
 
     @Test
-    fun fmp4MapRejected() {
+    fun parsesSingleFmp4MapBeforeMediaSegments() {
         val media = """
             #EXTM3U
             #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:URI="init.mp4"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXTINF:6.0,
+            seg1.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        val playlist = HlsManifestParser.parseMedia(media, base)
+        assertEquals(URI("https://cdn.example.com/vod/init.mp4"), playlist.initSegment!!.uri)
+        assertNull(playlist.initSegment!!.byteRange)
+        assertEquals(2, playlist.segments.size)
+    }
+
+    @Test
+    fun fmp4MapSupportsAbsoluteUriAndByteRange() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:URI="https://media.example.com/init.mp4",BYTERANGE="512@1024"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        val playlist = HlsManifestParser.parseMedia(media, base)
+        assertEquals(URI("https://media.example.com/init.mp4"), playlist.initSegment!!.uri)
+        assertEquals(HlsByteRange(512, 1024), playlist.initSegment!!.byteRange)
+    }
+
+    @Test
+    fun multipleFmp4MapsRejected() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:URI="init0.mp4"
+            #EXT-X-MAP:URI="init1.mp4"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        assertFailsWith<HlsUnsupportedException> { HlsManifestParser.parseMedia(media, base) }
+    }
+
+    @Test
+    fun midstreamFmp4MapRejected() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXT-X-MAP:URI="init.mp4"
+            #EXTINF:6.0,
+            seg1.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        assertFailsWith<HlsUnsupportedException> { HlsManifestParser.parseMedia(media, base) }
+    }
+
+    @Test
+    fun fmp4MapWithoutUriRejected() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:BYTERANGE="512@0"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        assertFailsWith<HlsUnsupportedException> { HlsManifestParser.parseMedia(media, base) }
+    }
+
+    @Test
+    fun fmp4MapWithOverflowingByteRangeRejected() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:URI="init.mp4",BYTERANGE="999999999999999999999@0"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        assertFailsWith<HlsUnsupportedException> { HlsManifestParser.parseMedia(media, base) }
+    }
+
+    @Test
+    fun fmp4MapByteRangeWithoutOffsetRejected() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-MAP:URI="init.mp4",BYTERANGE="512"
+            #EXTINF:6.0,
+            seg0.m4s
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        assertFailsWith<HlsUnsupportedException> { HlsManifestParser.parseMedia(media, base) }
+    }
+
+    @Test
+    fun encryptedFmp4MapWithoutExplicitIvRejected() {
+        val media = """
+            #EXTM3U
+            #EXT-X-PLAYLIST-TYPE:VOD
+            #EXT-X-KEY:METHOD=AES-128,URI="key.bin"
             #EXT-X-MAP:URI="init.mp4"
             #EXTINF:6.0,
             seg0.m4s

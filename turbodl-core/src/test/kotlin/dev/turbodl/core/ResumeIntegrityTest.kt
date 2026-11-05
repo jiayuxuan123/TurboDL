@@ -138,6 +138,17 @@ class ResumeIntegrityTest {
         error("暂停未生效")
     }
 
+    private fun durableBytes(out: File, dir: File, key: String): Long {
+        val chunkDir = File(dir, stableKeyDirectoryName(key))
+        val state = SegmentStore(out, File(chunkDir, "progress.tdlp"), SIZE.toLong())
+        state.open()
+        return try {
+            state.peek(SIZE.toLong())?.sumOf { it.written } ?: 0L
+        } finally {
+            state.close()
+        }
+    }
+
     // ------------------------------------------------------------------ 1
     @Test
     fun `暂停后继续 不重下已完成部分 且内容一致`() = runBlocking {
@@ -155,7 +166,9 @@ class ResumeIntegrityTest {
             waitPaused(client, id1)
 
             val sentFirst = srv.bytesSent.get()
+            val durable = durableBytes(out, dir, key)
             assertTrue(sentFirst < SIZE, "暂停前不应已经下完（已发 $sentFirst）")
+            assertTrue(durable >= SIZE / 16, "暂停后至少应耐久保存 1/16 文件，实际 $durable")
 
             srv.bytesSent.set(0)
             val id2 = client.submit(DownloadRequest(url, out, stableKey = key))
@@ -166,8 +179,8 @@ class ResumeIntegrityTest {
             assertEquals(sha(data), shaOf(out), "最终内容必须与源一致")
             // 允许少量重叠（最后一个未完成分片会重下），但绝不能接近整包
             assertTrue(
-                sentSecond < SIZE - sentFirst / 2,
-                "第二次又发了 $sentSecond 字节，而已落盘约 $sentFirst —— 像是从头下",
+                sentSecond < SIZE - durable / 2,
+                "第二次又发了 $sentSecond 字节，耐久进度 $durable（服务端已发 $sentFirst）—— 像是从头下",
             )
             println("[resume] 首次发=$sentFirst 续传发=$sentSecond 总计=${sentFirst + sentSecond}")
         } finally {
@@ -199,6 +212,7 @@ class ResumeIntegrityTest {
             c1.shutdown()
             delay(300)
             val sentFirst = srv.bytesSent.get()
+            val durable = durableBytes(out, dir, key)
 
             srv.bytesSent.set(0)
             val c2 = TurboClient(cfg(dir, 8))
@@ -209,8 +223,12 @@ class ResumeIntegrityTest {
             assertEquals(sha(data), shaOf(out), "内容必须一致")
             val sentSecond = srv.bytesSent.get()
             assertTrue(
-                sentSecond < SIZE - sentFirst / 2,
-                "重提后发了 $sentSecond，已落盘约 $sentFirst —— 进度没有被沿用",
+                durable >= SIZE / 8,
+                "首次至少应耐久保存 1/8 文件，实际 $durable 字节",
+            )
+            assertTrue(
+                sentSecond < SIZE - durable / 2,
+                "重提后发了 $sentSecond，耐久进度 $durable（服务端已发 $sentFirst）—— 进度没有被有效沿用",
             )
             println("[kill-resume] 首次发=$sentFirst 重提发=$sentSecond")
         } finally {

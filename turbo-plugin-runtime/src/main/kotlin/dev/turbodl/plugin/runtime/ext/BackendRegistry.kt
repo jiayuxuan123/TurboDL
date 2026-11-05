@@ -1,6 +1,6 @@
 package dev.turbodl.plugin.runtime.ext
 
-import dev.turbodl.core.BackendResolver
+import dev.turbodl.core.CheckedBackendResolver
 import dev.turbodl.core.DownloadBackend
 import dev.turbodl.core.DownloadRequest
 import dev.turbodl.plugin.runtime.ExtensionRegistry
@@ -22,8 +22,43 @@ import dev.turbodl.plugin.runtime.ExtensionRegistry
  * IMPORTANT: this class lives in the runtime module. core NEVER references it; it is only wired
  * in when the optional runtime is present, by assigning an instance to TurboClient.backendResolver.
  */
-class BackendRegistry(private val extensions: ExtensionRegistry) : BackendResolver {
-    override fun resolve(request: DownloadRequest): DownloadBackend? =
-        extensions.all(ExtensionPoints.DOWNLOAD_BACKEND)
-            .firstOrNull { it.supports(request) }
+class BackendRegistry @JvmOverloads constructor(
+    private val extensions: ExtensionRegistry,
+    private val onPluginError: (ownerPluginId: String, operation: String, error: Throwable) -> Unit =
+        { _, _, _ -> },
+) : CheckedBackendResolver {
+    @Suppress("DEPRECATION")
+    override fun resolve(request: DownloadRequest): DownloadBackend? = resolve(request, false)
+
+    override fun resolveChecked(request: DownloadRequest): DownloadBackend? = resolve(request, true)
+
+    @Suppress("DEPRECATION")
+    private fun resolve(request: DownloadRequest, failOnError: Boolean): DownloadBackend? {
+        for (registration in extensions.registrations(ExtensionPoints.DOWNLOAD_BACKEND)) {
+            val supported = try {
+                registration.instance.supports(request)
+            } catch (t: Throwable) {
+                // One malformed plugin must never be able to disable every
+                // built-in download. VM-fatal conditions still propagate.
+                if (t is VirtualMachineError || t is ThreadDeath) throw t
+                if (t is InterruptedException) Thread.currentThread().interrupt()
+                try {
+                    onPluginError(registration.ownerPluginId, "supports", t)
+                } catch (reportingFailure: Throwable) {
+                    if (reportingFailure is VirtualMachineError || reportingFailure is ThreadDeath) {
+                        throw reportingFailure
+                    }
+                    if (reportingFailure is InterruptedException) {
+                        Thread.currentThread().interrupt()
+                    }
+                }
+                if (failOnError) {
+                    throw IllegalStateException("Backend selection failed for plugin ${registration.ownerPluginId}", t)
+                }
+                false
+            }
+            if (supported) return registration.instance
+        }
+        return null
+    }
 }

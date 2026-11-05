@@ -106,13 +106,12 @@ data class TurboConfig(
      * 收尾托管的最小剩余量（字节）：低于此值不拆分。
      *
      * aria2-next 用的是「剩余时间 > 请求成本 × 2」这种时间判据（更精确，但需要
-     * 每条连接的实时速率）；本引擎用字节阈值近似 —— 默认 2MB，配合默认
-     * `blockSize=16MB`，即最多拆成 8 份，且只在前几份足够大时才拆。
+     * 每条连接的实时速率）；本引擎用字节阈值近似，默认 8 KiB。
      *
      * 取值理由：一次请求的往返成本（RTT + 建连）在 WAN 上约 0.1~0.5s，
      * 若拆出来的部分只有几百 KB，新连接还没跑满就被付掉的开销吃回去了。
      */
-    val tailAssistMinBytes: Long = 2L * 1024 * 1024,
+    val tailAssistMinBytes: Long = 8L * 1024,
 
     /**
      * 单个分片最多被拆几次（防病态裂变）。
@@ -120,7 +119,7 @@ data class TurboConfig(
      * 只允许 2 次：16MB 的块最多裂成 4 段（4MB 起），足以让收尾阶段的空闲连接
      * 都有活干；再往上拆，新增请求数会超过收益，且更容易触发风控。
      */
-    val maxSplitsPerSegment: Int = 2,
+    val maxSplitsPerSegment: Int = 3,
 
     /**
      * 下载中预先合并（overlap merge）：分片一完成就写进目标文件的临时副本，
@@ -400,23 +399,30 @@ data class TurboConfig(
      */
     val warmUpConnections: Boolean = true,
 
-    /** 预热时建立的空连接数；<=0 时取 min(maxConnectionsPerTask, 8)。 */
+    /**
+     * 预热时建立的空连接数。
+     *
+     * <=0 表示自动：先取任务实际获得的连接额度，再受 [warmUpMaxParallel] 限制。
+     * 默认 [warmUpMaxParallel]=4，因此 16/64 路任务默认只预热 4 条，以免弱网下
+     * 几十个 TLS 握手互相争抢。
+     */
     val warmUpConnectionCount: Int = 0,
 
     /**
-     * 慢启动（默认开）：分片并发从设定值开始立即起跑，背压后再恢复。
+     * 慢启动（默认开）：传统慢启动的爬升开关。
      *
-     * 注意：[adaptiveConcurrency] 开启时默认直接从 [maxConnectionsPerTask]
-     * 起步；只有当调用方显式设置 [slowStartInitial] 时才从较低档开始。
-     * 这样用户设置的线程数不会被“还没爬上去文件就下完”拖住。
-     * 与背压正交：背压负责“遇错降”，慢启动负责“健康升”。
+     * [adaptiveConcurrency] 为 DOWNWARD 时，默认直接从 [maxConnectionsPerTask] 起跑；
+     * 显式设置 [slowStartInitial] 才会从更低档开始。UPWARD 或关闭自适应时，本字段
+     * 决定是否按健康窗口逐步爬升。与背压正交：背压负责“遇错降”，慢启动负责“健康升”。
      */
     val slowStart: Boolean = true,
 
     /**
-     * 慢启动初始并发；<=0 时直接从 [maxConnectionsPerTask] 起跑。
+     * 慢启动/自适应初始并发；显式大于 0 时覆盖策略默认值。
      *
-     * 只有调用方明确希望先保守起跑时，才设置一个较小的值。
+     * 为 0 时：DOWNWARD 自适应从 [maxConnectionsPerTask] 起跑；UPWARD 从保守档起跑；
+     * 关闭自适应但开启传统慢启动时使用四分之一档。只有调用方明确希望先保守起跑时，
+     * 才设置一个较小的值。
      */
     val slowStartInitial: Int = 0,
 
@@ -590,6 +596,10 @@ data class TurboConfig(
      * 连续卡死重置次数上限（默认 3）。达到后任务失败，避免无限重试假活。
      * 分片已保留，用户重试即从断点继续。
      */
+    @Deprecated(
+        "现代调度器按单分片取消并由 maxRetries 收尾；任务级卡死计数已移除。",
+        level = DeprecationLevel.WARNING,
+    )
     val maxStallRecoveries: Int = 3,
 
     /**
@@ -598,6 +608,15 @@ data class TurboConfig(
      */
     val warmUpTimeoutMs: Long = 8_000,
 ) {
+    /**
+     * 实际生效的收尾托管开关。
+     *
+     * [dynamicSegmentation] 是这一能力的旧字段名；保留两者取 AND 的语义，
+     * 使旧调用方显式关闭它时仍然有效，而不是继续静默 no-op。
+     */
+    val effectiveTailAssist: Boolean
+        get() = tailAssist && dynamicSegmentation
+
     init {
         require(maxConnectionsPerTask in 1..256) { "maxConnectionsPerTask 必须在 1..256" }
         require(maxConcurrentTasks in 1..64) { "maxConcurrentTasks 必须在 1..64" }
@@ -614,6 +633,8 @@ data class TurboConfig(
         // 实际生效值由 SegmentScheduler 的 effBlock 计算决定（见那里的注释）。
         require(segmentsPerConnection in 1..64) { "segmentsPerConnection 必须在 1..64" }
         require(maxSegmentsPerTask >= 0) { "maxSegmentsPerTask 不能为负（0 = 不限）" }
+        require(tailAssistMinBytes >= 0) { "tailAssistMinBytes 不能为负" }
+        require(maxSplitsPerSegment >= 0) { "maxSplitsPerSegment 不能为负" }
         require(maxConnectionsPerHost >= 0) { "maxConnectionsPerHost 不能为负" }
         require(warmUpConnectionCount >= 0) { "warmUpConnectionCount 不能为负" }
         require(slowStartInitial >= 0) { "slowStartInitial 不能为负" }

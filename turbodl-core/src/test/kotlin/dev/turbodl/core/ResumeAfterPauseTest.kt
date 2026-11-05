@@ -265,6 +265,8 @@ class ResumeAfterPauseTest {
     private fun resumeWithEtags(etagPerRequest: Boolean): Pair<Long, Long> = runBlocking {
         val size = 12 * 1024 * 1024
         val payload = ByteArray(size) { (it % 251).toByte() }
+        val expected = java.security.MessageDigest.getInstance("SHA-256").digest(payload)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
         // 慢速服务器：25ms/32KB，保证"暂停"落在传输中途（快服务器会在暂停前就下完，那样测不到东西）
         val srv = CountingRangeServer(payload, chunkDelayMs = 25, etagPerRequest = etagPerRequest)
         val workDir = newWorkDir("etag")
@@ -283,7 +285,7 @@ class ResumeAfterPauseTest {
             val onDisk = onDiskBytes(progressFileOf(chunkDir), out, size.toLong())
             assertTrue(onDisk > 0, "暂停后应当有分片落盘（onDisk=$onDisk）")
             srv.served.set(0)
-            val id2 = client.submit(DownloadRequest(url = url, destination = out, stableKey = stableKey))
+            val id2 = client.submit(DownloadRequest(url = url, destination = out, stableKey = stableKey, expectedSha256 = expected))
             val r = client.await(id2)
             assertTrue(r.isSuccess, "续传应当成功：${r.exceptionOrNull()?.message}")
             assertEquals(size.toLong(), out.length(), "文件必须完整")

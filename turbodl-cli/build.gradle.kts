@@ -11,6 +11,9 @@ repositories {
 dependencies {
     implementation(project(":turbodl-core"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+
+    testImplementation(kotlin("test"))
+    testImplementation("com.google.code.gson:gson:2.11.0")
 }
 
 kotlin {
@@ -26,6 +29,13 @@ java {
 
 application {
     mainClass.set("dev.turbodl.cli.MainKt")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    testLogging {
+        events("passed", "failed", "skipped")
+    }
 }
 
 /**

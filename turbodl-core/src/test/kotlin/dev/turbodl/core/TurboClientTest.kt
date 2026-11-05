@@ -3,6 +3,8 @@ package dev.turbodl.core
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.net.InetSocketAddress
 import java.security.MessageDigest
@@ -12,6 +14,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -220,6 +223,103 @@ class TurboClientTest {
             )
         } finally {
             releaseBackend.countDown()
+            client.shutdown()
+        }
+    }
+
+    @Test
+    fun `unverifiable resume policy rejects unsupported backends`() = runBlocking {
+        var invoked = false
+        val backend = object : DownloadBackend {
+            override val name = "custom"
+            override fun supports(request: DownloadRequest) = true
+            override suspend fun download(context: BackendContext): BackendResult {
+                invoked = true
+                error("unsupported backend must not be invoked")
+            }
+        }
+        val client = TurboClient(TurboConfig())
+        client.backendResolver = BackendResolver { backend }
+        try {
+            val id = client.submit(
+                DownloadRequest("custom://file", File(tmpDir, "custom.bin")),
+                UnverifiableResumePolicy.FAIL,
+            )
+            assertTrue(client.await(id).exceptionOrNull() is UnsupportedOperationException)
+            assertFalse(invoked)
+        } finally {
+            client.shutdown()
+        }
+    }
+
+    @Test
+    fun `resumed task survives terminal history eviction`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        val backend = object : DownloadBackend {
+            override val name = "resume-history"
+            override fun supports(request: DownloadRequest) = true
+            override suspend fun download(context: BackendContext): BackendResult {
+                if (context.request.url == "test://hold") {
+                    if (attempts.incrementAndGet() == 1) error("first attempt")
+                    started.complete(Unit)
+                    release.await()
+                }
+                context.request.destination.writeBytes(byteArrayOf(1))
+                return BackendResult(listOf(context.request.destination), 1)
+            }
+        }
+        val client = TurboClient(TurboConfig(maxConcurrentTasks = 2, workDir = tmpDir))
+        client.backendResolver = BackendResolver { backend }
+        try {
+            val id = client.submit(DownloadRequest("test://hold", File(tmpDir, "held.bin"), stableKey = "held"))
+            assertTrue(client.await(id).isFailure)
+            assertTrue(client.resumeAsync(id))
+            withTimeout(10_000) { started.await() }
+            repeat(260) { i ->
+                val other = client.submit(DownloadRequest("test://$i", File(tmpDir, "$i.bin")))
+                assertTrue(withTimeout(10_000) { client.await(other) }.isSuccess)
+            }
+            release.complete(Unit)
+            assertTrue(withTimeout(10_000) { client.await(id) }.isSuccess)
+        } finally {
+            release.complete(Unit)
+            client.shutdown()
+        }
+    }
+
+    @Test
+    fun `terminal task history is bounded`() = runBlocking {
+        val backend = object : DownloadBackend {
+            override val name: String = "terminal-history"
+            override fun supports(request: DownloadRequest): Boolean =
+                request.url.startsWith("terminal-history://")
+
+            override suspend fun download(context: BackendContext): BackendResult {
+                val destination = context.request.destination
+                destination.writeBytes(byteArrayOf(1))
+                context.reportTotalSize(1)
+                return BackendResult(listOf(destination), 1)
+            }
+        }
+        val client = TurboClient(TurboConfig(maxConcurrentTasks = 1))
+        client.backendResolver = BackendResolver { backend }
+        try {
+            repeat(300) { index ->
+                val id = client.submit(
+                    DownloadRequest(
+                        url = "terminal-history://$index",
+                        destination = File(tmpDir, "terminal-history-$index.bin"),
+                    )
+                )
+                assertTrue(client.await(id).isSuccess)
+            }
+            assertTrue(
+                client.progress.value.size <= 256,
+                "终态历史不能无界增长，实际 ${client.progress.value.size}",
+            )
+        } finally {
             client.shutdown()
         }
     }

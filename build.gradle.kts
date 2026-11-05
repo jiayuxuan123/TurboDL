@@ -76,7 +76,7 @@ allprojects {
     //            低档；默认保留向后兼容的 UPWARD，宿主可显式下发 DOWNWARD。
     //        校验：新增完成后的可选 SHA-256 流式校验，失败不标记完成并清理
     //            不可信的续传侧车。
-    version = "0.4.1.0"
+    version = "0.5.0.0"
 }
 
 // 为可作为 SDK 发布的库模块统一启用 maven-publish。

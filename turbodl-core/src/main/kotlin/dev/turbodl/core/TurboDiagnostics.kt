@@ -120,8 +120,20 @@ object TurboDiagnostics {
     private fun probeAlive(url: String, headers: Map<String, String>): String? {
         // 出站 host 校验：只允许 http/https，并拒绝环回/私有/保留地址。
         outboundHostRejection(url)?.let { return it }
-        val cfg = TurboConfig(maxConnectionsPerTask = 1, maxConcurrentTasks = 1, warmUpConnections = false, slowStart = false)
-        val client = HttpClientFactory.build(cfg)
+        val cfg = TurboConfig(
+            maxConnectionsPerTask = 1,
+            maxConcurrentTasks = 1,
+            warmUpConnections = false,
+            slowStart = false,
+            connectTimeoutMs = 3_000,
+            readTimeoutMs = 5_000,
+        )
+        // Diagnostics must never turn a dead TEST-NET/proxy path into a
+        // multi-minute UI hang. readTimeout alone does not bound a server that
+        // trickles bytes forever, so add an end-to-end call timeout as well.
+        val client = HttpClientFactory.build(cfg).newBuilder()
+            .callTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
         return try {
             val req = okhttp3.Request.Builder()
                 .url(url)

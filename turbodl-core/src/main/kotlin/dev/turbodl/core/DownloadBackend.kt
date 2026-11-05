@@ -2,6 +2,10 @@ package dev.turbodl.core
 
 import java.io.File
 
+internal interface ResumePolicyContext {
+    val unverifiableResumePolicy: UnverifiableResumePolicy
+}
+
 /**
  * Download backend extension point (defined in core; reusable by the optional runtime).
  *
@@ -100,6 +104,24 @@ interface BackendContext {
         resumeNote: String = "",
     ) { /* no-op by default */ }
 
+    /**
+     * Extended metadata hook. This is a separate method rather than additional
+     * parameters on [reportMetadata] so already-compiled backends that implement
+     * the original six-argument interface method remain binary compatible.
+     */
+    fun reportResolvedMetadata(
+        suggestedFileName: String?,
+        contentType: String?,
+        etag: String?,
+        lastModified: String?,
+        probeMs: Long = -1,
+        resumeNote: String = "",
+        resolvedUrl: String? = null,
+        supportsRange: Boolean? = null,
+    ) {
+        reportMetadata(suggestedFileName, contentType, etag, lastModified, probeMs, resumeNote)
+    }
+
     /** Report cumulative downloaded bytes and current active connection count. */
     suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int)
 }
@@ -117,4 +139,9 @@ interface BackendContext {
  */
 fun interface BackendResolver {
     fun resolve(request: DownloadRequest): DownloadBackend?
+}
+
+/** Optional capability for resolvers that fail if any candidate cannot be checked. */
+interface CheckedBackendResolver : BackendResolver {
+    fun resolveChecked(request: DownloadRequest): DownloadBackend?
 }

@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -22,6 +23,63 @@ import kotlin.test.assertTrue
  *  3. ETag/Last-Modified 变更时静默丢弃过期分片，避免续传出损坏文件。
  */
 class ProbeMetadataTest {
+
+    @Test
+    fun `fingerprint rejects a mislabeled range`() = runBlocking {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/f") { ex ->
+            ex.responseHeaders.add("Content-Range", "bytes 1-32/128")
+            ex.sendResponseHeaders(206, 32)
+            ex.responseBody.use { it.write(ByteArray(32) { 7 }) }
+        }
+        server.start()
+        val cfg = TurboConfig()
+        val http = HttpClientFactory.build(cfg, HttpClientFactory.ProtocolPreference.ALLOW_H2)
+        val downloader = SegmentDownloader({ http }, { http }, { cfg.ioBufferSize }, { false })
+        try {
+            assertNull(downloader.fetchPrefix("http://127.0.0.1:${server.address.port}/f", emptyMap(), 0, 32, 1000))
+        } finally {
+            http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll(); server.stop(0)
+        }
+    }
+
+    @Test
+    fun `legacy context still receives metadata when new method is absent`() = runBlocking {
+        val payload = ByteArray(128 * 1024) { (it % 251).toByte() }
+        val srv = MetaServer(payload, etag = "\"legacy\"")
+        val root = kotlin.io.path.createTempDirectory("legacy-context").toFile()
+        val out = File(root, "output.bin")
+        var observed: String? = null
+        val context = object : BackendContext {
+            override val taskId = 1L
+            override val request = DownloadRequest("http://127.0.0.1:${srv.port}/f.bin", out)
+            override val workDir = File(root, "parts").apply { mkdirs() }
+            override val config = TurboConfig(maxConnectionsPerTask = 1, warmUpConnections = false)
+            override fun isActive() = true
+            override suspend fun throttle(bytes: Long) = Unit
+            override fun reportTotalSize(total: Long) = Unit
+            override suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int) = Unit
+            override fun reportMetadata(
+                suggestedFileName: String?, contentType: String?, etag: String?,
+                lastModified: String?, probeMs: Long, resumeNote: String,
+            ) { observed = etag }
+            override fun reportResolvedMetadata(
+                suggestedFileName: String?, contentType: String?, etag: String?,
+                lastModified: String?, probeMs: Long, resumeNote: String,
+                resolvedUrl: String?, supportsRange: Boolean?,
+            ) { throw AbstractMethodError("old compiled context") }
+        }
+        val http = HttpClientFactory.build(context.config, HttpClientFactory.ProtocolPreference.ALLOW_H2)
+        val downloader = SegmentDownloader({ http }, { http }, { context.config.ioBufferSize }, { false })
+        try {
+            BuiltinHttpBackend(downloader).download(context)
+            assertEquals("\"legacy\"", observed)
+            assertTrue(out.readBytes().contentEquals(payload))
+        } finally {
+            http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll()
+            srv.stop(); root.deleteRecursively()
+        }
+    }
 
     private class MetaServer(
         @Volatile var payload: ByteArray,
@@ -135,6 +193,58 @@ class ProbeMetadataTest {
         } finally {
             client.shutdown()
             srv.stop()
+        }
+    }
+
+    @Test
+    fun `metadata exposes the resolved redirect target and actual range support`() = runBlocking {
+        val payload = ByteArray(256 * 1024) { (it % 199).toByte() }
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.executor = Executors.newFixedThreadPool(8)
+        server.createContext("/start") { ex ->
+            ex.responseHeaders.add("Location", "/final.bin")
+            ex.sendResponseHeaders(302, -1)
+            ex.close()
+        }
+        server.createContext("/final.bin") { ex ->
+            // This source advertises no Range support; metadata must not infer
+            // `supportsRange` merely because the total is positive.
+            ex.responseHeaders.add("ETag", "\"final-v1\"")
+            ex.sendResponseHeaders(200, payload.size.toLong())
+            ex.responseBody.use { it.write(payload) }
+        }
+        server.start()
+        val client = TurboClient(
+            TurboConfig(
+                maxConnectionsPerTask = 4,
+                maxConcurrentTasks = 1,
+                warmUpConnections = false,
+                slowStart = false,
+            )
+        )
+        val meta = AtomicReference<TurboEvent.Metadata?>(null)
+        val collector = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            client.events.collect { if (it is TurboEvent.Metadata) meta.set(it) }
+        }
+        val out = File.createTempFile("meta-redirect", ".bin").apply { deleteOnExit() }
+        try {
+            val id = client.submit(
+                DownloadRequest("http://127.0.0.1:${server.address.port}/start", out)
+            )
+            assertTrue(client.await(id).isSuccess)
+            assertTrue(out.readBytes().contentEquals(payload))
+            val m = meta.get()
+            assertNotNull(m, "应发出 Metadata 事件")
+            assertEquals(
+                "http://127.0.0.1:${server.address.port}/final.bin",
+                m.resolvedUrl,
+                "Metadata 应携带探测/重定向后的最终 URL",
+            )
+            assertEquals(false, m.supportsRange, "无 Range 能力的源不能被总大小伪装成分片支持")
+        } finally {
+            collector.cancel()
+            client.shutdown()
+            server.stop(0)
         }
     }
 

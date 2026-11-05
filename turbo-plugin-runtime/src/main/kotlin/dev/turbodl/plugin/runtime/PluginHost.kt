@@ -283,6 +283,14 @@ class PluginHost(
         )
     }
 
+    /**
+     * Record a runtime extension failure without taking down the host. Backend
+     * routing uses this for a provider whose `supports()` implementation throws.
+     */
+    fun reportExtensionFailure(ownerPluginId: String, operation: String, error: Throwable) {
+        logger("extension provider '$ownerPluginId' failed in $operation; skipping it", error)
+    }
+
     // ---------- internals ----------
 
     private fun Managed.toInfo() = PluginInfo(

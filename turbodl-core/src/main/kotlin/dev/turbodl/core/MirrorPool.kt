@@ -37,11 +37,14 @@ internal class MirrorPool(
         @Volatile var samples: Int = 0
         @Volatile var consecutiveFailures: Int = 0
         @Volatile var disabledUntilMs: Long = 0L
+        /** Set only when the source is proven to be a different object/file. */
+        @Volatile var permanentlyFailed: Boolean = false
         @Volatile var totalBytes: Long = 0L
         val inFlight = AtomicInteger(0)
         val picked = AtomicLong(0)
 
-        fun available(nowMs: Long): Boolean = disabledUntilMs <= nowMs
+        fun available(nowMs: Long): Boolean =
+            !permanentlyFailed && disabledUntilMs <= nowMs
     }
 
     private val mirrors: List<Mirror> = urls
@@ -51,6 +54,7 @@ internal class MirrorPool(
         .distinct()
         .map { Mirror(it) }
         .toList()
+    private val pickLock = Any()
 
     val size: Int get() = mirrors.size
 
@@ -62,7 +66,7 @@ internal class MirrorPool(
     fun snapshot(): List<String> = mirrors.map {
         "${it.url} → ${"%.2f".format(it.ewmaBytesPerSec / 1_048_576)}MB/s " +
             "samples=${it.samples} fail=${it.consecutiveFailures} " +
-            "inFlight=${it.inFlight.get()}"
+            "inFlight=${it.inFlight.get()} quarantined=${it.permanentlyFailed}"
     }
 
     /**
@@ -105,15 +109,75 @@ internal class MirrorPool(
     }
 
     /**
+     * Strict variant used by the scheduler when a per-source cap is configured.
+     * Returns null while every otherwise eligible source is at its in-flight
+     * limit; the caller waits briefly and retries instead of exceeding the cap.
+     */
+    fun pickWithLimit(): String? = synchronized(pickLock) {
+        val now = System.currentTimeMillis()
+        val usable = mirrors.filter { !it.permanentlyFailed }
+        if (usable.isEmpty()) return null
+        val available = usable.filter { it.available(now) }
+        if (available.isEmpty()) {
+            // Keep the old "never deadlock on a pool whose sources are all in
+            // backoff" behavior: pick the source that becomes available first.
+            val soonest = usable.minByOrNull { it.disabledUntilMs } ?: return null
+            soonest.inFlight.incrementAndGet()
+            soonest.picked.incrementAndGet()
+            return soonest.url
+        }
+        val candidates = available.filter {
+            perMirrorInFlightCap <= 0 || it.inFlight.get() < perMirrorInFlightCap
+        }
+        if (candidates.isEmpty()) return null
+
+        var best: Mirror? = null
+        var bestScore = -1.0
+        for (m in candidates) {
+            if (m.samples == 0) {
+                best = m
+                break
+            }
+            val jitter = 0.92 + ThreadLocalRandom.current().nextDouble(0.16)
+            val score = m.ewmaBytesPerSec * jitter
+            if (score > bestScore) {
+                best = m
+                bestScore = score
+            }
+        }
+        val chosen = best ?: candidates.first()
+        chosen.inFlight.incrementAndGet()
+        chosen.picked.incrementAndGet()
+        chosen.url
+    }
+
+    /**
      * 归还一次派发的结果。
      *
      * @param bytes 这次分片实际写入的字节数（成功时用来更新速度画像）
      * @param elapsedMs 这次分片耗时（毫秒）；<=0 时不更新速度
      */
-    fun report(url: String, ok: Boolean, bytes: Long, elapsedMs: Long) {
+    fun report(
+        url: String,
+        ok: Boolean,
+        bytes: Long,
+        elapsedMs: Long,
+        structuralFailure: Boolean = false,
+    ) {
         val m = mirrors.firstOrNull { it.url == url } ?: return
         m.inFlight.updateAndGet { if (it > 0) it - 1 else 0 }
+        if (structuralFailure) {
+            // A size/identity mismatch is not a transient network error. If
+            // left in the ordinary backoff path it is selected again as a
+            // never-sampled source and can starve every healthy mirror.
+            m.samples = m.samples.coerceAtLeast(1)
+            m.consecutiveFailures++
+            m.permanentlyFailed = true
+            m.disabledUntilMs = Long.MAX_VALUE
+            return
+        }
         if (ok) {
+            m.permanentlyFailed = false
             m.consecutiveFailures = 0
             m.disabledUntilMs = 0L
             m.totalBytes += bytes.coerceAtLeast(0)
@@ -134,8 +198,11 @@ internal class MirrorPool(
     /** 是否还有来源可用（用于决定"整体失败"还是"再用别的镜像试一次"）。 */
     fun hasAvailable(): Boolean {
         val now = System.currentTimeMillis()
-        return mirrors.any { it.available(now) }
+        return mirrors.any { !it.permanentlyFailed && it.available(now) }
     }
+
+    /** True while at least one source has not been proven to be a different file. */
+    fun hasUsableSources(): Boolean = mirrors.any { !it.permanentlyFailed }
 
     /**
      * 只归还 in-flight 计数（异常路径用）。

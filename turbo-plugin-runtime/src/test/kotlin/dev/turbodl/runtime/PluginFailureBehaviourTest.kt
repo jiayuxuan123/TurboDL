@@ -9,6 +9,7 @@ import dev.turbodl.core.DownloadRequest
 import dev.turbodl.core.TurboClient
 import dev.turbodl.core.TurboConfig
 import dev.turbodl.core.TurboEvent
+import dev.turbodl.core.UnverifiableResumePolicy
 import dev.turbodl.plugin.runtime.Plugin
 import dev.turbodl.plugin.runtime.PluginContext
 import dev.turbodl.plugin.runtime.PluginHost
@@ -42,6 +43,24 @@ import kotlin.test.assertTrue
  * —— **条件在前、消息在后**。
  */
 class PluginFailureBehaviourTest {
+
+    @Test
+    fun `checked routing fails when plugin support detection fails`() = runBlocking {
+        tmpDir = tmp()
+        val host = PluginHost(logger = { _, _ -> })
+        host.extensions.register(ExtensionPoints.DOWNLOAD_BACKEND, "broken", ThrowingSupportsBackend(), priority = 100)
+        host.extensions.register(ExtensionPoints.DOWNLOAD_BACKEND, "hls", M3u8OnlyBackend(), priority = 50)
+        val client = TurboClient(TurboConfig())
+        client.backendResolver = BackendRegistry(host.extensions)
+        val out = File(tmpDir, "video.m3u8")
+        try {
+            val id = client.submit(DownloadRequest("https://example.test/video.m3u8", out), UnverifiableResumePolicy.FAIL)
+            assertTrue(client.await(id).isFailure)
+            assertFalse(out.exists(), "failed plugin selection must not fall back to HTTP")
+        } finally {
+            client.shutdown(); host.shutdown()
+        }
+    }
 
     private lateinit var tmpDir: File
 
@@ -92,6 +111,14 @@ class PluginFailureBehaviourTest {
         companion object {
             val PLUGIN_BYTES = "来自 m3u8 后端".toByteArray()
         }
+    }
+
+    private class ThrowingSupportsBackend : DownloadBackend {
+        override val name = "throwing-supports"
+        override fun supports(request: DownloadRequest): Boolean =
+            error("simulated supports failure")
+        override suspend fun download(context: BackendContext): BackendResult =
+            error("must never be called")
     }
 
     // ---------------------------------------------- 3a：插件装载失败
@@ -163,6 +190,12 @@ class PluginFailureBehaviourTest {
         val srv = PlainServer(payload)
 
         val host = PluginHost(logger = { _, _ -> })
+        host.extensions.register(
+            ExtensionPoints.DOWNLOAD_BACKEND,
+            "test.throwing",
+            ThrowingSupportsBackend(),
+            priority = 100,
+        )
         host.extensions.register(ExtensionPoints.DOWNLOAD_BACKEND, "test.m3u8", M3u8OnlyBackend())
         val client = TurboClient(TurboConfig(maxConnectionsPerTask = 4))
         client.backendResolver = BackendRegistry(host.extensions)
@@ -177,6 +210,43 @@ class PluginFailureBehaviourTest {
             "插件不支持该协议时应回退到内置后端，而不是失败：${result.exceptionOrNull()?.message}",
         )
         assertContentEquals(payload, out.readBytes(), "回退下载的内容必须逐字节一致")
+    }
+
+    @Test
+    fun `supports exception is isolated and later backend still routes`() = runBlocking {
+        tmpDir = tmp()
+        val host = PluginHost(logger = { _, _ -> })
+        host.extensions.register(
+            ExtensionPoints.DOWNLOAD_BACKEND,
+            "test.throwing",
+            ThrowingSupportsBackend(),
+            priority = 100,
+        )
+        host.extensions.register(ExtensionPoints.DOWNLOAD_BACKEND, "test.m3u8", M3u8OnlyBackend())
+        val failures = mutableListOf<String>()
+        val registry = BackendRegistry(host.extensions) { owner, operation, _ ->
+            failures += "$owner:$operation"
+        }
+        val client = TurboClient(TurboConfig(maxConnectionsPerTask = 2))
+        client.backendResolver = registry
+
+        val out = File(tmpDir, "after-throwing-plugin.m3u8")
+        val result = client.await(
+            client.submit(DownloadRequest("http://127.0.0.1:1/v.m3u8", out)),
+        )
+        client.shutdown(); host.shutdown()
+
+        assertTrue(result.isSuccess, result.exceptionOrNull()?.message)
+        assertContentEquals(M3u8OnlyBackend.PLUGIN_BYTES, out.readBytes())
+        assertEquals(listOf("test.throwing:supports"), failures)
+    }
+
+    @Test
+    fun `backend registry keeps its one-argument Java constructor`() {
+        val constructor = BackendRegistry::class.java.getConstructor(
+            dev.turbodl.plugin.runtime.ExtensionRegistry::class.java,
+        )
+        assertNotNull(constructor)
     }
 
     @Test
