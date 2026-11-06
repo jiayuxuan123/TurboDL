@@ -294,9 +294,57 @@
     if (mobile.addEventListener) mobile.addEventListener("change", sync);
   }
 
+  function initLanguageSuggestion() {
+    var key = "turbodl.language";
+    var current = document.documentElement.lang.split("-")[0];
+    function remember(value) { try { localStorage.setItem(key, value); } catch (_) {} }
+    all(document, "[data-site-language]").forEach(function (link) {
+      link.addEventListener("click", function () { remember(link.dataset.siteLanguage); });
+    });
+    try { if (localStorage.getItem(key)) return; } catch (_) {}
+    var languages = navigator.languages || [navigator.language || ""];
+    var preferred = Array.prototype.map.call(languages, function (value) {
+      return value.toLowerCase().split("-")[0];
+    }).find(function (value) { return value === "en" || value === "zh"; });
+    if (!preferred || preferred === current) return;
+    var alternate = document.querySelector('link[rel="alternate"][hreflang="' + (preferred === "zh" ? "zh-CN" : "en") + '"]');
+    if (!alternate) return;
+    var localLink = document.querySelector('[data-site-language="' + preferred + '"]');
+    if (!localLink) return;
+    var target = new URL(localLink.href);
+    if (target.origin !== location.origin) return;
+    target.search = location.search;
+    target.hash = location.hash;
+    var chinese = preferred === "zh";
+    var prompt = document.createElement("section");
+    prompt.className = "language-prompt";
+    prompt.setAttribute("role", "region");
+    prompt.setAttribute("aria-labelledby", "language-prompt-title");
+    prompt.lang = preferred;
+    var title = document.createElement("h2");
+    title.id = "language-prompt-title";
+    title.textContent = chinese ? "切换到中文？" : "Switch to English?";
+    var description = document.createElement("p");
+    description.textContent = chinese ? "浏览器首选语言为中文。是否查看此页面的中文版？" : "Your browser prefers English. Would you like to view this page in English?";
+    var actions = document.createElement("div");
+    actions.className = "language-prompt-actions";
+    var accept = document.createElement("a");
+    accept.href = target.href;
+    accept.textContent = chinese ? "切换到中文" : "Switch to English";
+    accept.addEventListener("click", function () { remember(preferred); });
+    var decline = document.createElement("button");
+    decline.type = "button";
+    decline.textContent = chinese ? "保留英文" : "Keep Chinese";
+    decline.addEventListener("click", function () { remember(current); prompt.remove(); });
+    actions.append(accept, decline);
+    prompt.append(title, description, actions);
+    document.body.append(prompt);
+  }
+
   function init() {
     document.documentElement.classList.add("js");
     initMenus();
+    initLanguageSuggestion();
     initCopyControls();
     initSwitches();
     initDocSpy();

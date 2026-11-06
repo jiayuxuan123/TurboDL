@@ -194,11 +194,15 @@ class Site:
                 )
             else:
                 language_links.append(
-                    f'<a class="lang-option" href="{rel(page["dir"], target)}">{esc(name)}</a>'
+                    f'<a class="lang-option" data-site-language="{code}" href="{rel(page["dir"], target)}">{esc(name)}</a>'
                 )
 
         mobile_nav = self._nav_items(page, mobile=True)
         mobile_langs = "".join(language_links)
+        other_lang = "zh" if en else "en"
+        other_target = self.index.get(page["key"], {}).get(other_lang) or self.index["home"][other_lang]
+        mobile_language = f'<a class="mobile-language" data-site-language="{other_lang}" href="{rel(page["dir"], other_target)}" lang="{other_lang}" aria-label="{("Switch to Chinese" if en else "Switch to English")}">{("中文" if en else "EN")}</a>'
+
         return f"""<header class="site-header">
   <div class="header-main wrap">
     <a class="brand" href="{home}" aria-label="{esc(cfg['name'])}">
@@ -212,6 +216,7 @@ class Site:
       {self._nav_items(page)}
     </nav>
     <div class="header-tools">
+      {mobile_language}
       <div class="langs" aria-label="{language_label}">{''.join(language_links)}</div>
       <a class="repo-link" href="{esc(cfg.get('repo', ''))}" aria-label="{repo_label}">
         {icon("external")}<span>{repo_label}</span>

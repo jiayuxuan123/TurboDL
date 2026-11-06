@@ -2497,7 +2497,7 @@ tbody tr:hover {
   }
 
   .brand-sub,
-  .langs {
+  .header-tools > .langs {
     display: none;
   }
 
@@ -2773,4 +2773,29 @@ tbody tr:hover {
   .route-line::after {
     display: none;
   }
+}
+
+/* Language controls remain available in both the compact header and menu. */
+.mobile-language { display: none; }
+.language-prompt {
+  position: fixed; z-index: 80; inset: auto 16px 16px auto;
+  width: min(32rem, calc(100vw - 32px)); padding: 1.25rem;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--paper); color: var(--ink);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 16%);
+}
+.language-prompt h2 { font-size: 1.15rem; margin: 0 0 .5rem; }
+.language-prompt p { font-size: .95rem; margin: 0 0 1rem; }
+.language-prompt-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.language-prompt button, .language-prompt a {
+  min-height: 44px; display: inline-flex; align-items: center;
+  padding: .6rem 1rem; border: 1px solid var(--line-strong);
+  border-radius: 4px; font: inherit; cursor: pointer;
+  background: var(--paper); color: var(--ink); text-decoration: none;
+}
+.language-prompt a { background: var(--rail); color: var(--white); }
+@media (max-width: 760px) {
+  .mobile-language { display: inline-flex; min-height: 44px; min-width: 44px;
+    align-items: center; justify-content: center; font-weight: 650; }
+  .sheet-langs { display: inline-flex; }
 }
