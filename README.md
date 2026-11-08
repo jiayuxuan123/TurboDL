@@ -1,6 +1,6 @@
 # TurboDL
 
-> High-performance multi-threaded download engine SDK — pure Kotlin/JVM, no Android dependency, embeddable in any JVM application (including Android).
+> High-performance multi-threaded download engine SDK — the core remains pure Kotlin/JVM with no Android dependency and is embeddable in any JVM application (including Android). An optional native CLI fast path adds instant startup and a Zig HTTP data plane.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -33,6 +33,22 @@ TurboDL is a download core written from scratch. It **only draws on the architec
 - **Restrained adaptivity**: a task starts at the caller's connection ceiling. A lower tier is accepted only when a clean, post-switch window still retains at least 90% of aggregate throughput; stale requests from the previous tier are excluded. 429/503 backpressure always takes priority.
 - **Resumable downloads**: segments are persisted; pause/resume continues from the real on-disk progress.
 - **Final verification**: the output length is checked. When `expectedSha256` is provided, its SHA-256 is also checked before the task is marked complete; length alone cannot detect same-size corruption.
+
+## 0.5.0.1 — native fast path and stability
+
+- Add an optional Zig fast path: `turbodl native <url>` performs simple HTTP
+  Range downloads without starting the JVM: positional writes, retries,
+  resumable sidecars and final SHA-256 are covered.
+- Add a Zig launcher: native `--version` returns immediately; all other commands
+  hand off to the unchanged Kotlin/JVM engine.
+- A/B tests (32 MiB / 256 MiB / 2 GiB, interleaved, independent SHA-256) showed
+  the native data plane at 2.44x / 1.64x / 1.25x the JVM path p50.
+- A native C SHA-256 accelerator was evaluated and rejected: it was slower than
+  the JVM SHA-NI path, so it is not shipped.
+- Bound DoH response reads to 64 KiB before DNS parsing.
+- Make the JS timer capability test harness thread-safe; production behavior is unchanged.
+- Windows x86_64 is built and run; Windows arm64, Linux and macOS are
+  cross-compiled and artifact-checked. Android continues to use Kotlin/ART.
 
 ## 0.5.0.0 — resume and HTTP reliability
 

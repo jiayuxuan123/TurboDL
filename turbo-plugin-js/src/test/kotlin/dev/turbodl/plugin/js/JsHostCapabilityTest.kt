@@ -163,7 +163,7 @@ class JsHostCapabilityTest {
         js: JsPluginConfig = JsPluginConfig(),
         engine: TurboConfig = TurboConfig(),
     ): Harness {
-        val logs = mutableListOf<String>()
+        val logs = java.util.concurrent.CopyOnWriteArrayList<String>()
         val h = PluginHost(logger = { msg, e -> logs.add(msg + (e?.let { " — ${it.message}" } ?: "")) })
         h.install(JsPluginLoaderPlugin(engine, js))
         h.loadSource(PluginSource("js", "inline:$script", mapOf("pluginId" to id)))

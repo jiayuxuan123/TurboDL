@@ -1,0 +1,75 @@
+{
+  "rows": [
+    {
+      "mode": "native",
+      "exit": 0,
+      "wall_ms": 13154.158999968786,
+      "actual_sha256": "0bf33ae79104886fcc01b3ad9a6548d13f6f7abdd51b47a0dc1c965dc287419d",
+      "hash_matched": true,
+      "stdout": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-00-native\\stdout.log",
+      "stderr": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-00-native\\stderr.log"
+    },
+    {
+      "mode": "jvm",
+      "exit": 0,
+      "wall_ms": 28325.970400008373,
+      "actual_sha256": "0bf33ae79104886fcc01b3ad9a6548d13f6f7abdd51b47a0dc1c965dc287419d",
+      "hash_matched": true,
+      "stdout": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-00-jvm\\stdout.log",
+      "stderr": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-00-jvm\\stderr.log"
+    },
+    {
+      "mode": "jvm",
+      "exit": 0,
+      "wall_ms": 34080.67170000868,
+      "actual_sha256": "0bf33ae79104886fcc01b3ad9a6548d13f6f7abdd51b47a0dc1c965dc287419d",
+      "hash_matched": true,
+      "stdout": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-01-jvm\\stdout.log",
+      "stderr": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-01-jvm\\stderr.log"
+    },
+    {
+      "mode": "native",
+      "exit": 0,
+      "wall_ms": 31526.560300029814,
+      "actual_sha256": "0bf33ae79104886fcc01b3ad9a6548d13f6f7abdd51b47a0dc1c965dc287419d",
+      "hash_matched": true,
+      "stdout": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-01-native\\stdout.log",
+      "stderr": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-01-native\\stderr.log"
+    },
+    {
+      "mode": "native",
+      "exit": 0,
+      "wall_ms": 27250.81300002057,
+      "actual_sha256": "0bf33ae79104886fcc01b3ad9a6548d13f6f7abdd51b47a0dc1c965dc287419d",
+      "hash_matched": true,
+      "stdout": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-02-native\\stdout.log",
+      "stderr": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-02-native\\stderr.log"
+    },
+    {
+      "mode": "jvm",
+      "exit": 0,
+      "wall_ms": 45441.16210000357,
+      "actual_sha256": "0bf33ae79104886fcc01b3ad9a6548d13f6f7abdd51b47a0dc1c965dc287419d",
+      "hash_matched": true,
+      "stdout": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-02-jvm\\stdout.log",
+      "stderr": "C:\\Users\\38476\\Desktop\\yunluo\\_research\\turbodl-lang-probes\\runs\\ab-native-jvm-2g-v2\\round-02-jvm\\stderr.log"
+    }
+  ],
+  "summary": {
+    "native": {
+      "runs": 3,
+      "p50_ms": 27250.81300002057,
+      "p95_ms": 31098.98557002889,
+      "min_ms": 13154.158999968786,
+      "max_ms": 31526.560300029814
+    },
+    "jvm": {
+      "runs": 3,
+      "p50_ms": 34080.67170000868,
+      "p95_ms": 44305.11306000408,
+      "min_ms": 28325.970400008373,
+      "max_ms": 45441.16210000357
+    },
+    "improvement_ratio_jvm_over_native": 1.2506295390153297
+  }
+}

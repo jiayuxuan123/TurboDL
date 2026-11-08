@@ -1,0 +1,75 @@
+{
+  "totals": {
+    "suites": 105,
+    "tests": 570,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "modules": [
+    {
+      "module": "turbodl-core",
+      "xml_files": 79,
+      "suites": 79,
+      "tests": 277,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbodl-cli",
+      "xml_files": 1,
+      "suites": 1,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-hls",
+      "xml_files": 5,
+      "suites": 5,
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-js",
+      "xml_files": 11,
+      "suites": 11,
+      "tests": 120,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-parser",
+      "xml_files": 3,
+      "suites": 3,
+      "tests": 42,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-bootstrap",
+      "xml_files": 1,
+      "suites": 1,
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-runtime",
+      "xml_files": 5,
+      "suites": 5,
+      "tests": 65,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "failures": []
+}

@@ -455,7 +455,11 @@ internal object HttpClientFactory {
                 .build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return emptyList()
-                val bytes = resp.body?.bytes() ?: return emptyList()
+                val body = resp.body ?: return emptyList()
+                val source = body.source()
+                val maxResponseBytes = 64L * 1024
+                source.request(maxResponseBytes)
+                val bytes = source.readByteArray(minOf(source.buffer.size, maxResponseBytes))
                 return parseDnsAnswers(bytes, hostname)
             }
         }

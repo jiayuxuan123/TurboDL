@@ -33,3 +33,7 @@ _bench/runs/
 .turbodl-parts/
 _audit/turbodl-site-*/
 '_bench/
+
+# Native build outputs
+native/dist/
+native/**/.zig-cache/
