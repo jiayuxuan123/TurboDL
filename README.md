@@ -1,5 +1,7 @@
 # TurboDL
 
+当前维护版本：**0.5.0.2**。本版包含 HTTP 调度、断点落盘、镜像选择和 HLS 优化，详见[完整更新日志](engineering/maintenance/RELEASE-0.5.0.2.md)。
+
 > High-performance multi-threaded download engine SDK — the core remains pure Kotlin/JVM with no Android dependency and is embeddable in any JVM application (including Android). An optional native CLI fast path adds instant startup and a Zig HTTP data plane.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

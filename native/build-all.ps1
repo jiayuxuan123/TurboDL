@@ -21,7 +21,7 @@ foreach ($component in @("launcher", "dataplane")) {
     try {
         foreach ($target in $targets) {
             $arg = "-Dtarget=" + $target[0]
-            & $Zig build $arg -Doptimize=ReleaseFast --prefix (Join-Path $dist "$component/$($target[1])")
+            & $Zig build $arg -Doptimize=ReleaseFast -j2 --prefix (Join-Path $dist "$component/$($target[1])")
             if ($LASTEXITCODE -ne 0) { throw "$component failed for $($target[0])" }
             Write-Output "$component/$($target[1]) compiled"
         }

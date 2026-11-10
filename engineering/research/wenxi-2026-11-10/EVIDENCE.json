@@ -1,0 +1,369 @@
+{
+  "reference_commit": "28e7b4576f5c3a600a44240967c03e21ef579a1f",
+  "version_check_url": "https://api.github.com/repos/z7786/wenxi/branches/main",
+  "review_date": "2026-11-10",
+  "indexed_files": 1026,
+  "indexed_lines": 323528,
+  "dart_application_files": 379,
+  "coverage_note": "模块全景与关键调用链审查；SOURCES.csv 的结构索引项不等于逐行/运行验收。第三方 vendor 不逐行审查。",
+  "runtime_platform": "Windows x64",
+  "go_version": "1.25.7",
+  "java_version": "21.0.12",
+  "upstream_tests": {
+    "http-tests.jsonl": {
+      "top_level_pass": 9,
+      "subtest_pass": 4,
+      "failed_events": 0,
+      "skipped_events": 0,
+      "sha256": "8228084a312f957bb5c732eb2a08d789dd3ab9b093776937384ff7b354be497a"
+    },
+    "recovery-tests.jsonl": {
+      "top_level_pass": 4,
+      "subtest_pass": 4,
+      "failed_events": 0,
+      "skipped_events": 0,
+      "sha256": "b7aaa11f8f162918966979815bfc774b1d3c2f39722109cacfabc255def4593d"
+    }
+  },
+  "queue_check": {
+    "submitted": 4,
+    "requested_connections_each": 1,
+    "native_active_tasks_before_release": 3,
+    "snapshots_before_release": [
+      {
+        "activeConnections": 1,
+        "downloaded": 0,
+        "error": "",
+        "errorKind": "",
+        "httpCode": 0,
+        "path": "D:\\CodexResearch\\wenxi-28e7b457-20261110\\review\\queue-runtime\\cache\\task0/payload.gopeed",
+        "retryAfterMs": 0,
+        "retryExhausted": false,
+        "speed": 0,
+        "status": "running",
+        "total": 65536,
+        "totalConnections": 1
+      },
+      {
+        "activeConnections": 1,
+        "downloaded": 0,
+        "error": "",
+        "errorKind": "",
+        "httpCode": 0,
+        "path": "D:\\CodexResearch\\wenxi-28e7b457-20261110\\review\\queue-runtime\\cache\\task1/payload.gopeed",
+        "retryAfterMs": 0,
+        "retryExhausted": false,
+        "speed": 0,
+        "status": "running",
+        "total": 65536,
+        "totalConnections": 1
+      },
+      {
+        "activeConnections": 1,
+        "downloaded": 0,
+        "error": "",
+        "errorKind": "",
+        "httpCode": 0,
+        "path": "D:\\CodexResearch\\wenxi-28e7b457-20261110\\review\\queue-runtime\\cache\\task2/payload.gopeed",
+        "retryAfterMs": 0,
+        "retryExhausted": false,
+        "speed": 0,
+        "status": "running",
+        "total": 65536,
+        "totalConnections": 1
+      },
+      {
+        "activeConnections": 0,
+        "downloaded": 0,
+        "error": "",
+        "errorKind": "",
+        "httpCode": 0,
+        "path": "",
+        "retryAfterMs": 0,
+        "retryExhausted": false,
+        "speed": 0,
+        "status": "running",
+        "total": 0,
+        "totalConnections": 0
+      }
+    ],
+    "completed": 4,
+    "all_sha256_matched": true,
+    "scope": "local Windows original helper; no account/network provider calls"
+  },
+  "header_check": {
+    "scope": "unmodified Windows helper; generic built-in HTTP without a source network policy",
+    "all_requests_local": true,
+    "real_credentials_used": false,
+    "sha256_matched": true,
+    "different_hosts": true,
+    "observations": [
+      {
+        "range": "bytes=0-0",
+        "authorization_present": false,
+        "cookie_present": false,
+        "custom_key_present": true
+      },
+      {
+        "range": "bytes=0-262143",
+        "authorization_present": false,
+        "cookie_present": false,
+        "custom_key_present": true
+      },
+      {
+        "range": "bytes=262144-524287",
+        "authorization_present": true,
+        "cookie_present": true,
+        "custom_key_present": true
+      }
+    ]
+  },
+  "native_binary_sha256": "00d47313c2d9042b2a09921e0c6dc7436c610f71676409096bd6ea41137fe9f3",
+  "flutter_test_status": "BLOCKED: offline resolver missing pinyin; no new framework/dependencies downloaded",
+  "flutter_resolution_log_sha256": "190b1e537cc2a67a69903d309cf6bc9412eb4a263c8d5165e723cb9e1d943478",
+  "ab_final": {
+    "latency-c8": {
+      "baseline": {
+        "n": 9,
+        "p50_ms": 826,
+        "p95_ms": 1175.3999999999999,
+        "cv": 0.18176009156852818,
+        "peak_rss_p50_bytes": 109776896,
+        "cpu_p50_seconds": 2.40625,
+        "server_peak": [
+          7,
+          8
+        ],
+        "requests_p50": 8,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "candidate": {
+        "n": 9,
+        "p50_ms": 619,
+        "p95_ms": 834.6,
+        "cv": 0.16414707900622838,
+        "peak_rss_p50_bytes": 110120960,
+        "cpu_p50_seconds": 2.359375,
+        "server_peak": [
+          8
+        ],
+        "requests_p50": 8,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "comparison": {
+        "ratio": "baseline_ms / candidate_ms",
+        "p50_ratio": 1.3344103392568658,
+        "paired_ratio_95ci": [
+          1.228862973760933,
+          1.4072790294627382
+        ]
+      }
+    },
+    "tail-c2": {
+      "baseline": {
+        "n": 9,
+        "p50_ms": 1038,
+        "p95_ms": 2095.7999999999997,
+        "cv": 0.360326724886767,
+        "peak_rss_p50_bytes": 102445056,
+        "cpu_p50_seconds": 2.328125,
+        "server_peak": [
+          1,
+          2
+        ],
+        "requests_p50": 2,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "candidate": {
+        "n": 9,
+        "p50_ms": 695,
+        "p95_ms": 798.2,
+        "cv": 0.1045619388047956,
+        "peak_rss_p50_bytes": 102490112,
+        "cpu_p50_seconds": 2.109375,
+        "server_peak": [
+          2
+        ],
+        "requests_p50": 3,
+        "all_sha256_matched": true,
+        "timing_evidence": "CONTROLLED_LOCAL_STABLE"
+      },
+      "comparison": {
+        "ratio": "baseline_ms / candidate_ms",
+        "p50_ratio": 1.493525179856115,
+        "paired_ratio_95ci": [
+          1.4278215223097113,
+          2.5344827586206895
+        ]
+      }
+    },
+    "unlimited-c16": {
+      "baseline": {
+        "n": 9,
+        "p50_ms": 641,
+        "p95_ms": 756.8,
+        "cv": 0.1614402470119983,
+        "peak_rss_p50_bytes": 121839616,
+        "cpu_p50_seconds": 3.734375,
+        "server_peak": [
+          16
+        ],
+        "requests_p50": 74,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "candidate": {
+        "n": 9,
+        "p50_ms": 618,
+        "p95_ms": 863.8,
+        "cv": 0.2749597799919585,
+        "peak_rss_p50_bytes": 122109952,
+        "cpu_p50_seconds": 3.9375,
+        "server_peak": [
+          16
+        ],
+        "requests_p50": 108,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "comparison": {
+        "ratio": "baseline_ms / candidate_ms",
+        "p50_ratio": 1.0372168284789645,
+        "paired_ratio_95ci": [
+          0.7570694087403599,
+          1.2821782178217822
+        ]
+      }
+    },
+    "paced-c64": {
+      "baseline": {
+        "n": 9,
+        "p50_ms": 2034,
+        "p95_ms": 2663.0,
+        "cv": 0.14315267652049807,
+        "peak_rss_p50_bytes": 153587712,
+        "cpu_p50_seconds": 4.328125,
+        "server_peak": [
+          64
+        ],
+        "requests_p50": 256,
+        "all_sha256_matched": true,
+        "timing_evidence": "CONTROLLED_LOCAL_STABLE"
+      },
+      "candidate": {
+        "n": 9,
+        "p50_ms": 1856,
+        "p95_ms": 2328.2,
+        "cv": 0.13853196995349798,
+        "peak_rss_p50_bytes": 155443200,
+        "cpu_p50_seconds": 4.484375,
+        "server_peak": [
+          64
+        ],
+        "requests_p50": 290,
+        "all_sha256_matched": true,
+        "timing_evidence": "CONTROLLED_LOCAL_STABLE"
+      },
+      "comparison": {
+        "ratio": "baseline_ms / candidate_ms",
+        "p50_ratio": 1.0959051724137931,
+        "paired_ratio_95ci": [
+          1.0839486980178779,
+          1.2192066805845512
+        ]
+      }
+    }
+  },
+  "reference_comparison": {
+    "unlimited-c16": {
+      "candidate": {
+        "n": 9,
+        "p50_ms": 757,
+        "p95_ms": 913.1999999999999,
+        "cv": 0.15242661328563326,
+        "peak_rss_p50_bytes": 122441728,
+        "cpu_p50_seconds": 4.25,
+        "server_peak": [
+          16
+        ],
+        "requests_p50": 116,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "wenxi": {
+        "n": 9,
+        "p50_ms": 287.75540000060573,
+        "p95_ms": 455.29952000360936,
+        "cv": 0.3251370215050186,
+        "peak_rss_p50_bytes": 23547904,
+        "cpu_p50_seconds": 0.375,
+        "server_peak": [
+          16
+        ],
+        "requests_p50": 18,
+        "all_sha256_matched": true,
+        "timing_evidence": "INCONCLUSIVE"
+      },
+      "comparison": {
+        "ratio": "candidate_ms / wenxi_ms",
+        "p50_ratio": 2.630706495858658,
+        "paired_ratio_95ci": [
+          1.7489424326494496,
+          3.665830924016078
+        ]
+      }
+    },
+    "paced-c64": {
+      "candidate": {
+        "n": 9,
+        "p50_ms": 1888,
+        "p95_ms": 2029.6,
+        "cv": 0.05011336615258826,
+        "peak_rss_p50_bytes": 154497024,
+        "cpu_p50_seconds": 4.859375,
+        "server_peak": [
+          64
+        ],
+        "requests_p50": 289,
+        "all_sha256_matched": true,
+        "timing_evidence": "CONTROLLED_LOCAL_STABLE"
+      },
+      "wenxi": {
+        "n": 9,
+        "p50_ms": 1372.9811999946833,
+        "p95_ms": 1494.4114800076932,
+        "cv": 0.04323912215647214,
+        "peak_rss_p50_bytes": 28381184,
+        "cpu_p50_seconds": 0.390625,
+        "server_peak": [
+          64
+        ],
+        "requests_p50": 65,
+        "all_sha256_matched": true,
+        "timing_evidence": "CONTROLLED_LOCAL_STABLE"
+      },
+      "comparison": {
+        "ratio": "candidate_ms / wenxi_ms",
+        "p50_ratio": 1.3751098704099598,
+        "paired_ratio_95ci": [
+          1.304748405743637,
+          1.4201366528273993
+        ]
+      }
+    }
+  },
+  "raw_reference_evidence": "D:\\CodexResearch\\wenxi-28e7b457-20261110\\review",
+  "raw_benchmark_evidence": "D:\\CodexResearch\\turbodl-maintenance-20261110",
+  "network": "local fixtures only; GitHub metadata for source revision; no account/private URL requests",
+  "local_candidate": {
+    "jar": "D:\\CodexResearch\\turbodl-maintenance-20261110\\TurboDL-maintenance-candidate.jar",
+    "bytes": 4929774,
+    "sha256": "90669d08caa5c36fa657315d6ce475f9247446998feaf9597e7e4b342d6b6cb5",
+    "zip_verified": true,
+    "core_classes_matched": 34,
+    "release_status": "local unversioned maintenance candidate; not a replacement release"
+  }
+}

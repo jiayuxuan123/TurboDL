@@ -52,7 +52,7 @@ Everything else (batch, mirrors, proxy, HLS, plugins) uses the JVM engine.
 - Android: the Kotlin/ART engine is the supported path. A bare sidecar is not an
   Android process model.
 
-## A/B results
+## A/B results (0.5.0.1 baseline)
 
 | Fixture | Native p50 | JVM p50 | Result |
 |---|---:|---:|---:|
@@ -60,4 +60,5 @@ Everything else (batch, mirrors, proxy, HLS, plugins) uses the JVM engine.
 | 256 MiB | 2534.7 ms | 4158.4 ms | 1.64x |
 | 2 GiB | 27250.8 ms | 34080.7 ms | 1.25x |
 
-Every run independently verified the output SHA-256.
+Every run independently verified the output SHA-256. These are the historical
+0.5.0.1 measurements, not a new speed claim for later versions.

@@ -1,0 +1,13 @@
+﻿id,priority,item,owner,entry,reference_modules,implementation,acceptance,status
+A01,P0,来源策略快照,YunGet,app/src/main/kotlin/com/yunget/app/data/download/TurboDownloadManager.kt,M03 M04 M08,账号/文件/来源版本绑定；宿主选并发、刷新及请求窗口，SDK 不硬编码网盘名,同文件/账号/链路，取链时间与实际连接分开记录；旧任务保留快照,有界改动，先对照现有实现
+A02,P0,跨任务主机预算,TurboDL,turbodl-core/src/main/kotlin/dev/turbodl/core/ConnectionBudget.kt,M08 M10,可选共享资源域；probe/媒体/key 与多个 client 的租约同域，取消不泄漏名额,两个任务/两个client/插件混合，来源独立限速与429/503；SHA正确且可取消,兼容方案设计，未实施
+A03,P1,尾段请求成本,TurboDL,turbodl-core/src/main/kotlin/dev/turbodl/core/SegmentScheduler.kt,M09,ETA 与观测窗口决定是否值得拆，避免极速尾段增加大量 Range,均速/慢连接/高RTT/聚合限速 A/B；同时验请求数与耗时，回退不超过5%,优先实验；本批已修小尾段粒度
+A04,P1,请求窗口与断点网格解耦,TurboDL+YunGet,turbodl-core/src/main/kotlin/dev/turbodl/core/SegmentDownloader.kt,M04 M08,由宿主声明来源可接受的请求窗口，断点区间仍保持稳定,短读/Range忽略/206错位/重启；同文件完整SHA；服务端QPS与吞吐共同验收,方案，不直接复制来源特例
+A05,P1,原生文件目标可选适配,YunGet,app/src/main/kotlin/com/yunget/app/data/download/TurboDownloadManager.kt,M15 M16,可选择直接写已授权目标，避免缓存到公共目录的完整二次拷贝；旧File路径保留,MediaStore/SAF/不可seek/撤权/满盘/强杀；发布日志先后与资源关闭；A/B写盘成本,收益原型后才接生产
+A06,P1,校验保存独立调度,YunGet,app/src/main/kotlin/com/yunget/app/data/download/DownloadPostProcessor.kt,M05 M15,网络完成、校验排队、保存、清理分阶段；避免慢导出堵住后续下载,并发小/大文件；下载结束到文件可见时延、CPU和内存；失败不伪报完成,先补分阶段诊断
+A07,P1,完整连接和流量统计,YunGet,app/src/main/kotlin/com/yunget/app/data/download/Aria2Readout.kt,M05 M07,请求上限/在飞/等待/传输字节/恢复字节分开；不使用稀疏文件逻辑长度测速,真实服务端计数、短任务和续传；UI值追到执行参数,aria2桥接已修，继续覆盖其他后端
+A08,P1,任务代次与账号所有权,YunGet,app/src/main/kotlin/com/yunget/app/data/download/TurboDownloadManager.kt,M03 M11,账号切换、旧回调、重复提交和地址替换使用一致的owner/generation规则,暂停/删除/账号切换时故意延迟旧结果；不能污染新任务或覆盖凭据,差分审计已有稳定键和事件映射
+A09,P1,插件权限贯穿数据连接,TurboDL,turbo-plugin-js/src/main/kotlin,M18 M19 M20,签名目录、降级保护、JS预算和下载网络权限一起核对，不只保护解析HTTP,DNS变化、跳转来回、伪造头、脚本超时、旧版能力缺失；全部拒绝路径确定,差分审计既有机制
+A10,P2,边下边播和缓存复用,YunGet,app/src/main/kotlin/com/yunget/app,M21 M22 M23,播放器读已确认区间；seek可取消；续播/定时停止/字幕和投屏分别可选,同缓存复用字节量、seek首帧、内存峰值、退出泄漏；真机另验,先确认现有播放器能力，独立外观
+A11,P2,协议插件补齐,TurboDL,turbo-plugin-runtime/src/main/kotlin,M12 M13 M14,BT/ED2K等走可选插件与资源域，不让HTTP用户承担所有常驻资源,自有种子/本地peer/坏块/暂停/停止/退出；逐平台构建和资源证明,分批实施，不改变本批范围
+A12,P2,文件管理与扩展功能,YunGet,app/src/main/kotlin/com/yunget/app,M24 M25 M26 M27,自然排序/分页/上传/家庭云/局域网/资源搜索逐项定义；公告继续接自己的后台,能力表驱动入口；无能力不显示死按钮；各任务独立验收,按实际需求选，不一次照搬

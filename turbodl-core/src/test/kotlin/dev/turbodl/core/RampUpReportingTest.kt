@@ -60,7 +60,10 @@ class RampUpReportingTest {
             server.start()
         }
 
-        fun stop() = server.stop(0)
+        fun stop() {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+        }
     }
 
     @Test
@@ -116,6 +119,9 @@ class RampUpReportingTest {
                 maxConnectionsPerTask = connections,
                 maxConcurrentTasks = 1,
                 slowStart = false,          // 直接全开，专测上报语义
+                // Keep a bulk phase with queued work; default coarser ranges
+                // legitimately enter final drain earlier on this small fixture.
+                minSegmentSize = 64L * 1024,
                 adaptiveConcurrency = false,
                 warmUpConnections = false,
                 progressIntervalMs = 0,   // 关闭节流：需要密集采样才能统计占比

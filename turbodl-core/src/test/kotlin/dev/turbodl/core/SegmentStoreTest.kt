@@ -1,6 +1,9 @@
 package dev.turbodl.core
 
 import java.io.File
+import java.io.DataInputStream
+import java.security.MessageDigest
+import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -15,6 +18,46 @@ import kotlin.test.assertTrue
  * 而"从头下"在用户看来只是"慢"，不会报错，所以只能靠这些用例兜住。
  */
 class SegmentStoreTest {
+
+    @Test
+    fun `buffered checkpoint retains exact v2 format and truncates an older temporary file`() {
+        val dir = tmpDir("buffered-v2")
+        val payload = ByteArray(4096 * 1024).also { Random(9047).nextBytes(it) }
+        val s = store(dir, payload.size.toLong())
+        try {
+            s.open()
+            s.ensureLength()
+            s.writeAt(0, payload, 0, payload.size)
+            val pieces = s.buildGrid(4096).onEach { it.written = it.length }
+            File(dir, "progress.tdlp.tmp").writeBytes(ByteArray(64 * 1024) { 0x5a })
+            s.persist(pieces)
+            DataInputStream(File(dir, "progress.tdlp").inputStream().buffered()).use { input ->
+                assertEquals(0x54444c50, input.readInt())
+                assertEquals(2, input.readInt())
+                val identityLength = input.readInt()
+                assertTrue(identityLength in 1..512)
+                input.readFully(ByteArray(identityLength))
+                assertEquals(payload.size.toLong(), input.readLong())
+                assertEquals(1024, input.readInt())
+                repeat(1024) { index ->
+                    assertEquals(index * 4096L, input.readLong())
+                    assertEquals((index + 1) * 4096L - 1, input.readLong())
+                    assertEquals(4096L, input.readLong())
+                }
+                assertEquals(-1, input.read())
+            }
+            s.close()
+            s.open()
+            val restored = s.loadOrCreate(8192)
+            assertEquals(1024, restored.size, "new block size must not rewrite a resumed grid")
+            assertEquals(payload.size.toLong(), restored.sumOf { it.written })
+            assertEquals(MessageDigest.getInstance("SHA-256").digest(payload).toList(),
+                MessageDigest.getInstance("SHA-256").digest(File(dir, "out.bin").readBytes()).toList())
+        } finally {
+            s.close()
+            dir.deleteRecursively()
+        }
+    }
 
     private fun tmpDir(tag: String): File =
         File(System.getProperty("java.io.tmpdir"), "tdlp-$tag-${System.nanoTime()}")

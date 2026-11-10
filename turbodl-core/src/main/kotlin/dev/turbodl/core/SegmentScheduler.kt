@@ -298,32 +298,21 @@ internal class SegmentScheduler(
         @Volatile
         var writtenAtAttemptStart: Long = written
 
-        /** EWMA of this segment's recent throughput, updated by onProgress. */
-        @Volatile
-        var recentBytesPerSec: Double = 0.0
-            private set
+        private val tailMetrics = TailTransferMetrics()
 
-        @Volatile
-        private var lastSpeedSampleAt: Long = System.nanoTime()
-
-        fun observeProgress(totalWritten: Long) {
+        fun observeProgress(totalWritten: Long) = synchronized(writeLock) {
             val previous = written
             if (totalWritten > previous) {
-                val now = System.nanoTime()
-                val elapsed = (now - lastSpeedSampleAt).coerceAtLeast(1_000_000L)
-                val instant = (totalWritten - previous) * 1_000_000_000.0 / elapsed
-                recentBytesPerSec =
-                    if (recentBytesPerSec <= 0.0) instant
-                    else recentBytesPerSec * 0.75 + instant * 0.25
-                lastSpeedSampleAt = now
+                tailMetrics.record(totalWritten - previous, System.nanoTime())
             }
             written = totalWritten
         }
 
-        fun beginAttempt() {
-            recentBytesPerSec = 0.0
-            lastSpeedSampleAt = System.nanoTime()
-        }
+        fun beginAttempt() = tailMetrics.begin(System.nanoTime())
+
+        fun usefulTailEta(nowNanos: Long): Double? = tailMetrics.usefulEtaSeconds(remaining, nowNanos)
+
+        fun requestStartupNanos(): Long = tailMetrics.requestStartupNanos()
 
         /**
          * **这一片自己**的最近一次失败原因。
@@ -388,6 +377,7 @@ internal class SegmentScheduler(
         // 另外与其他库共用 Dispatchers.IO 还会互相抢线程。故为本任务开专用调度器，
         // 并行度 = workers + 少量余量（给守护/回调用）。
         val ioDispatcher = Dispatchers.IO.limitedParallelism(workers + 4)
+        val drainSignal = SchedulerSignal()
 
         val adaptiveEnabled =
             config.adaptiveConcurrency && config.globalSpeedLimitBytesPerSec <= 0
@@ -470,7 +460,9 @@ internal class SegmentScheduler(
         }
 
         /** 进度落盘节流。 */
-        var lastPersistAt = 0L
+        val checkpointIntervalNanos = PROGRESS_PERSIST_INTERVAL_MS * 1_000_000L
+        val lastPersistAt = AtomicLong(System.nanoTime() - checkpointIntervalNanos)
+        val checkpointPending = AtomicBoolean(false)
 
         val needWholeFallback = AtomicBoolean(false)
         val failReason = AtomicReference<String?>(null)
@@ -625,15 +617,30 @@ internal class SegmentScheduler(
          * 反过来会留下"进度说有、文件里没有"的空洞 —— 那才会产出损坏文件。
          */
         fun persistProgress(force: Boolean = false) {
-            val now = System.currentTimeMillis()
-            if (!force && now - lastPersistAt < PROGRESS_PERSIST_INTERVAL_MS) return
-            lastPersistAt = now
+            val now = System.nanoTime()
+            if (force) {
+                lastPersistAt.set(now)
+                runCatching { store.persist(segmentList.toTypedArray().map { it.piece }) }
+                return
+            }
+            val previous = lastPersistAt.get()
+            if (now - previous < checkpointIntervalNanos || !checkpointPending.compareAndSet(false, true)) return
+            if (!lastPersistAt.compareAndSet(previous, now)) {
+                checkpointPending.set(false)
+                return
+            }
             // `CopyOnWriteArrayList.toList()` is unsafe here: Kotlin first reads
             // size() and then creates a separate iterator, so a worker can split
             // or append a segment in between and turn the size==1 fast path into
             // iterator().next() on an empty snapshot. toTypedArray() takes one
             // atomic COW snapshot and cannot observe that mixed state.
-            runCatching { store.persist(segmentList.toTypedArray().map { it.piece }) }
+            // At most one periodic checkpoint is pending. Fsync must not block
+            // a body reader and turn a local metadata wait into a false slow tail.
+            // This scope waits for its child before the backend closes the store.
+            val checkpoint = launch(ioDispatcher) {
+                runCatching { store.persist(segmentList.toTypedArray().map { it.piece }) }
+            }
+            checkpoint.invokeOnCompletion { checkpointPending.set(false) }
         }
 
         fun poll(): Segment? = synchronized(pendingLock) { pending.poll() }
@@ -779,7 +786,7 @@ internal class SegmentScheduler(
          *
          * @return 是否发生了托管
          */
-        fun tryTailAssist(): Boolean {
+        fun tryTailAssist(helperRate: Double, helperStartupNanos: Long): Boolean {
             if (!config.effectiveTailAssist) return false
             if (inFlightSegments.isEmpty()) return false
             // 候选：预计完成最晚、且足够大、且未超拆分次数。
@@ -787,9 +794,8 @@ internal class SegmentScheduler(
             // 按 ETA 能更直接地攻击长尾。
             var best: Segment? = null
             var bestEta = -1.0
-            var unknownBest: Segment? = null
-            var unknownRemaining = 0L
             val minBytes = config.tailAssistMinBytes
+            val nowNanos = System.nanoTime()
             // Same size/iterator race as persistProgress: snapshot the concurrent
             // set with a single atomic toTypedArray() call.
             for (s in inFlightSegments.toTypedArray()) {
@@ -797,22 +803,13 @@ internal class SegmentScheduler(
                     if (s.splits >= config.maxSplitsPerSegment) return@synchronized
                     // 已下多少 = 该分片的写入进度（由 onProgress 实时推进）
                     val remaining = s.remaining
-                    if (remaining < 2 * minBytes) return@synchronized
-                    val speed = s.recentBytesPerSec
-                    if (speed > 1.0) {
-                        val eta = remaining / speed
-                        if (eta > bestEta) {
-                            bestEta = eta
-                            best = s
-                        }
-                    } else if (remaining > unknownRemaining) {
-                        unknownRemaining = remaining
-                        unknownBest = s
+                    if (remaining / 2 < minBytes) return@synchronized
+                    val eta = s.usefulTailEta(nowNanos) ?: return@synchronized
+                    if (eta > bestEta) {
+                        bestEta = eta
+                        best = s
                     }
                 }
-            }
-            if (best == null) {
-                best = unknownBest
             }
             val seg = best ?: return false
 
@@ -820,13 +817,21 @@ internal class SegmentScheduler(
             // completed or another worker may have split it since the scan.
             synchronized(seg.writeLock) {
                 if (seg.splits >= config.maxSplitsPerSegment) return false
+                val eta = seg.usefulTailEta(System.nanoTime()) ?: return false
                 val currentRemaining = seg.remaining
-                if (currentRemaining < 2 * minBytes) return false
+                if (currentRemaining / 2 < minBytes) return false
                 val done = seg.written
-                val from = seg.start + done
-                val keep = ((currentRemaining / 2) / TAIL_ALIGN) * TAIL_ALIGN
-                if (keep < minBytes) return false
-                val cutAt = from + keep - 1          // 原分片保留 [start, cutAt]
+                // Keep large cuts aligned while honoring a smaller configured
+                // tail minimum; fixed 64 KiB alignment made 8..64 KiB tails unsplittable.
+                val keep = TailAssistPolicy.retainedRemaining(
+                    currentRemaining, currentRemaining / eta, helperRate, helperStartupNanos, minBytes,
+                ) ?: return false
+                val alignment = if (keep >= TAIL_ALIGN) TAIL_ALIGN
+                    else min(TAIL_ALIGN, minBytes.coerceAtLeast(1L))
+                val retained = (((done + keep) / alignment) * alignment)
+                    .coerceAtLeast(minBytes.coerceAtLeast(1L))
+                if (retained <= done || seg.length - retained < minBytes) return false
+                val cutAt = seg.start + retained - 1 // 已写入字节计入保留片，避免延后原边界
                 val tailStart = cutAt + 1            // 新分片接手 [tailStart, end]
                 if (tailStart > seg.end) return false
 
@@ -1084,11 +1089,14 @@ internal class SegmentScheduler(
                     // 所以：一旦判定失败，立刻让所有 worker 退出循环；在飞请求由下面的
                     // `if (failReason.get() != null) { downloader.cancelCalls(taskId); break }`
                     // 断掉，`jobs.awaitAll()` 随即返回，错误被准确报给宿主。
+                    var lastTransferRate = 0.0
+                    var lastRequestStartup = 0L
                     while (isActive() && !needWholeFallback.get() && failReason.get() == null) {
+                        val drainTicket = drainSignal.observe()
                         // 索引自闸门：超出当前目标并发的协程 park（不占许可、随时可复活）。
                         if (idx >= desired.get()) {
                             if (queueEmpty() && inFlight.get() == 0) break
-                            delay(PARK_POLL_MS)
+                            drainSignal.await(drainTicket, PARK_POLL_MS)
                             continue
                         }
                         val seg = poll()
@@ -1096,11 +1104,13 @@ internal class SegmentScheduler(
                             // 队列空：先尝试收尾托管（把在飞分片的后半段让给本 worker）。
                             // 只在"没有新块可领"时发生 —— 大块传输阶段队列非空，不受影响。
                             if (inFlight.get() > 0) {
-                                if (tryTailAssist()) {
+                                // A mirror may route the next request to another source.
+                                if (tryTailAssist(if (mirrors == null) lastTransferRate else 0.0,
+                                    if (mirrors == null) lastRequestStartup else 0L)) {
                                     // 托管成功：新分片已入队，立刻回头领取
                                     continue
                                 }
-                                delay(DRAIN_WAIT_MS); continue
+                                drainSignal.await(drainTicket, DRAIN_WAIT_MS); continue
                             }
                             break  // 真正无活可干：退出
                         }
@@ -1146,6 +1156,7 @@ internal class SegmentScheduler(
                         }
                         val attemptHeaders = MirrorHeaderPolicy.headersFor(url, attemptUrl, headers)
                         val attemptStartedAtMs = System.currentTimeMillis()
+                        val attemptStartedAtNanos = System.nanoTime()
                         val bytesAtAttemptStart = seg.written
                         var mirrorReported = false
                         try {
@@ -1194,6 +1205,12 @@ internal class SegmentScheduler(
                             mirrorReported = true
                             when (res) {
                                 SegmentResult.OK -> {
+                                    val elapsedNanos = System.nanoTime() - attemptStartedAtNanos
+                                    val transferred = (seg.written - bytesAtAttemptStart).coerceAtLeast(0)
+                                    if (transferred > 0 && elapsedNanos > 0) {
+                                        lastTransferRate = transferred * 1e9 / elapsedNanos
+                                        lastRequestStartup = synchronized(seg.writeLock) { seg.requestStartupNanos() }
+                                    }
                                     // 【S4 修复】不再"每次成功都清零"。
                                     // 旧实现 OK 时 consecutiveFailures.set(0)，导致"间歇 429"
                                     // （如每 8 次出 1 次）永远凑不满连续 4 次失败 → 降级永不触发
@@ -1362,12 +1379,14 @@ internal class SegmentScheduler(
                         } finally {
                             seg.callRef.set(null)
                             activeConns.decrementAndGet()
-                            inFlight.decrementAndGet()
+                            val remainingCalls = inFlight.decrementAndGet()
                             inFlightSegments.remove(seg)
                             // 异常路径下 report 不会被调用，这里补一次归还，避免
                             // MirrorPool 的 in-flight 计数永久虚高。
                             if (!mirrorReported) mirrors?.release(attemptUrl)
                             reportConns()
+                            // Only broadcast on final drain, not on every chunk or peer exit.
+                            if (remainingCalls == 0) drainSignal.signal()
                         }
                     }
                 }

@@ -1,0 +1,15 @@
+gradle.projectsEvaluated {
+    def target = rootProject.project(':turbo-plugin-hls')
+    target.tasks.register('maintenanceBench', JavaExec) {
+        dependsOn target.tasks.named('testClasses')
+        classpath = target.sourceSets.test.runtimeClasspath
+        mainClass = 'dev.turbodl.plugin.hls.HlsMaintenanceBenchKt'
+        maxHeapSize = '512m'
+        args rootProject.findProperty('maintenanceOutput') ?: '_bench/results/maintenance/current.json'
+        doFirst {
+            def destination = new File(args[0].toString() + '.classpath')
+            destination.parentFile.mkdirs()
+            destination.text = classpath.asPath
+        }
+    }
+}

@@ -103,21 +103,16 @@ data class TurboConfig(
     val tailAssist: Boolean = true,
 
     /**
-     * 收尾托管的最小剩余量（字节）：低于此值不拆分。
-     *
-     * aria2-next 用的是「剩余时间 > 请求成本 × 2」这种时间判据（更精确，但需要
-     * 每条连接的实时速率）；本引擎用字节阈值近似，默认 8 KiB。
-     *
-     * 取值理由：一次请求的往返成本（RTT + 建连）在 WAN 上约 0.1~0.5s，
-     * 若拆出来的部分只有几百 KB，新连接还没跑满就被付掉的开销吃回去了。
+     * 收尾托管的最小片长（字节，默认 8 KiB）。还需满足真实吞吐和请求启动成本判据；
+     * 达到字节下限不代表一定拆分。已测得 helper 速度时按预计完成时间分配工作，
+     * 不值得启动新请求时继续使用原连接。
      */
     val tailAssistMinBytes: Long = 8L * 1024,
 
     /**
      * 单个分片最多被拆几次（防病态裂变）。
      *
-     * 只允许 2 次：16MB 的块最多裂成 4 段（4MB 起），足以让收尾阶段的空闲连接
-     * 都有活干；再往上拆，新增请求数会超过收益，且更容易触发风控。
+     * 默认 3 次。与最小片长、剩余时间及启动成本共同限制额外请求。
      */
     val maxSplitsPerSegment: Int = 3,
 
@@ -180,20 +175,13 @@ data class TurboConfig(
     val bufferedSegmentWrite: Boolean = false,
 
     /**
-     * 分段最小尺寸（字节，默认 64KB）—— 块大小的**下限**。
-     *
-     * 这个值刻意保持较小：本引擎用「细粒度预分块 + 工作窃取」消除长尾，
-     * 依赖**块数远多于连接数**（块数 ≈ 连接数 × [segmentsPerConnection]）才能让
-     * 慢连接拖住某块时其余连接继续领新块。
-     *
-     * 若把它调到 MB 量级（例如对齐 ABDM 的 1MB），16MB 文件 / 32 连接会被压成
-     * 恰好 32 块 —— 每连接一块、`segmentsPerConnection` 的余量消失，
-     * 收尾阶段并发会自然塌下去，表现为「传输很快但线程数一直掉」。
-     *
-     * 因此：**限制大文件请求数请调 [blockSize]（上限），不要调大本值。**
-     * 只有当你在「少量大分片 + 运行时劈分」的架构下才应显著提高它。
+     * 初始分片的软下限（字节，默认 256 KiB），减少小范围重复请求的启动开销。
+     * 文件较小时会按 total / workers 下调，保留喂满请求连接上限的机会；
+     * [blockSize] 硬上限优先，显式 64 KiB 等旧设置仍可使用。
+     * 大文件保留 [segmentsPerConnection] 的预分片目标，慢尾另由运行时托管处理。
+     * 续传沿用已保存网格，改变此值不会重新划分已有进度。
      */
-    val minSegmentSize: Long = 64L * 1024,
+    val minSegmentSize: Long = 256L * 1024,
 
     /**
      * 固定分块大小上限（字节，默认 16MB）。
@@ -322,7 +310,7 @@ data class TurboConfig(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 
-    /** 连接池最大空闲连接数（连接复用）。应 ≥ maxConnectionsPerTask，否则分片连接会反复重建。 */
+    /** 连接池最大空闲连接数；0 表示不保留空闲连接，不限制活动请求并发。低值可能增加后续握手。 */
     val maxIdleConnections: Int = 256,
 
     /**

@@ -6,9 +6,10 @@ import dev.turbodl.core.DownloadBackend
 import dev.turbodl.core.DownloadRequest
 import dev.turbodl.core.TurboHttpClients
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -24,9 +25,6 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import kotlin.math.min
 
 /**
@@ -118,14 +116,26 @@ class HlsBackend : DownloadBackend {
         initSegment: HlsInitSegment?,
         segments: List<HlsSegment>,
         keyCache: ConcurrentHashMap<URI, kotlinx.coroutines.CompletableDeferred<ByteArray>>,
-    ) {
+    ) = coroutineScope {
         val keyUris = buildList {
             initSegment?.encryption?.keyUri?.let(::add)
             addAll(segments.mapNotNull { it.encryption?.keyUri })
         }.distinct()
-        for (keyUri in keyUris) {
-            keyFor(client, context, keyUri, keyCache)
-        }
+        if (keyUris.isEmpty()) return@coroutineScope
+        val requested = (context.request.connectionsOverride ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
+        val hostLimit = context.config.maxConnectionsPerHost.takeIf { it > 0 } ?: Int.MAX_VALUE
+        val totalLimit = context.config.maxTotalConnections.takeIf { it > 0 } ?: Int.MAX_VALUE
+        val workers = minOf(requested, hostLimit, totalLimit, 8, keyUris.size)
+        val next = AtomicInteger(0)
+        List(workers) {
+            launch {
+                while (true) {
+                    ensureBackendActive(context)
+                    val uri = keyUris.getOrNull(next.getAndIncrement()) ?: break
+                    keyFor(client, context, uri, keyCache)
+                }
+            }
+        }.forEach { it.join() }
     }
 
     private suspend fun downloadSegments(
@@ -156,6 +166,7 @@ class HlsBackend : DownloadBackend {
                 keyCache = keyCache,
                 activeConnections = activeConnections,
                 progressBytes = progressBytes,
+                buffers = HlsWorkBuffers(),
             )
         }
 
@@ -166,6 +177,7 @@ class HlsBackend : DownloadBackend {
         val queue = Channel<HlsSegment>(capacity = concurrency * 2)
         val workers = List(minOf(concurrency, playlist.segments.size)) {
             launch {
+                val buffers = HlsWorkBuffers()
                 for (segment in queue) {
                     val complete = segmentPart(partsDir, segment)
                     downloadPartWithRetry(
@@ -180,6 +192,7 @@ class HlsBackend : DownloadBackend {
                         keyCache = keyCache,
                         activeConnections = activeConnections,
                         progressBytes = progressBytes,
+                        buffers = buffers,
                     )
                 }
             }
@@ -213,6 +226,7 @@ class HlsBackend : DownloadBackend {
         keyCache: ConcurrentHashMap<URI, kotlinx.coroutines.CompletableDeferred<ByteArray>>,
         activeConnections: AtomicInteger,
         progressBytes: AtomicLong,
+        buffers: HlsWorkBuffers,
     ) {
         if (complete.isFile && complete.length() > 0L) return
 
@@ -225,14 +239,20 @@ class HlsBackend : DownloadBackend {
             decrypting.delete()
             var attemptBytes = 0L
             try {
-                fetchPartToFile(client, context, label, uri, byteRange, temp, activeConnections) { delta ->
+                fetchPartToFile(client, context, label, uri, byteRange, temp, activeConnections, buffers.input) { delta ->
                     attemptBytes += delta
                     context.throttle(delta)
                     context.reportProgress(progressBytes.addAndGet(delta), activeConnections.get())
                 }
                 if (encryption != null) {
                     val key = keyFor(client, context, encryption.keyUri, keyCache)
-                    decryptAes128(temp, decrypting, key, encryption.iv)
+                    withContext(Dispatchers.IO) {
+                        val operation = currentCoroutineContext()
+                        HlsAes128.decrypt(temp, decrypting, key, encryption.iv, buffers) {
+                            operation.ensureActive()
+                            ensureBackendActive(context)
+                        }
+                    }
                     temp.delete()
                     if (!decrypting.renameTo(complete)) {
                         decrypting.copyTo(complete, overwrite = true)
@@ -247,7 +267,11 @@ class HlsBackend : DownloadBackend {
                 }
                 return
             } catch (t: Throwable) {
-                if (t is CancellationException) throw t
+                if (t is CancellationException) {
+                    temp.delete()
+                    decrypting.delete()
+                    throw t
+                }
                 progressBytes.addAndGet(-attemptBytes)
                 temp.delete()
                 decrypting.delete()
@@ -270,6 +294,7 @@ class HlsBackend : DownloadBackend {
         byteRange: HlsByteRange?,
         output: File,
         activeConnections: AtomicInteger,
+        buffer: ByteArray,
         onBytes: suspend (Long) -> Unit,
     ) {
         val requestBuilder = requestBuilder(uri, context.request)
@@ -285,7 +310,6 @@ class HlsBackend : DownloadBackend {
             val body = response.body ?: throw IllegalStateException("HLS $label has no response body")
             FileOutputStream(output, false).use { file ->
                 body.byteStream().use { input ->
-                    val buffer = ByteArray(BUFFER_SIZE)
                     var written = 0L
                     while (true) {
                         ensureBackendActive(context)
@@ -365,7 +389,10 @@ class HlsBackend : DownloadBackend {
         var hops = 0
         while (true) {
             val call = client.newCall(current)
-            val handle = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
+            // A normal Job completion handler runs too late for a blocked body read.
+            val cancellation = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() } finally { call.cancel() }
+            }
             activeConnections?.incrementAndGet()
             val redirect: okhttp3.HttpUrl?
             try {
@@ -386,7 +413,7 @@ class HlsBackend : DownloadBackend {
                 }
             } finally {
                 activeConnections?.decrementAndGet()
-                handle?.dispose()
+                cancellation.cancel()
             }
             hops++
             if (hops > MAX_REDIRECTS) {
@@ -410,16 +437,6 @@ class HlsBackend : DownloadBackend {
             out[request.headers.name(i)] = request.headers.value(i)
         }
         return out
-    }
-
-    private fun decryptAes128(input: File, output: File, key: ByteArray, iv: ByteArray) {
-        // AES-128-CBC 不是这里能挑的算法，是 HLS 规范定的（RFC 8216 §4.3.2.4：AES-128 加密段
-        // 一律 CBC + PKCS#7）。CBC 自身不提供完整性保护，这一点是真实的；但换成 GCM 就解不开
-        // 任何实际存在的加密流了 —— 互通性在这里压过"用更现代的算法"。
-        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
-        val plain = cipher.doFinal(input.readBytes())
-        FileOutputStream(output, false).use { it.write(plain) }
     }
 
     private fun completedBytes(partsDir: File, playlist: HlsMediaPlaylist): Long =
@@ -496,8 +513,6 @@ class HlsBackend : DownloadBackend {
     private fun retryDelayMillis(attempt: Int): Long = min(4_000L, 250L shl attempt.coerceAtMost(4))
 
     private companion object {
-        const val BUFFER_SIZE = 128 * 1024
-
         /** 重定向上限：正常 HLS 最多 1~2 跳，超过即视为异常链路。 */
         const val MAX_REDIRECTS = 5
         const val PLAYLIST_IDENTITY_FILE = ".playlist-id"

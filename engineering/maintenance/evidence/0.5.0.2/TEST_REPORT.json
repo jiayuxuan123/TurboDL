@@ -1,0 +1,74 @@
+{
+  "version": "0.5.0.2",
+  "generated_at": "2026-11-10T15:48:29.363494+00:00",
+  "execution": "all Test outputs cleaned before final full execution",
+  "modules": {
+    "turbodl-core": {
+      "suites": 83,
+      "tests": 308,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbodl-cli": {
+      "suites": 1,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-hls": {
+      "suites": 6,
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-js": {
+      "suites": 11,
+      "tests": 120,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-parser": {
+      "suites": 3,
+      "tests": 42,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-bootstrap": {
+      "suites": 1,
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-runtime": {
+      "suites": 5,
+      "tests": 65,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "total": {
+    "suites": 110,
+    "tests": 608,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "artifacts": {
+    "turbodl-core/build/libs/turbodl-core-0.5.0.2.jar": {
+      "sha256": "30056ca2923d9eed7c6fb4fc8e2bdeb9844ba2efe9b5f4b2e1e401857caa34fb",
+      "bytes": 520851
+    },
+    "turbodl-cli/build/libs/turbodl-cli-all.jar": {
+      "sha256": "c5e9add8889248271cbf41f1f4c9efa5566f4de075be3542b01b5ec57b01a013",
+      "bytes": 4944897
+    }
+  },
+  "note": "Opt-in diagnostic benches that do not transfer bytes are not performance evidence; performance conclusions use separate SHA-256-verified measurements."
+}

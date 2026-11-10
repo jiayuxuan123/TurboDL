@@ -862,6 +862,9 @@ internal class SegmentDownloader(
                     forgetResolvedUrl(taskId, url)
                     return@use SegmentResult.FAILED
                 }
+                // Only resolving response headers needs single flight. A slow body
+                // must not postpone the other ranges after the final URL is known.
+                if (isFirstRequest) gate.complete(Unit)
                 when (val code = resp.code) {
                     429, 503 -> {
                         // 服务器说了"多久之后再来"就听它的：盲目退避要么继续被拒，要么白等。

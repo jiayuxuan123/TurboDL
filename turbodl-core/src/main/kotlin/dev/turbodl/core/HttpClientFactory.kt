@@ -133,8 +133,7 @@ internal object HttpClientFactory {
             }
             .connectionPool(
                 ConnectionPool(
-                    // 空闲连接数至少跟得上单任务并发数，避免分片反复重建 TCP/TLS
-                    maxIdleConnections = maxOf(config.maxIdleConnections, config.maxConnectionsPerTask),
+                    maxIdleConnections = config.maxIdleConnections,
                     keepAliveDuration = config.keepAliveSeconds,
                     timeUnit = TimeUnit.SECONDS,
                 )

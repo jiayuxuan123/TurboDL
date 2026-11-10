@@ -1,0 +1,6 @@
+{
+  "status": "BLOCKED",
+  "phase": "public smoke source validation",
+  "reason": "The public GitHub hostname resolved locally to a private/reserved address, so the runner refused the request before downloading. The validation was not disabled.",
+  "used_as_performance_evidence": false
+}

@@ -24,7 +24,7 @@ python website\audit_pages.py
 
 ## 3. 全量自动化回归
 
-必须使用 `--rerun-tasks`，防止 Gradle 把旧 XML 当成当前通过：
+必须重新生成所有测试结果，防止把旧 XML 当成当前通过。可使用 `--rerun-tasks`；也可先执行本节所有模块的 `cleanTest` 再执行全量 `test`，保留增量编译以减少无关重建。最终仍须逐项核对 XML 与构件哈希：
 
 ```powershell
 .\gradlew.bat `

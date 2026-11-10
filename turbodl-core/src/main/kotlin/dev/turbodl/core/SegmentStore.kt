@@ -1,6 +1,9 @@
 package dev.turbodl.core
 
 import java.io.File
+import java.io.BufferedOutputStream
+import java.io.DataOutputStream
+import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -360,8 +363,7 @@ internal class SegmentStore(
 
     /** 落盘进度记录（原子替换：先写临时文件再改名）。 */
     fun persist(pieces: List<Piece>) {
-        // 【必须串行】persist 会被多个下载 worker 同时调用（persistProgress 里的
-        // lastPersistAt 是普通变量，多个线程可以同时通过节流检查）。两个 writer 会
+        // 【必须串行】周期快照与暂停/终态强制快照可能同时进入。两个 writer 会
         // 互相 setLength(0)、交错写头与分片记录，并竞争同一个 .tmp / .bak 的改名 ——
         // 轻则丢断点，重则生成"可解析但混合了两个时刻"的快照。
         synchronized(persistLock) {
@@ -376,8 +378,8 @@ internal class SegmentStore(
             channel?.force(false)
             val tmp = File(stateFile.parentFile, stateFile.name + ".tmp")
             stateFile.parentFile?.mkdirs()
-            RandomAccessFile(tmp, "rw").use { f ->
-                f.setLength(0)
+            FileOutputStream(tmp).use { file ->
+                DataOutputStream(BufferedOutputStream(file)).use { f ->
                 f.write(MAGIC)
                 f.writeInt(VERSION)
                 val identityBytes = identity.toByteArray(Charsets.UTF_8)
@@ -391,7 +393,9 @@ internal class SegmentStore(
                     f.writeLong(p.written)
                 }
                 // Make the new sidecar durable before replacing the old one.
-                f.fd.sync()
+                f.flush()
+                file.fd.sync()
+                }
             }
             // Keep the last durable snapshot until the new one is visible.
             // File.renameTo avoids java.nio.file (unavailable on Android 24/25).

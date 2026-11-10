@@ -125,6 +125,7 @@ class TailAssistTest {
         slowStart = false,
         workDir = work,
         segmentsPerConnection = 1,
+        maxSegmentsPerTask = 4,
         blockSize = 2L * 1024 * 1024,
         minSegmentSize = 2L * 1024 * 1024,
         tailAssist = assist,

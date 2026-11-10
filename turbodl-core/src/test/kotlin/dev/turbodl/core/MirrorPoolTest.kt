@@ -22,6 +22,30 @@ import kotlin.test.assertTrue
 class MirrorPoolTest {
 
     @Test
+    fun `an already probing cold source cannot starve a measured fast source`() {
+        val urls = listOf("http://slow.test/file", "http://fast.test/file")
+        val pool = MirrorPool(urls)
+        assertEquals(urls[0], pool.pickWithLimit())
+        assertEquals(urls[1], pool.pickWithLimit())
+        pool.report(urls[1], ok = true, bytes = 256L * 1024, elapsedMs = 1)
+        repeat(8) {
+            assertEquals(urls[1], pool.pickWithLimit())
+            pool.report(urls[1], ok = true, bytes = 256L * 1024, elapsedMs = 1)
+        }
+    }
+
+    @Test
+    fun `backoff fallback still respects every source connection cap`() {
+        val urls = listOf("http://mirror-a/file", "http://mirror-b/file")
+        val pool = MirrorPool(urls, perMirrorInFlightCap = 1)
+        urls.forEach { pool.report(it, ok = false, bytes = 0, elapsedMs = 1) }
+        val first = pool.pickWithLimit()
+        val second = pool.pickWithLimit()
+        assertTrue(first != null && second != null && first != second)
+        assertNull(pool.pickWithLimit())
+    }
+
+    @Test
     fun `per source cap is strict until a request completes`() {
         val pool = MirrorPool(
             urls = listOf("http://mirror-a/file", "http://mirror-b/file"),
@@ -138,6 +162,7 @@ class MirrorPoolTest {
             // 冷启动阶段每条来源都会被实测一次，但稳态应该明显偏向快的那个。
             val slowServed = slow.served.get()
             val fastServed = fast.served.get()
+            println("[MIRROR] fast=$fastServed slow=$slowServed")
             assertTrue(
                 fastServed > slowServed * 2,
                 "快的镜像应该承担大部分流量：fast=$fastServed slow=$slowServed",

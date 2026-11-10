@@ -121,7 +121,9 @@ internal class MirrorPool(
         if (available.isEmpty()) {
             // Keep the old "never deadlock on a pool whose sources are all in
             // backoff" behavior: pick the source that becomes available first.
-            val soonest = usable.minByOrNull { it.disabledUntilMs } ?: return null
+            val soonest = usable.filter {
+                perMirrorInFlightCap <= 0 || it.inFlight.get() < perMirrorInFlightCap
+            }.minByOrNull { it.disabledUntilMs } ?: return null
             soonest.inFlight.incrementAndGet()
             soonest.picked.incrementAndGet()
             return soonest.url
@@ -131,21 +133,15 @@ internal class MirrorPool(
         }
         if (candidates.isEmpty()) return null
 
-        var best: Mirror? = null
-        var bestScore = -1.0
-        for (m in candidates) {
-            if (m.samples == 0) {
-                best = m
-                break
-            }
-            val jitter = 0.92 + ThreadLocalRandom.current().nextDouble(0.16)
-            val score = m.ewmaBytesPerSec * jitter
-            if (score > bestScore) {
-                best = m
-                bestScore = score
-            }
+        // Give each new source a probe, without sending the whole task to a
+        // source whose first slow request is still being measured.
+        val cold = candidates.firstOrNull { it.samples == 0 && it.inFlight.get() == 0 }
+        val measured = candidates.filter { it.samples > 0 }
+        val chosen = cold ?: if (measured.isEmpty()) {
+            candidates.minByOrNull { it.inFlight.get() }!!
+        } else {
+            measured.maxByOrNull { it.ewmaBytesPerSec * (0.92 + ThreadLocalRandom.current().nextDouble(0.16)) }!!
         }
-        val chosen = best ?: candidates.first()
         chosen.inFlight.incrementAndGet()
         chosen.picked.incrementAndGet()
         chosen.url
