@@ -78,6 +78,12 @@ class ReconciliationConflict(BudgetError):
     exit_code = 4
 
 
+class GrantConflict(BudgetError):
+    """Raised when an authorization ID is reused with a different amount."""
+
+    exit_code = 4
+
+
 class RunNotFound(BudgetError):
     """Raised when reconciling a run that was never reserved."""
 
@@ -129,6 +135,23 @@ class OpenReservation:
 
 
 @dataclass(frozen=True)
+class GrantResult:
+    authorization_id: str
+    added_bytes: int
+    granted_at: str
+    duplicate: bool
+    total_bytes: int
+    remaining_bytes: int
+
+
+@dataclass(frozen=True)
+class BudgetGrant:
+    authorization_id: str
+    added_bytes: int
+    granted_at: str
+
+
+@dataclass(frozen=True)
 class BudgetReport:
     total_bytes: int
     consumed_bytes: int
@@ -138,6 +161,8 @@ class BudgetReport:
     open_reservation_count: int
     reconciled_run_count: int
     open_reservations: tuple[OpenReservation, ...]
+    granted_bytes: int = 0
+    grants: tuple[BudgetGrant, ...] = ()
 
 
 @dataclass
@@ -148,8 +173,17 @@ class _RunState:
 
 @dataclass
 class _LedgerState:
-    total_bytes: int
+    initial_total_bytes: int
     runs: dict[str, _RunState]
+    grants: dict[str, dict[str, Any]]
+
+    @property
+    def granted_bytes(self) -> int:
+        return sum(int(grant["added_bytes"]) for grant in self.grants.values())
+
+    @property
+    def total_bytes(self) -> int:
+        return self.initial_total_bytes + self.granted_bytes
 
     @property
     def consumed_bytes(self) -> int:
@@ -208,12 +242,32 @@ def _validate_bytes(name: str, value: int) -> int:
     return value
 
 
+def _validate_added_bytes(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("added_bytes must be a positive integer")
+    return value
+
+
 def _validate_run_id(run_id: str) -> str:
     if not isinstance(run_id, str) or not run_id or run_id != run_id.strip():
         raise ValueError("run_id must be a non-empty string without edge whitespace")
     if "\n" in run_id or "\r" in run_id:
         raise ValueError("run_id must not contain line breaks")
     return run_id
+
+
+def _validate_authorization_id(authorization_id: str) -> str:
+    if (
+        not isinstance(authorization_id, str)
+        or not authorization_id
+        or authorization_id != authorization_id.strip()
+    ):
+        raise ValueError(
+            "authorization_id must be a non-empty string without edge whitespace"
+        )
+    if "\n" in authorization_id or "\r" in authorization_id:
+        raise ValueError("authorization_id must not contain line breaks")
+    return authorization_id
 
 
 def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -289,13 +343,18 @@ class TrafficBudget:
         *,
         total_bytes: int = DEFAULT_TOTAL_BYTES,
         lock_timeout_s: float = 15.0,
+        ledger_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.total_bytes = _validate_total_bytes(total_bytes)
         if lock_timeout_s <= 0:
             raise ValueError("lock_timeout_s must be positive")
         self.lock_timeout_s = float(lock_timeout_s)
-        self.ledger_path = self.data_dir / LEDGER_FILENAME
+        self.ledger_path = (
+            Path(ledger_path)
+            if ledger_path is not None
+            else self.data_dir / LEDGER_FILENAME
+        )
         self.lock_path = self.data_dir / LOCK_FILENAME
 
     @contextlib.contextmanager
@@ -405,12 +464,48 @@ class TrafficBudget:
             )
 
         runs: dict[str, _RunState] = {}
+        grants: dict[str, dict[str, Any]] = {}
         for index, event in enumerate(events[1:], start=2):
             kind = event.get("event")
             if kind == "init":
                 raise LedgerCorrupted(
                     f"{self.ledger_path}: duplicate init event on line {index}"
                 )
+            if kind in {"grant", "extend"}:
+                authorization_id = _event_string(
+                    event, "authorization_id", path=self.ledger_path, line=index
+                )
+                try:
+                    _validate_authorization_id(authorization_id)
+                except ValueError as exc:
+                    raise LedgerCorrupted(
+                        f"{self.ledger_path}: invalid authorization_id "
+                        f"on line {index}"
+                    ) from exc
+                added = _event_int(
+                    event, "added_bytes", path=self.ledger_path, line=index
+                )
+                if added <= 0:
+                    raise LedgerCorrupted(
+                        f"{self.ledger_path}: invalid added_bytes on line {index}"
+                    )
+                _event_string(
+                    event, "granted_at", path=self.ledger_path, line=index
+                )
+                existing_grant = grants.get(authorization_id)
+                if existing_grant is not None:
+                    if int(existing_grant["added_bytes"]) != added:
+                        raise LedgerCorrupted(
+                            f"{self.ledger_path}: conflicting grant for "
+                            f"{authorization_id!r} on line {index}"
+                        )
+                    continue
+                grants[authorization_id] = {
+                    "authorization_id": authorization_id,
+                    "added_bytes": added,
+                    "granted_at": event["granted_at"],
+                }
+                continue
             run_id = _event_string(
                 event, "run_id", path=self.ledger_path, line=index
             )
@@ -470,7 +565,11 @@ class TrafficBudget:
                 raise LedgerCorrupted(
                     f"{self.ledger_path}: unknown event {kind!r} on line {index}"
                 )
-        return _LedgerState(total_bytes=total, runs=runs)
+        return _LedgerState(
+            initial_total_bytes=total,
+            runs=runs,
+            grants=grants,
+        )
 
     def _load_or_init_locked(self) -> _LedgerState:
         events = self._read_events_locked()
@@ -484,6 +583,66 @@ class TrafficBudget:
             self._append_event_locked(init)
             events = [init]
         return self._build_state_locked(events)
+
+    def grant(
+        self,
+        added_bytes: int,
+        authorization_id: str,
+    ) -> GrantResult:
+        """Append a unique authorization grant to the existing ledger.
+
+        The initial ledger total is never rewritten. Repeating the same
+        authorization ID and byte amount is idempotent; reusing the ID with a
+        different amount is rejected.
+        """
+
+        added = _validate_added_bytes(added_bytes)
+        authorization_id = _validate_authorization_id(authorization_id)
+
+        with self._exclusive_lock():
+            state = self._load_or_init_locked()
+            existing = state.grants.get(authorization_id)
+            if existing is not None:
+                old_added = int(existing["added_bytes"])
+                if old_added != added:
+                    raise GrantConflict(
+                        f"authorization {authorization_id!r} already grants "
+                        f"{old_added} bytes"
+                    )
+                return GrantResult(
+                    authorization_id=authorization_id,
+                    added_bytes=old_added,
+                    granted_at=str(existing["granted_at"]),
+                    duplicate=True,
+                    total_bytes=state.total_bytes,
+                    remaining_bytes=state.remaining_bytes,
+                )
+
+            granted_at = _utc_now()
+            event = {
+                "event": "grant",
+                "authorization_id": authorization_id,
+                "added_bytes": added,
+                "granted_at": granted_at,
+            }
+            self._append_event_locked(event)
+            return GrantResult(
+                authorization_id=authorization_id,
+                added_bytes=added,
+                granted_at=granted_at,
+                duplicate=False,
+                total_bytes=state.total_bytes + added,
+                remaining_bytes=state.remaining_bytes + added,
+            )
+
+    def extend(
+        self,
+        added_bytes: int,
+        authorization_id: str,
+    ) -> GrantResult:
+        """Alias for :meth:`grant`."""
+
+        return self.grant(added_bytes, authorization_id)
 
     def reserve(
         self,
@@ -659,6 +818,19 @@ class TrafficBudget:
                     key=lambda item: (item.reserved_at, item.run_id),
                 )
             )
+            grants = tuple(
+                sorted(
+                    (
+                        BudgetGrant(
+                            authorization_id=str(grant["authorization_id"]),
+                            added_bytes=int(grant["added_bytes"]),
+                            granted_at=str(grant["granted_at"]),
+                        )
+                        for grant in state.grants.values()
+                    ),
+                    key=lambda item: (item.granted_at, item.authorization_id),
+                )
+            )
             return BudgetReport(
                 total_bytes=state.total_bytes,
                 consumed_bytes=state.consumed_bytes,
@@ -668,6 +840,8 @@ class TrafficBudget:
                 open_reservation_count=len(open_items),
                 reconciled_run_count=state.reconciled_run_count,
                 open_reservations=open_items,
+                granted_bytes=state.granted_bytes,
+                grants=grants,
             )
 
 
@@ -694,11 +868,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Persistent byte-budget ledger for benchmark runs."
     )
-    parser.add_argument(
+    location_group = parser.add_mutually_exclusive_group()
+    location_group.add_argument(
         "--data-dir",
         type=Path,
         default=None,
         help="ledger directory (default: _bench/results/traffic-budget)",
+    )
+    location_group.add_argument(
+        "--ledger",
+        type=Path,
+        default=None,
+        help="ledger directory or JSONL ledger file",
     )
     total_group = parser.add_mutually_exclusive_group()
     total_group.add_argument(
@@ -716,6 +897,26 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json_flag(parser)
 
     commands = parser.add_subparsers(dest="command", required=True)
+
+    grant = commands.add_parser(
+        "grant",
+        aliases=["extend"],
+        help="append an authorization grant",
+    )
+    grant.add_argument("--bytes", dest="added_bytes", type=int, required=True)
+    grant.add_argument(
+        "--authorization",
+        "--authorization-id",
+        dest="authorization_id",
+        required=True,
+    )
+    grant.add_argument(
+        "--ledger",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="ledger directory or JSONL ledger file",
+    )
+    _add_json_flag(grant)
 
     reserve = commands.add_parser("reserve", help="reserve bytes for a run")
     reserve.add_argument("--run-id", required=True)
@@ -759,7 +960,25 @@ def _budget_from_args(args: argparse.Namespace) -> TrafficBudget:
         total_bytes = args.total_mib * MIB
     else:
         total_bytes = DEFAULT_TOTAL_BYTES
-    return TrafficBudget(args.data_dir or default_data_dir(), total_bytes=total_bytes)
+
+    ledger_arg = getattr(args, "ledger", None)
+    if ledger_arg is not None:
+        ledger_path = Path(ledger_arg)
+        if (
+            ledger_path.name == LEDGER_FILENAME
+            or ledger_path.suffix.lower() == ".jsonl"
+        ):
+            return TrafficBudget(
+                ledger_path.parent,
+                total_bytes=total_bytes,
+                ledger_path=ledger_path,
+            )
+        return TrafficBudget(ledger_path, total_bytes=total_bytes)
+
+    return TrafficBudget(
+        args.data_dir or default_data_dir(),
+        total_bytes=total_bytes,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -769,6 +988,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         budget = _budget_from_args(args)
+        if args.command in {"grant", "extend"}:
+            grant = budget.grant(args.added_bytes, args.authorization_id)
+            if emit_json:
+                _print_json(
+                    {
+                        "ok": True,
+                        "action": "grant",
+                        **asdict(grant),
+                    }
+                )
+            else:
+                print(
+                    f"granted authorization={grant.authorization_id} "
+                    f"added={grant.added_bytes} total={grant.total_bytes} "
+                    f"remaining={grant.remaining_bytes} "
+                    f"duplicate={str(grant.duplicate).lower()}"
+                )
+            return 0
+
         if args.command == "reserve":
             try:
                 metadata = json.loads(args.metadata)

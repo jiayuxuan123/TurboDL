@@ -160,6 +160,19 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val completions = ConcurrentHashMap<Long, CompletableDeferred<Result<File>>>()
     private val requests = ConcurrentHashMap<Long, DownloadRequest>()
+    private val transferPolicies = ConcurrentHashMap<Long, TaskTransferPolicy>()
+    private val transferDetails = ConcurrentHashMap<Long, TaskTelemetry>()
+
+    /** Details are independent of the legacy event hierarchy and contain no URLs or credentials. */
+    fun taskDetails(id: Long): TaskTransferDetails? = transferDetails[id]?.snapshot()
+
+    @JvmOverloads
+    fun submitWithPolicy(
+        request: DownloadRequest,
+        policy: TaskTransferPolicy,
+        workDir: File? = null,
+        resumePolicy: UnverifiableResumePolicy = UnverifiableResumePolicy.ALLOW,
+    ): Long = submitInternal(request, resumePolicy, workDir, policy.snapshot(config))
     private val resumePolicies = ConcurrentHashMap<Long, UnverifiableResumePolicy>()
     private val taskWorkDirs = ConcurrentHashMap<Long, File>()
     /**
@@ -228,8 +241,19 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         submit(request, policy, null)
 
     fun submit(request: DownloadRequest, policy: UnverifiableResumePolicy, workDir: File?): Long {
+        return submitInternal(request, policy, workDir, null)
+    }
+
+    private fun submitInternal(
+        request: DownloadRequest,
+        policy: UnverifiableResumePolicy,
+        workDir: File?,
+        transferPolicy: TaskTransferPolicy?,
+    ): Long {
         check(!closed.get()) { "TurboClient 已关闭" }
         val id = idGen.incrementAndGet()
+        transferPolicy?.let { transferPolicies[id] = it }
+        transferDetails[id] = TaskTelemetry(id, request.connectionsOverride ?: config.maxConnectionsPerTask)
         requests[id] = request
         resumePolicies[id] = policy
         if (workDir != null) taskWorkDirs[id] = workDir
@@ -242,6 +266,8 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         if (closed.get()) {
             completions.remove(id)
             requests.remove(id)
+            transferPolicies.remove(id)
+            transferDetails.remove(id)
             resumePolicies.remove(id)
             taskWorkDirs.remove(id)
             _progress.update { it - id }
@@ -295,6 +321,15 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     /** 挂起直到任务结束，返回结果（成功=文件，失败=异常）。 */
     suspend fun await(id: Long): Result<File> =
         completions[id]?.await() ?: Result.failure(IllegalArgumentException("未知任务 $id"))
+
+    /** Wait for writers and control cleanups before reusing a stable-key destination. */
+    suspend fun awaitSettled(id: Long) {
+        val job = jobs[id]
+        check(job == null || job !== coroutineContext[Job]) { "Cannot await the current task from its backend" }
+        job?.join()
+        pauseCleanup[id]?.join()
+        cancelCleanup[id]?.join()
+    }
 
     /** 暂停任务（保留断点）。 */
     fun pause(id: Long) {
@@ -366,6 +401,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         // observes the resumed task, not the stale pause result.
         pauseRequested.remove(id)
         completions[id] = CompletableDeferred()
+        transferDetails[id] = TaskTelemetry(id, req.connectionsOverride ?: config.maxConnectionsPerTask)
         setState(id, req, TaskState.QUEUED)
 
         val job = scope.launch {
@@ -574,7 +610,8 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             override val unverifiableResumePolicy: UnverifiableResumePolicy = policy
             override val request: DownloadRequest = request
             override val workDir: File = chunkDir
-            override val config: TurboConfig get() = this@TurboClient.config
+            override val config: TurboConfig get() = transferPolicies[id]?.effectiveConfig(this@TurboClient.config)
+                ?: this@TurboClient.config
             override fun isActive(): Boolean = taskJob?.isActive == true
             override suspend fun throttle(bytes: Long) = speedLimiter.awaitAllow(bytes)
             override fun reportTotalSize(total: Long) { totalRef.set(total) }
@@ -661,10 +698,14 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         }
 
         setState(id, request, TaskState.DOWNLOADING)
+        transferDetails[id]?.phase(TransferPhase.PROBING)
+        transferDetails[id]?.let { downloader.attachTelemetry(id, it, transferPolicies[id]?.backpressureGroup,
+            context.config.backpressureConsecutiveFailures > 0) }
 
         // Delegate the protocol layer to the resolved backend (built-in HTTP by default;
         // a plugin backend when the optional runtime installs a resolver).
         val backend = backendFor(request, policy)
+        transferDetails[id]?.requestMetricsAvailable = backend is BuiltinHttpBackend
         if (context.unverifiableResumePolicy == UnverifiableResumePolicy.FAIL && backend !is BuiltinHttpBackend) {
             throw UnsupportedOperationException("Resume verification policy is unsupported by backend ${backend.name}")
         }
@@ -680,6 +721,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         offsets: List<Long>? = null,
     ) {
         setState(id, request, TaskState.MERGING)
+        transferDetails[id]?.phase(TransferPhase.FINALIZING)
         val dest = request.destination
         // 【预先合并命中】后端已把完整数据写进目标文件（overlap merge），
         // parts 就是目标文件本身 —— 此时**不能再合并一次**（那是把文件拷到自己身上）。
@@ -707,6 +749,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             throw IllegalStateException("大小校验失败：期望 $total，实际 ${dest.length()}")
         }
         request.expectedSha256?.let { expected ->
+            transferDetails[id]?.phase(TransferPhase.VERIFYING)
             val actual = withContext(Dispatchers.IO) { sha256Of(dest) }
             if (!actual.equals(expected, ignoreCase = true)) {
                 // The bytes are complete by length but proven wrong. Drop the
@@ -764,6 +807,17 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     }
 
     private fun setState(id: Long, request: DownloadRequest, state: TaskState) {
+        val phase = when (state) {
+            TaskState.QUEUED -> TransferPhase.QUEUED
+            TaskState.PROBING -> TransferPhase.PROBING
+            TaskState.MERGING -> TransferPhase.FINALIZING
+            TaskState.COMPLETED -> TransferPhase.COMPLETED
+            TaskState.PAUSED -> TransferPhase.PAUSED
+            TaskState.CANCELED -> TransferPhase.CANCELED
+            TaskState.FAILED -> TransferPhase.FAILED
+            else -> null
+        }
+        phase?.let { transferDetails[id]?.phase(it) }
         updateProgress(id) { it.copy(state = state) }
         emit(TurboEvent.StateChanged(id, state))
         if (state.isTerminal()) rememberTerminal(id)
@@ -781,6 +835,8 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                 if (oldest == id) continue
                 terminalSet.remove(oldest)
                 requests.remove(oldest)
+                transferPolicies.remove(oldest)
+                transferDetails.remove(oldest)
                 resumePolicies.remove(oldest)
                 taskWorkDirs.remove(oldest)
                 completions.remove(oldest)
@@ -796,7 +852,10 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             changed = current != null && !current.state.isTerminal()
             if (changed) progressById + (id to current!!.copy(state = state)) else progressById
         }
-        if (changed) emit(TurboEvent.StateChanged(id, state))
+        if (changed) {
+            if (state == TaskState.PAUSED) transferDetails[id]?.phase(TransferPhase.PAUSED)
+            emit(TurboEvent.StateChanged(id, state))
+        }
         return changed
     }
 

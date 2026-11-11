@@ -1138,7 +1138,7 @@ internal class SegmentScheduler(
                                 if (picked == null) {
                                     if (!mirrors.hasUsableSources()) {
                                         failTask(
-                                            "所有镜像来源均已判定为不同文件，无法安全继续",
+                                            mirrors.unavailableReason(),
                                         )
                                         break
                                     }
@@ -1308,15 +1308,24 @@ internal class SegmentScheduler(
                                         // 打断，否则一个已经注定失败的任务要白等满整段退避。
                                         // 【服务器说了算】429/503 常带 Retry-After —— 它比任何指数退避都准确：
                                         // 等太短会继续被拒（白烧重试预算），等太长则白白拖慢整个任务。
-                                        val serverHint = downloader.takeRetryAfterMs(taskId)
+                                        val serverHint = downloader.takeRetryAfterMs(taskId, attemptUrl)
+                                        if (serverHint != null && serverHint > 120_000L) {
+                                            if (mirrors != null) {
+                                                mirrors.retireForTask(attemptUrl)
+                                                if (mirrors.hasUsableSources()) offer(seg)
+                                                else failTask(mirrors.unavailableReason())
+                                            } else failTask("来源要求较长时间限流，已保留断点，请稍后重试")
+                                        } else {
                                         val waitMs = serverHint
                                             ?: backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(maxShift))
                                         var waited = 0L
-                                        while (waited < waitMs && failReason.get() == null && isActive()) {
+                                        while (!downloader.sharesCooldown(taskId, attemptUrl) &&
+                                            waited < waitMs && failReason.get() == null && isActive()) {
                                             delay(200)
                                             waited += 200
                                         }
                                         if (failReason.get() == null && isActive()) offer(seg)
+                                        }
                                     }
                                 }
                                 SegmentResult.SOURCE_MISMATCH -> {

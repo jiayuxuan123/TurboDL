@@ -84,6 +84,7 @@ internal class BuiltinHttpBackend(
                     request.headers,
                     timeoutMs = context.config.probeTimeoutMs,
                     retries = context.config.probeRetries,
+                    taskId = context.taskId,
                     useSegmentClient = (request.connectionsOverride
                         ?: context.config.maxConnectionsPerTask) > 1,
                 )

@@ -1,0 +1,64 @@
+{
+  "version": "0.5.0.3",
+  "baseline_commit": "a7b7cd67b16306ed3712e4ff1a63b6bf38859798",
+  "modules": {
+    "turbodl-core": {
+      "suites": 88,
+      "tests": 329,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbodl-cli": {
+      "suites": 1,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-hls": {
+      "suites": 6,
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-js": {
+      "suites": 11,
+      "tests": 120,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-parser": {
+      "suites": 3,
+      "tests": 42,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-bootstrap": {
+      "suites": 1,
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "turbo-plugin-runtime": {
+      "suites": 5,
+      "tests": 65,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "suites": 115,
+  "tests": 629,
+  "python_harness_tests": 36,
+  "core_jar_sha256": "df8ab994ba2b1da6f9ea52042b845dcd38ff8be84bbdad2f034bd2ad58a74c25",
+  "benchmark_artifact_matches": true,
+  "notes": [
+    "Default-disabled or zero-transfer diagnostic benchmarks are not performance evidence.",
+    "No Android device connected. Native target runtime verified only on Windows x86_64."
+  ]
+}

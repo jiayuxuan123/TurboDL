@@ -163,6 +163,270 @@ class TrafficBudgetTests(unittest.TestCase):
         with self.assertRaises(tb.LedgerCorrupted):
             budget.reconcile("run-damaged", 100)
 
+    def test_grant_is_idempotent_and_does_not_rewrite_init(self) -> None:
+        budget = tb.TrafficBudget(self.data_dir, total_bytes=1000)
+        first = budget.grant(400, "authorization-a")
+        self.assertFalse(first.duplicate)
+        self.assertEqual(first.total_bytes, 1400)
+        self.assertEqual(first.remaining_bytes, 1400)
+
+        reloaded = tb.TrafficBudget(self.data_dir, total_bytes=1000)
+        duplicate = reloaded.grant(400, "authorization-a")
+        self.assertTrue(duplicate.duplicate)
+        self.assertEqual(duplicate.total_bytes, 1400)
+        alias_duplicate = reloaded.extend(400, "authorization-a")
+        self.assertTrue(alias_duplicate.duplicate)
+
+        payloads = [
+            json.loads(line)["payload"]
+            for line in reloaded.ledger_path.read_text(
+                encoding="utf-8"
+            ).splitlines()
+        ]
+        self.assertEqual(payloads[0]["event"], "init")
+        self.assertEqual(payloads[0]["total_bytes"], 1000)
+        self.assertEqual(
+            [
+                event
+                for event in payloads
+                if event["event"] in {"grant", "extend"}
+            ],
+            [
+                {
+                    "event": "grant",
+                    "authorization_id": "authorization-a",
+                    "added_bytes": 400,
+                    "granted_at": first.granted_at,
+                }
+            ],
+        )
+        report = reloaded.report()
+        self.assertEqual(report.granted_bytes, 400)
+        self.assertEqual(report.total_bytes, 1400)
+        self.assertEqual(len(report.grants), 1)
+
+    def test_grant_conflict_does_not_extend_budget(self) -> None:
+        budget = tb.TrafficBudget(self.data_dir, total_bytes=1000)
+        budget.grant(400, "shared-authorization")
+        with self.assertRaises(tb.GrantConflict):
+            budget.grant(401, "shared-authorization")
+        report = budget.report()
+        self.assertEqual(report.granted_bytes, 400)
+        self.assertEqual(report.total_bytes, 1400)
+
+    def test_grant_preserves_reserved_bytes_and_balance(self) -> None:
+        budget = tb.TrafficBudget(self.data_dir, total_bytes=1000)
+        budget.reserve("existing-run", 700)
+        grant = budget.grant(500, "reserved-extension")
+        self.assertEqual(grant.total_bytes, 1500)
+        self.assertEqual(grant.remaining_bytes, 800)
+
+        report = budget.report()
+        self.assertEqual(report.reserved_bytes, 700)
+        self.assertEqual(report.used_bytes, 700)
+        self.assertEqual(report.remaining_bytes, 800)
+        budget.reserve("post-grant-run", 800)
+        self.assertEqual(budget.remaining_bytes(), 0)
+
+    def test_old_reserve_reconcile_ledger_remains_compatible(self) -> None:
+        self.data_dir.mkdir(parents=True)
+        old_events = [
+            {
+                "event": "init",
+                "schema_version": tb.SCHEMA_VERSION,
+                "total_bytes": 1000,
+                "created_at": "2026-01-01T00:00:00.000000Z",
+            },
+            {
+                "event": "reserve",
+                "run_id": "old-run",
+                "estimated_bytes": 100,
+                "metadata": {"case": "old-ledger"},
+                "reserved_at": "2026-01-01T00:00:01.000000Z",
+            },
+            {
+                "event": "reconcile",
+                "run_id": "old-run",
+                "actual_response_bytes": 80,
+                "status": "completed",
+                "reconciled_at": "2026-01-01T00:00:02.000000Z",
+            },
+        ]
+        ledger_path = self.data_dir / tb.LEDGER_FILENAME
+        ledger_path.write_bytes(
+            b"".join(tb._encode_record(event) for event in old_events)
+        )
+
+        budget = tb.TrafficBudget(self.data_dir, total_bytes=1000)
+        report = budget.report()
+        self.assertEqual(report.total_bytes, 1000)
+        self.assertEqual(report.consumed_bytes, 80)
+        self.assertEqual(report.reserved_bytes, 0)
+        self.assertEqual(report.granted_bytes, 0)
+
+        budget.grant(200, "old-ledger-extension")
+        updated = budget.report()
+        self.assertEqual(updated.total_bytes, 1200)
+        self.assertEqual(updated.consumed_bytes, 80)
+        self.assertEqual(updated.remaining_bytes, 1120)
+
+    def test_damaged_grant_record_is_rejected_without_append(self) -> None:
+        budget = tb.TrafficBudget(self.data_dir, total_bytes=1000)
+        budget.grant(100, "damaged-grant")
+        raw = budget.ledger_path.read_text(encoding="utf-8")
+        damaged = raw.replace('"added_bytes":100', '"added_bytes":900', 1)
+        self.assertNotEqual(raw, damaged)
+        budget.ledger_path.write_text(damaged, encoding="utf-8")
+
+        with self.assertRaises(tb.LedgerCorrupted):
+            budget.report()
+        before = budget.ledger_path.read_bytes()
+        with self.assertRaises(tb.LedgerCorrupted):
+            budget.grant(100, "damaged-grant")
+        self.assertEqual(budget.ledger_path.read_bytes(), before)
+
+    def test_cli_grant_uses_default_initial_eight_gib(self) -> None:
+        ledger_path = self.data_dir / tb.LEDGER_FILENAME
+        base = [
+            sys.executable,
+            str(MODULE_PATH),
+            "--ledger",
+            str(ledger_path),
+            "--json",
+        ]
+        added = 4 * 1024 * 1024 * 1024
+        authorization = "release-0.5.0.3-20261111-4g"
+        first = subprocess.run(
+            base
+            + [
+                "grant",
+                "--bytes",
+                str(added),
+                "--authorization",
+                authorization,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        first_payload = json.loads(first.stdout)
+        self.assertFalse(first_payload["duplicate"])
+        self.assertEqual(first_payload["added_bytes"], added)
+        self.assertEqual(first_payload["total_bytes"], 12 * 1024 * 1024 * 1024)
+
+        duplicate = subprocess.run(
+            base
+            + [
+                "grant",
+                "--bytes",
+                str(added),
+                "--authorization",
+                authorization,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertTrue(json.loads(duplicate.stdout)["duplicate"])
+
+        conflict = subprocess.run(
+            base
+            + [
+                "grant",
+                "--bytes",
+                str(added - 1),
+                "--authorization",
+                authorization,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(conflict.returncode, tb.GrantConflict.exit_code)
+        self.assertEqual(
+            json.loads(conflict.stdout)["error"], "GrantConflict"
+        )
+
+        report = subprocess.run(
+            base + ["report"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        report_payload = json.loads(report.stdout)["report"]
+        self.assertEqual(
+            report_payload["total_bytes"], 12 * 1024 * 1024 * 1024
+        )
+        self.assertEqual(report_payload["granted_bytes"], added)
+
+        event_payloads = [
+            json.loads(line)["payload"]
+            for line in ledger_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(event_payloads[0]["event"], "init")
+        self.assertEqual(
+            event_payloads[0]["total_bytes"], tb.DEFAULT_TOTAL_BYTES
+        )
+        self.assertEqual(
+            len(
+                [
+                    event
+                    for event in event_payloads
+                    if event["event"] in {"grant", "extend"}
+                ]
+            ),
+            1,
+        )
+
+    def test_concurrent_grants_with_same_authorization_are_idempotent(self) -> None:
+        commands = [
+            [
+                sys.executable,
+                str(MODULE_PATH),
+                "--ledger",
+                str(self.data_dir),
+                "--total-bytes",
+                "1000",
+                "--json",
+                "grant",
+                "--bytes",
+                "100",
+                "--authorization",
+                "concurrent-authorization",
+            ]
+            for _ in range(8)
+        ]
+        processes = [
+            subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            for command in commands
+        ]
+        completed = [
+            (process, *process.communicate(timeout=30)) for process in processes
+        ]
+
+        duplicates = 0
+        for process, stdout, stderr in completed:
+            self.assertEqual(process.returncode, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["added_bytes"], 100)
+            duplicates += int(payload["duplicate"])
+        self.assertEqual(duplicates, len(commands) - 1)
+
+        report = tb.TrafficBudget(self.data_dir, total_bytes=1000).report()
+        self.assertEqual(report.total_bytes, 1100)
+        self.assertEqual(report.granted_bytes, 100)
+        self.assertEqual(len(report.grants), 1)
+
     def test_overrun_signal_starts_above_twenty_percent(self) -> None:
         budget = tb.TrafficBudget(self.data_dir, total_bytes=1000)
         budget.reserve("at-threshold", 100)

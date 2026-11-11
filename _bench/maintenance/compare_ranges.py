@@ -74,8 +74,12 @@ class ResourceSampler:
 class Wenxi:
     def __init__(self, executable, log):
         self.stderr = log.open("w", encoding="utf-8")
+        env = os.environ.copy()
+        for key in list(env):
+            if key.lower() in ('http_proxy', 'https_proxy', 'all_proxy'):
+                env.pop(key)
         self.process = subprocess.Popen([str(executable)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=self.stderr, text=True, encoding="utf-8", bufsize=1)
+                                        stderr=self.stderr, text=True, encoding="utf-8", bufsize=1, env=env)
         self.responses = queue.Queue()
         self.seq = 0
 

@@ -80,6 +80,28 @@ internal class SegmentDownloader(
     private val client get() = clientProvider()
     private val streamClient get() = (streamClientProvider ?: clientProvider)()
     private val activeCalls = ConcurrentHashMap<Long, MutableSet<okhttp3.Call>>()
+    private val telemetry = ConcurrentHashMap<Long, TaskTelemetry>()
+    private val cooldownGroups = ConcurrentHashMap<Long, String>()
+    private val sharedBackpressure = ConcurrentHashMap<Long, Boolean>()
+    private val cooldowns = SourceCooldowns()
+    private val retryAfterBySource = ConcurrentHashMap<Pair<Long, String>, Long>()
+
+    internal fun takeRetryAfterMs(taskId: Long, url: String): Long? = retryAfterBySource.remove(taskId to url)
+
+    internal fun attachTelemetry(taskId: Long, details: TaskTelemetry, group: String? = null, recoverConcurrency: Boolean = true) {
+        telemetry[taskId] = details
+        sharedBackpressure[taskId] = recoverConcurrency
+        if (group != null) cooldownGroups[taskId] = group else cooldownGroups.remove(taskId)
+        details.onHttpResponse = { url, code, hint ->
+            if (code == 429 || code == 503) cooldownGroups[taskId]?.let { sourceGroup ->
+                cooldowns.defer(url, sourceGroup, parseRetryAfter(hint) ?: 1_000L,
+                    sharedBackpressure[taskId] != false, details.connections)
+            }
+        }
+    }
+
+    internal fun sharesCooldown(taskId: Long, url: String): Boolean =
+        cooldownGroups[taskId]?.let { cooldowns.isCooling(url, it) } == true
 
     /**
      * 各任务**已学习到的重定向终址**（原始链 → CDN 临时直链）。
@@ -143,7 +165,7 @@ internal class SegmentDownloader(
         val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         raw.toLongOrNull()?.let { secs ->
             // 秒数形式：0 是合法的（"立刻重试"）。
-            return (secs * 1000L).coerceIn(0L, MAX_RETRY_AFTER_MS)
+            return secs.coerceIn(0L, MAX_RETRY_AFTER_MS / 1000L) * 1000L
         }
         val date = runCatching {
             java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
@@ -210,6 +232,10 @@ internal class SegmentDownloader(
             firstRequestOwners.remove(key)
         }
         activeCalls.remove(taskId)
+        telemetry.remove(taskId)
+        cooldownGroups.remove(taskId)
+        sharedBackpressure.remove(taskId)
+        retryAfterBySource.keys.removeAll { it.first == taskId }
     }
 
     companion object {
@@ -231,7 +257,7 @@ internal class SegmentDownloader(
         private const val WRITE_BUFFER_BYTES = 64 * 1024
 
         /** `Retry-After` 的上限：超过两分钟就不值得干等，宁可退避重投（可能换到别的节点）。 */
-        private const val MAX_RETRY_AFTER_MS = 120_000L
+        private const val MAX_RETRY_AFTER_MS = 7L * 24 * 60 * 60 * 1000
 
     }
 
@@ -438,11 +464,15 @@ internal class SegmentDownloader(
         userAgentOverride: String? = null,
         /** Use the segment client so its pool can reuse the probe connection. */
         useSegmentClient: Boolean = false,
+        taskId: Long? = null,
     ): ProbeResult =
         withContext(Dispatchers.IO) {
+            taskId?.let { id -> cooldownGroups[id]?.let { cooldowns.await(url, it) } }
             val req = Request.Builder()
                 .url(url)
                 .tag(RequestOrigin::class.java, RequestOrigin(url))
+                .tag(TaskTelemetry::class.java, taskId?.let { telemetry[it] })
+                .tag(ProbeCall::class.java, ProbeCall)
                 .header("Range", rangeSpec)
                 .apply { headers.forEach { (k, v) -> header(k, v) } }
                 // 协商用的 UA 要在 headers **之后**设置：headers 里带的那份不生效时，
@@ -576,6 +606,7 @@ internal class SegmentDownloader(
         timeoutMs: Long,
         initial: ProbeResult,
         useSegmentClient: Boolean,
+        taskId: Long? = null,
     ): ProbeResult {
         val explicit = headers.keys.any { it.equals("User-Agent", ignoreCase = true) }
         if (explicit) return initial
@@ -590,7 +621,7 @@ internal class SegmentDownloader(
                 timeoutMs = timeoutMs,
                 rangeSpec = RANGE_MIN,
                 userAgentOverride = ua,
-                useSegmentClient = useSegmentClient,
+                useSegmentClient = useSegmentClient, taskId = taskId,
             )
             // 换到 UA 之后必须**真的能下**才算数：拿到 Range 支持，或至少不再是 HTML/401/403。
             val stillBlocked = r.contentType.orEmpty().contains("text/html", ignoreCase = true) ||
@@ -674,6 +705,7 @@ internal class SegmentDownloader(
         timeoutMs: Long,
         retries: Int,
         useSegmentClient: Boolean = false,
+        taskId: Long? = null,
     ): ProbeResult {
         var last = ProbeResult(null, false, url)
         // UA 协商只做一次（结论对一个域名是稳定的），协商出结果就贯穿整个任务。
@@ -690,7 +722,7 @@ internal class SegmentDownloader(
                 timeoutMs = timeoutMs,
                 rangeSpec = RANGE_MIN,
                 userAgentOverride = negotiated,
-                useSegmentClient = useSegmentClient,
+                useSegmentClient = useSegmentClient, taskId = taskId,
             )
             last = r
             if (r.supportsRange) return r
@@ -704,7 +736,7 @@ internal class SegmentDownloader(
             if (r.statusCode == 401 || r.statusCode == 403 ||
                 r.contentType.orEmpty().contains("text/html", ignoreCase = true)
             ) {
-                val n = negotiateUserAgent(url, headers, timeoutMs, r, useSegmentClient)
+                val n = negotiateUserAgent(url, headers, timeoutMs, r, useSegmentClient, taskId)
                 if (n.negotiatedUserAgent != null) {
                     negotiated = n.negotiatedUserAgent
                     last = n
@@ -737,7 +769,7 @@ internal class SegmentDownloader(
                     timeoutMs = timeoutMs,
                     rangeSpec = RANGE_FROM_START,
                     userAgentOverride = negotiated,
-                    useSegmentClient = useSegmentClient,
+                    useSegmentClient = useSegmentClient, taskId = taskId,
                 )
                 if (r2.supportsRange) return r2
                 if (r2.contentType.orEmpty().contains("text/html", ignoreCase = true)) return r2
@@ -839,19 +871,30 @@ internal class SegmentDownloader(
         // learner. Recheck before creating a Call so cancellation cannot race
         // past an unregistered request.
         if (taskId in cancelledSegmentTasks) return SegmentResult.FAILED
+        if (taskId in cancelledSegmentTasks) return SegmentResult.FAILED
         val target = urlFor(taskId, url)
         val req = Request.Builder()
             .url(target)
             .tag(RequestOrigin::class.java, RequestOrigin(url))
+            .tag(TaskTelemetry::class.java, telemetry[taskId])
             .header("Range", "bytes=$from-$end")
             .apply { if (!ifRange.isNullOrBlank()) header("If-Range", ifRange) }
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .header("Accept-Encoding", "identity")
             .get().build()
+        val sourceLease = try {
+            cooldownGroups[taskId]?.let { cooldowns.acquire(url, it, sharedBackpressure[taskId] != false) }
+        } catch (deferred: SourceCooldownDeferred) {
+            retryAfterByTask[taskId] = deferred.retryAfterMs
+            retryAfterBySource[taskId to url] = deferred.retryAfterMs
+            return SegmentResult.THROTTLED
+        }
+        if (taskId in cancelledSegmentTasks) { sourceLease?.release(); return SegmentResult.FAILED }
         val call = client.newCall(req)
         activeCalls.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(call)
         onCallStarted?.invoke(call)
         val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+        var completed = false
         return try {
             call.execute().use { resp ->
                 if (resp.isSuccessful || resp.code == 416) {
@@ -868,8 +911,12 @@ internal class SegmentDownloader(
                 when (val code = resp.code) {
                     429, 503 -> {
                         // 服务器说了"多久之后再来"就听它的：盲目退避要么继续被拒，要么白等。
-                        parseRetryAfter(resp.header("Retry-After"))
-                            ?.let { retryAfterByTask[taskId] = it }
+                        val retryAfter = parseRetryAfter(resp.header("Retry-After"))
+                        retryAfter?.let { retryAfterByTask[taskId] = it; retryAfterBySource[taskId to url] = it }
+                        cooldownGroups[taskId]?.let { group ->
+                            cooldowns.defer(url, group, retryAfter ?: 1_000L,
+                                sharedBackpressure[taskId] != false, telemetry[taskId]?.connections ?: 1)
+                        }
                         SegmentResult.THROTTLED
                     }
                     206 -> {
@@ -955,7 +1002,7 @@ internal class SegmentDownloader(
                         }
                     }
                 }
-            }
+            }.also { completed = it == SegmentResult.OK }
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
@@ -963,6 +1010,7 @@ internal class SegmentDownloader(
             reportFailure(describeIoFailure(e))
             SegmentResult.FAILED
         } finally {
+            sourceLease?.release(completed)
             if (isFirstRequest) {
                 gate.complete(Unit)
             }
@@ -1180,6 +1228,7 @@ internal class SegmentDownloader(
         val req = Request.Builder()
             .url(target)
             .tag(RequestOrigin::class.java, RequestOrigin(url))
+            .tag(TaskTelemetry::class.java, telemetry[taskId])
             .header("Range", "bytes=$from-$end")
             .apply { if (!ifRange.isNullOrBlank()) header("If-Range", ifRange) }
             .apply { headers.forEach { (k, v) -> header(k, v) } }
@@ -1303,6 +1352,7 @@ internal class SegmentDownloader(
         val req = Request.Builder()
             .url(url)
             .tag(RequestOrigin::class.java, RequestOrigin(url))
+            .tag(TaskTelemetry::class.java, telemetry[taskId])
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .header("Accept-Encoding", "identity")
             .get().build()

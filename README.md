@@ -1,6 +1,6 @@
 # TurboDL
 
-当前维护版本：**0.5.0.2**。本版包含 HTTP 调度、断点落盘、镜像选择和 HLS 优化，详见[完整更新日志](engineering/maintenance/RELEASE-0.5.0.2.md)。
+当前维护版本：**0.5.0.3**（Kotlin/JVM 依赖包 `turbodl-core`）。本版增加任务级传输策略与执行诊断，详见[0.5.0.3 更新日志](engineering/maintenance/RELEASE-0.5.0.3.md)；上一版 [0.5.0.2 历史记录](engineering/maintenance/RELEASE-0.5.0.2.md)保留。
 
 > High-performance multi-threaded download engine SDK — the core remains pure Kotlin/JVM with no Android dependency and is embeddable in any JVM application (including Android). An optional native CLI fast path adds instant startup and a Zig HTTP data plane.
 
@@ -167,6 +167,64 @@ For the built-in HTTP backend, hosts can call
 saved progress when resume verification cannot be performed. Unsupported
 custom backends reject this policy. A matching sampled fingerprint does not
 guarantee complete file integrity; supply `expectedSha256` when available.
+
+## Task-level policy and details (0.5.0.3)
+
+The existing `submit(...)` overloads keep their original behavior. For one task,
+build an immutable `TaskTransferPolicy` with `TaskTransferPolicy.builder()` and
+call `submitWithPolicy(...)`. The client snapshots task-level segment size,
+block size, segments per connection, slow-start settings, adaptive-concurrency
+mode and per-host connection cap at submission; later changes to `TurboConfig`
+do not rewrite that task. Global `maxTotalConnections` and
+`globalSpeedLimitBytesPerSec` remain client-wide limits.
+
+`backpressureGroup` is optional. Shared source/group cooldown currently applies
+only to the built-in HTTP backend; different sources or groups do not share it.
+`backpressureConsecutiveFailures = 0` still turns backpressure off, and setting
+a group does not by itself reduce concurrency.
+
+```kotlin
+val policy = TaskTransferPolicy.builder()
+    .minSegmentSize(4L * 1024 * 1024)
+    .blockSize(1L * 1024 * 1024)
+    .segmentsPerConnection(2)
+    .slowStart(true)
+    .slowStartInitial(2)
+    .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.DOWNWARD)
+    .maxConnectionsPerHost(8)
+    .backpressureGroup("origin-a") // optional
+    .build()
+
+val id = client.submitWithPolicy(
+    DownloadRequest(
+        url = "https://example.com/big.zip",
+        destination = File("big.zip"),
+    ),
+    policy,
+)
+
+// Existing entry point and behavior are unchanged.
+val legacyId = client.submit(
+    DownloadRequest(
+        url = "https://example.com/legacy.zip",
+        destination = File("legacy.zip"),
+    ),
+)
+
+val details = client.taskDetails(id)
+if (details != null) {
+    println("phase=${details.phase}")
+    println("active HTTP requests=${details.activeRequests}, peak=${details.peakActiveRequests}")
+    println("request count=${details.requestCount}, received=${details.receivedBytes}")
+}
+```
+
+When request metrics are available, `activeRequests` and `peakActiveRequests`
+count in-flight HTTP calls, not physical TCP sockets. If
+`requestMetricsAvailable` is `false`, do not treat `activeRequests`,
+`peakActiveRequests` or `requestCount` as valid. These counters currently come
+from the built-in HTTP backend; HLS, JS-plugin, native and other paths do not
+all share them.
 
 ## Command line
 

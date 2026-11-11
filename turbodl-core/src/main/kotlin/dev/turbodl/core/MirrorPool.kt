@@ -39,12 +39,13 @@ internal class MirrorPool(
         @Volatile var disabledUntilMs: Long = 0L
         /** Set only when the source is proven to be a different object/file. */
         @Volatile var permanentlyFailed: Boolean = false
+        @Volatile var retiredForTask: Boolean = false
         @Volatile var totalBytes: Long = 0L
         val inFlight = AtomicInteger(0)
         val picked = AtomicLong(0)
 
         fun available(nowMs: Long): Boolean =
-            !permanentlyFailed && disabledUntilMs <= nowMs
+            !permanentlyFailed && !retiredForTask && disabledUntilMs <= nowMs
     }
 
     private val mirrors: List<Mirror> = urls
@@ -115,7 +116,7 @@ internal class MirrorPool(
      */
     fun pickWithLimit(): String? = synchronized(pickLock) {
         val now = System.currentTimeMillis()
-        val usable = mirrors.filter { !it.permanentlyFailed }
+        val usable = mirrors.filter { !it.permanentlyFailed && !it.retiredForTask }
         if (usable.isEmpty()) return null
         val available = usable.filter { it.available(now) }
         if (available.isEmpty()) {
@@ -173,7 +174,6 @@ internal class MirrorPool(
             return
         }
         if (ok) {
-            m.permanentlyFailed = false
             m.consecutiveFailures = 0
             m.disabledUntilMs = 0L
             m.totalBytes += bytes.coerceAtLeast(0)
@@ -198,7 +198,15 @@ internal class MirrorPool(
     }
 
     /** True while at least one source has not been proven to be a different file. */
-    fun hasUsableSources(): Boolean = mirrors.any { !it.permanentlyFailed }
+    fun hasUsableSources(): Boolean = mirrors.any { !it.permanentlyFailed && !it.retiredForTask }
+
+    fun retireForTask(url: String) = synchronized(pickLock) {
+        mirrors.firstOrNull { it.url == url }?.retiredForTask = true
+    }
+
+    fun unavailableReason(): String = if (mirrors.all { it.permanentlyFailed }) {
+        "所有镜像来源均已判定为不同文件，无法安全继续"
+    } else "所有镜像来源暂不可用，已保留断点，请稍后重试"
 
     /**
      * 只归还 in-flight 计数（异常路径用）。

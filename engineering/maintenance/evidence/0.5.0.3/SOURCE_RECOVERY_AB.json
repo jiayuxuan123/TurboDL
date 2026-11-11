@@ -1,0 +1,233 @@
+{
+  "raw": [
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2478.804,
+      "rejected_429": 5,
+      "requests": 13,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 0
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1478.967,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 0
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1469.234,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 1
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2399.328,
+      "rejected_429": 5,
+      "requests": 13,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 1
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2383.386,
+      "rejected_429": 5,
+      "requests": 13,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 2
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1437.992,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 2
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1457.742,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 3
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2407.956,
+      "rejected_429": 5,
+      "requests": 13,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 3
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 3783.066,
+      "rejected_429": 6,
+      "requests": 14,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 4
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1434.879,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 4
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1491.259,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 5
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2378.194,
+      "rejected_429": 5,
+      "requests": 13,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 5
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2366.712,
+      "rejected_429": 6,
+      "requests": 14,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 6
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1453.049,
+      "rejected_429": 2,
+      "requests": 10,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 6
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1434.386,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 7
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 1562.266,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 7
+    },
+    {
+      "round": 1,
+      "grouped": false,
+      "elapsed_ms": 2378.739,
+      "rejected_429": 5,
+      "requests": 13,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "baseline",
+      "pair": 8
+    },
+    {
+      "round": 1,
+      "grouped": true,
+      "elapsed_ms": 1450.352,
+      "rejected_429": 4,
+      "requests": 12,
+      "peak_active": 2,
+      "hash_matched": true,
+      "ok": true,
+      "engine": "candidate",
+      "pair": 8
+    }
+  ],
+  "baseline_p50_ms": 2383.386,
+  "candidate_p50_ms": 1453.049,
+  "paired_speedup_p50": 1.6401115039659337,
+  "paired_ci95": [
+    1.5947558405347428,
+    1.676037396371927
+  ],
+  "cv_baseline": 0.23135954381190887,
+  "cv_candidate": 0.013786516636976422,
+  "binary_sha256": {
+    "baseline": "30056ca2923d9eed7c6fb4fc8e2bdeb9844ba2efe9b5f4b2e1e401857caa34fb",
+    "candidate": "df8ab994ba2b1da6f9ea52042b845dcd38ff8be84bbdad2f034bd2ad58a74c25"
+  }
+}

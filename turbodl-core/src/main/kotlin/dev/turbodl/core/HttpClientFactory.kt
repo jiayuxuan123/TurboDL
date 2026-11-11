@@ -100,6 +100,8 @@ internal object HttpClientFactory {
         }
         val builder = OkHttpClient.Builder()
             .dispatcher(dispatcher)
+            .eventListenerFactory(TaskTransferInstrumentation.listeners)
+            .addNetworkInterceptor(TaskTransferInstrumentation)
             // 默认 UA 拦截器：若请求未显式携带 User-Agent，注入配置的通用浏览器 UA（避免部分 CDN 拦截）。
             .addInterceptor { chain ->
                 val req = chain.request()
