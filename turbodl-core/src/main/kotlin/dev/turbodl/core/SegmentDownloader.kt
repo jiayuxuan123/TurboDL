@@ -143,6 +143,7 @@ internal class SegmentDownloader(
      * 三者对用户意味着完全不同的下一步。这里把原因记下来供上层取用，用完即清。
      */
     private val failureByTask = ConcurrentHashMap<Long, String>()
+    private val lastHttpStatusByTask = ConcurrentHashMap<Long, Int>()
 
     /**
      * 服务器给出的 `Retry-After`（毫秒，按 taskId）。
@@ -179,6 +180,9 @@ internal class SegmentDownloader(
 
     /** 取出（并清掉）最近一次整文件下载的失败原因；没有则返回 null。 */
     fun takeWholeError(taskId: Long): String? = failureByTask.remove(taskId)
+
+    /** 最近一次真实 HTTP 错误状态，供错误归因使用；不会保留合并类别文字。 */
+    internal fun lastHttpStatus(taskId: Long): Int? = lastHttpStatusByTask[taskId]
 
     /** 取本次分片实际应请求的地址：优先用已学习到的终址，否则回落到原始 URL。 */
     private fun urlFor(taskId: Long, original: String): String =
@@ -234,6 +238,7 @@ internal class SegmentDownloader(
             firstRequestOwners.remove(key)
         }
         activeCalls.remove(taskId)
+        lastHttpStatusByTask.remove(taskId)
         telemetry.remove(taskId)
         cooldownGroups.remove(taskId)
         sharedBackpressure.remove(taskId)
@@ -881,6 +886,7 @@ internal class SegmentDownloader(
         var done = alreadyWritten.coerceAtLeast(0)
         if (done >= expected) return SegmentResult.OK
         val from = pieceStart + done
+        telemetry[taskId]?.phase(TransferPhase.TRANSFERRING)
 
         val gateKey = taskId to url
         val gate = firstRequestGates.computeIfAbsent(gateKey) { CompletableDeferred() }
@@ -920,6 +926,7 @@ internal class SegmentDownloader(
         var completed = false
         return try {
             call.execute().use { resp ->
+                if (resp.code >= 400) lastHttpStatusByTask[taskId] = resp.code
                 if (resp.isSuccessful || resp.code == 416) {
                     val finalUrl = resp.request.url.toString()
                     learnResolvedUrl(taskId, url, finalUrl)
@@ -1245,6 +1252,7 @@ internal class SegmentDownloader(
         var expected = end - start + 1
         if (existing >= expected) return SegmentResult.OK
         val from = start + existing
+        telemetry[taskId]?.phase(TransferPhase.TRANSFERRING)
 
         // 优先用已学习到的重定向终址；没有就先用原始 URL（这一次会跟 302，并把终址记下来）。
         val target = urlFor(taskId, url)
@@ -1263,6 +1271,7 @@ internal class SegmentDownloader(
         val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
         return try {
             call.execute().use { resp ->
+                if (resp.code >= 400) lastHttpStatusByTask[taskId] = resp.code
                 // 学习重定向终址：`resp.request.url` 是**跟随所有 3xx 之后**的最终地址。
                 // 只在响应可用时记（成功或 416），避免把错误页/拦截页的地址当成终址。
                 if (resp.isSuccessful || resp.code == 416) {
@@ -1369,6 +1378,7 @@ internal class SegmentDownloader(
         cancelledSegmentTasks.remove(taskId)
         // 每次进入都先清掉上一次的原因，避免把上一轮的错误带给这一轮。
         failureByTask.remove(taskId)
+        telemetry[taskId]?.phase(TransferPhase.TRANSFERRING)
         val existing = outFile.length()
         // 整文件回退不做断点（避免与 Range 不支持的服务器语义冲突）：从 0 重写
         if (existing > 0) outFile.delete()
@@ -1385,6 +1395,7 @@ internal class SegmentDownloader(
         val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
         try {
             call.execute().use { resp ->
+                if (resp.code >= 400) lastHttpStatusByTask[taskId] = resp.code
                 if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
                     // 【文案修正】旧文案「链接失效/需要 Referer」会把**地理封锁 / 反爬拦截**误导成
                     // "链接坏了或需要 Referer"。实测（OVH 从中国访问）：服务器返回的是 HTML 拦截页，

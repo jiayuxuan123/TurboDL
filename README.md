@@ -1,6 +1,6 @@
 # TurboDL
 
-当前维护版本：**0.5.0.4**（Kotlin/JVM 依赖包 `turbodl-core`）。本版修复限流等待、探测取消和断点保留，详见[0.5.0.4 更新日志](engineering/maintenance/RELEASE-0.5.0.4.md)；上一版 [0.5.0.3 历史记录](engineering/maintenance/RELEASE-0.5.0.3.md)保留。
+当前维护版本：**0.5.0.5**（Kotlin/JVM 依赖包 `turbodl-core`）。本版修复传输阶段错误归因，保留具体 HTTP 状态和真实阶段，详见[0.5.0.5 更新日志](engineering/maintenance/RELEASE-0.5.0.5.md)；上一版 [0.5.0.4 历史记录](engineering/maintenance/RELEASE-0.5.0.4.md)保留。
 
 > High-performance multi-threaded download engine SDK — the core remains pure Kotlin/JVM with no Android dependency and is embeddable in any JVM application (including Android). An optional native CLI fast path adds instant startup and a Zig HTTP data plane.
 

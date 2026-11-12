@@ -1,0 +1,63 @@
+{
+  "version": "0.5.0.5",
+  "date": "2026-11-12",
+  "modules": [
+    {
+      "module": "turbodl-core",
+      "suites": 90,
+      "tests": 335,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbodl-cli",
+      "suites": 1,
+      "tests": 14,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-hls",
+      "suites": 6,
+      "tests": 57,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-js",
+      "suites": 11,
+      "tests": 120,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-parser",
+      "suites": 3,
+      "tests": 42,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-bootstrap",
+      "suites": 1,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-runtime",
+      "suites": 5,
+      "tests": 65,
+      "failures": 0,
+      "skipped": 0
+    }
+  ],
+  "total": {
+    "suites": 117,
+    "tests": 635,
+    "failures": 0,
+    "skipped": 0
+  },
+  "cli_sha256": "3bccf3ca2c702f27a824c5fe781a7a27c5711869b75fd4486cc5213d0d76484c",
+  "release_gate": "BUILD SUCCESSFUL; cleanTest applied; 0 failures; 0 skipped"
+}

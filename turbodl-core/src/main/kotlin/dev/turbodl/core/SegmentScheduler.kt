@@ -1249,8 +1249,10 @@ internal class SegmentScheduler(
                                     consecutiveSuccesses.set(0)
                                     seg.attempts++
                                     if (seg.attempts > config.maxRetries) {
+                                        val statusText = downloader.lastHttpStatus(taskId)?.let { "HTTP $it" }
+                                            ?: "HTTP 401/403/410"
                                         failTask(
-                                            "分片 ${seg.start}-${seg.end} 授权/时效失败（401/403/410）" +
+                                            "分片 ${seg.start}-${seg.end} 授权/时效失败（$statusText）" +
                                                 "重试 ${seg.attempts} 次仍失败",
                                         )
                                     } else {
@@ -1287,8 +1289,10 @@ internal class SegmentScheduler(
                                     // 而 FAILED =「这次没拿到」。把前者当后者处理，就等于拒绝执行服务器的要求。
                                     seg.throttleAttempts++
                                     if (seg.throttleAttempts > throttleRetryBudget) {
+                                        val statusText = downloader.lastHttpStatus(taskId)?.let { "HTTP $it" }
+                                            ?: "HTTP 429/503"
                                         failTask(
-                                            "分片 ${seg.start}-${seg.end} 持续被限流（429/503），" +
+                                            "分片 ${seg.start}-${seg.end} 持续被限流（$statusText），" +
                                                 "并发已降至 ${desired.get()} 仍失败 ${seg.throttleAttempts} 次"
                                         )
                                     } else {
@@ -1314,7 +1318,11 @@ internal class SegmentScheduler(
                                                 mirrors.retireForTask(attemptUrl)
                                                 if (mirrors.hasUsableSources()) offer(seg)
                                                 else failTask(mirrors.unavailableReason())
-                                            } else failTask("来源要求较长时间限流，已保留断点，请稍后重试")
+                                            } else {
+                                                val statusText = downloader.lastHttpStatus(taskId)?.let { "HTTP $it" }
+                                                    ?: "HTTP 429/503"
+                                                failTask("来源要求较长时间限流（$statusText），已保留断点，请稍后重试")
+                                            }
                                         } else {
                                         val waitMs = serverHint
                                             ?: backoffMsFor((seg.throttleAttempts - 1).coerceAtMost(maxShift))
