@@ -159,14 +159,16 @@ internal class SegmentDownloader(
     /**
      * 解析 `Retry-After`：既支持秒数，也支持 HTTP 日期。
      *
-     * @return 毫秒（已夹到 [0, 120s]）；无法解析返回 null。
+     * @return 非负毫秒，最多记录七天；超过自动等待上限的提示由重试策略决定停止。
      */
     private fun parseRetryAfter(value: String?): Long? {
         val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         raw.toLongOrNull()?.let { secs ->
             // 秒数形式：0 是合法的（"立刻重试"）。
-            return secs.coerceIn(0L, MAX_RETRY_AFTER_MS / 1000L) * 1000L
+            if (secs < 0) return null
+            return secs.coerceAtMost(MAX_RETRY_AFTER_MS / 1000L) * 1000L
         }
+        if (raw.all { it in '0'..'9' }) return MAX_RETRY_AFTER_MS
         val date = runCatching {
             java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
                 .parse(raw, java.time.Instant::from)
@@ -256,8 +258,9 @@ internal class SegmentDownloader(
          */
         private const val WRITE_BUFFER_BYTES = 64 * 1024
 
-        /** `Retry-After` 的上限：超过两分钟就不值得干等，宁可退避重投（可能换到别的节点）。 */
+        /** Bounded storage for server hints, distinct from how long automatic retry may wait. */
         private const val MAX_RETRY_AFTER_MS = 7L * 24 * 60 * 60 * 1000
+        private const val MAX_AUTOMATIC_PROBE_WAIT_MS = 120_000L
 
     }
 
@@ -360,6 +363,7 @@ internal class SegmentDownloader(
          * 只用于**判断要不要换 UA**（401/403/HTML 拦截页）与诊断，不参与下载决策。
          */
         val statusCode: Int = 0,
+        val retryAfterMs: Long? = null,
     ) {
         /**
          * 续传校验令牌：把「大小 + ETag + Last-Modified」压成一个字符串。
@@ -490,7 +494,7 @@ internal class SegmentDownloader(
                 baseClient.newBuilder().callTimeout(timeoutMs, TimeUnit.MILLISECONDS).build()
             else baseClient
             val call = effClient.newCall(req)
-            val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+            val handle = HttpCallCancellation(call, coroutineContext)
             var callCompleted = false
             try {
                 val result = call.execute().use { resp ->
@@ -500,6 +504,8 @@ internal class SegmentDownloader(
                     val etag = resp.header("ETag")?.trim()?.takeIf { it.isNotBlank() }
                     val lastMod = resp.header("Last-Modified")?.trim()?.takeIf { it.isNotBlank() }
                     val ctype = resp.header("Content-Type")?.trim()?.takeIf { it.isNotBlank() }
+                    val retryAfter = if (resp.code == 429 || resp.code == 503)
+                        parseRetryAfter(resp.header("Retry-After")) else null
                     val suggested = parseContentDisposition(resp.header("Content-Disposition"))
                         ?: sanitizeFileName(
                             finalUrl.substringBefore('?').substringAfterLast('/')
@@ -507,7 +513,7 @@ internal class SegmentDownloader(
                         )
                     if (resp.header("Content-Type").orEmpty().contains("text/html", true)) {
                         return@use ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype,
-                            statusCode = resp.code)
+                            statusCode = resp.code, retryAfterMs = retryAfter)
                     }
                     when (resp.code) {
                         206 -> {
@@ -520,7 +526,7 @@ internal class SegmentDownloader(
                                 runCatching { resp.body?.byteStream()?.read() }
                             }
                             ProbeResult(total, true, finalUrl, etag, lastMod, suggested, ctype,
-                                statusCode = resp.code)
+                                statusCode = resp.code, retryAfterMs = retryAfter)
                         }
                         200 -> {
                             // 未返回 206：多数为不支持 Range；但若服务器声明 Accept-Ranges: bytes，
@@ -530,10 +536,10 @@ internal class SegmentDownloader(
                             val acceptRanges = resp.header("Accept-Ranges")
                                 .orEmpty().contains("bytes", ignoreCase = true)
                             ProbeResult(total, acceptRanges, finalUrl, etag, lastMod, suggested, ctype,
-                                statusCode = resp.code)
+                                statusCode = resp.code, retryAfterMs = retryAfter)
                         }
                         else -> ProbeResult(null, false, finalUrl, etag, lastMod, suggested, ctype,
-                            statusCode = resp.code)
+                            statusCode = resp.code, retryAfterMs = retryAfter)
                     }
                 }
                 callCompleted = true
@@ -547,7 +553,7 @@ internal class SegmentDownloader(
                 ProbeResult(null, false, url)
             } finally {
                 if (!callCompleted) runCatching { call.cancel() }
-                handle?.dispose()
+                handle.dispose()
             }
         }
 
@@ -660,6 +666,7 @@ internal class SegmentDownloader(
         val effClient = if (timeoutMs > 0)
             client.newBuilder().callTimeout(timeoutMs, TimeUnit.MILLISECONDS).build() else client
         val call = effClient.newCall(req)
+        val handle = HttpCallCancellation(call, coroutineContext)
         try {
             call.execute().use { resp ->
                 // 只认 206（精确区间）；start==0 时允许 200（部分服务器对 bytes=0- 回整文件）。
@@ -688,6 +695,7 @@ internal class SegmentDownloader(
         } catch (e: Exception) {
             null
         } finally {
+            handle.dispose()
             runCatching { if (!call.isCanceled()) call.cancel() }
         }
     }
@@ -726,6 +734,21 @@ internal class SegmentDownloader(
             )
             last = r
             if (r.supportsRange) return r
+
+            // Capacity errors can contain HTML too; honor the server before UA negotiation.
+            if (r.statusCode == 429 || r.statusCode == 503) {
+                val wait = r.retryAfterMs ?: 0L
+                if (wait > MAX_AUTOMATIC_PROBE_WAIT_MS) {
+                    throw IOException("探测被限流（HTTP ${r.statusCode}），请稍后重试，原有断点已保留",
+                        SourceCooldownDeferred(wait))
+                }
+                if (attempt >= retries) {
+                    throw IOException("探测请求持续被限流（HTTP ${r.statusCode}），请稍后重试")
+                }
+                val backoff = (500L shl attempt.coerceAtMost(6)).coerceAtMost(30_000L)
+                delay(maxOf(wait, backoff))
+                return@repeat
+            }
 
             // ② 【UA 协商】被拦（HTML 拦截页 / 401 / 403）时换 UA 再探。
             //

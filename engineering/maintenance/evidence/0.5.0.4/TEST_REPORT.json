@@ -1,0 +1,67 @@
+{
+  "version": "0.5.0.4",
+  "date": "2026-11-12",
+  "jdk": "21.0.12",
+  "kotlin": "1.9.24",
+  "gradle": "8.10.2",
+  "modules": [
+    {
+      "module": "turbodl-core",
+      "suites": 89,
+      "tests": 334,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbodl-cli",
+      "suites": 1,
+      "tests": 14,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-hls",
+      "suites": 6,
+      "tests": 57,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-js",
+      "suites": 11,
+      "tests": 120,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-parser",
+      "suites": 3,
+      "tests": 42,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-bootstrap",
+      "suites": 1,
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "turbo-plugin-runtime",
+      "suites": 5,
+      "tests": 65,
+      "failures": 0,
+      "skipped": 0
+    }
+  ],
+  "total": {
+    "suites": 116,
+    "tests": 634,
+    "failures": 0,
+    "skipped": 0
+  },
+  "cli_jar": "turbodl-cli\\build\\libs\\turbodl-cli-all.jar",
+  "cli_sha256": "e942535a04523c838fa17c850d12f854b8a7a53f0a4ee2422ba9eaa4aec0b2d0",
+  "release_gate": "BUILD SUCCESSFUL; cleanTest applied; 0 failures; 0 skipped"
+}

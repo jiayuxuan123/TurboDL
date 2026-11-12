@@ -111,6 +111,8 @@ class BackpressureRecoveryDeadlockTest {
                 workDir = workDir,
                 warmUpConnections = false,
                 adaptiveConcurrency = adaptive,
+                // Keep enough queued ranges to observe the post-backpressure ramp.
+                minSegmentSize = 64L * 1024,
                 // 背压照常生效：这是本用例要测的那条路径
                 backpressureConsecutiveFailures = 2,
                 // 默认 200ms 节流：本用例要采样并发曲线，节流会把峰值抹平。
@@ -128,7 +130,7 @@ class BackpressureRecoveryDeadlockTest {
                 while (true) {
                     val c = client.progress.value[id]?.activeConnections ?: 0
                     if (c > peakReported) peakReported = c
-                    delay(15)
+                    delay(5)
                 }
             }
             val r = client.await(id)

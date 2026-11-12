@@ -21,9 +21,10 @@ import kotlin.test.assertTrue
  */
 class BackpressureRecoveryTest {
 
-    private class FlakyThenHealthyServer(private val payload: ByteArray, private val flakyUntilRatio: Double) {
+    private class FlakyThenHealthyServer(private val payload: ByteArray, private val flakyRequestCount: Int) {
         val served = AtomicInteger(0)
         val throttled = AtomicInteger(0)
+        private val dataRequests = AtomicInteger(0)
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port: Int get() = server.address.port
         private val total = payload.size
@@ -39,9 +40,13 @@ class BackpressureRecoveryTest {
                 }
                 val s = m.groupValues[1].toInt()
                 val e = m.groupValues[2].toIntOrNull() ?: (total - 1)
-                // 前半程对部分靠前分片返回 503，制造「持续失败 → 降并发」
-                val inFlakyZone = s < (total * flakyUntilRatio).toInt()
-                if (inFlakyZone && (s / 65536) % 2 == 0) {
+                // The probe is `bytes=0-0`; its 503 would now be a rate-limit failure before
+                // the segment scheduler starts. Keep this fixture focused on segment backpressure.
+                val isProbe = s == 0 && e == 0
+                val requestNumber = if (isProbe) 0 else dataRequests.incrementAndGet()
+                // Recover after a bounded set of failures so this exercises backpressure
+                // recovery instead of leaving one range permanently poisoned.
+                if (requestNumber in 1..flakyRequestCount && requestNumber % 3 == 0) {
                     throttled.incrementAndGet()
                     ex.sendResponseHeaders(503, -1)
                     ex.close()
@@ -75,7 +80,7 @@ class BackpressureRecoveryTest {
     fun `concurrency recovers after transient throttling and completes byte-exact`() = runBlocking {
         val size = 16 * 1024 * 1024
         val payload = ByteArray(size) { (it % 253).toByte() }
-        val srv = FlakyThenHealthyServer(payload, flakyUntilRatio = 0.3)
+        val srv = FlakyThenHealthyServer(payload, flakyRequestCount = 24)
         val connections = 32
 
         val client = TurboClient(
