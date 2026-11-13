@@ -162,6 +162,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
     private val requests = ConcurrentHashMap<Long, DownloadRequest>()
     private val transferPolicies = ConcurrentHashMap<Long, TaskTransferPolicy>()
     private val transferDetails = ConcurrentHashMap<Long, TaskTelemetry>()
+    private val instrumentedBackends = ConcurrentHashMap<Long, ClientInstrumentedBackend>()
 
     /** Details are independent of the legacy event hierarchy and contain no URLs or credentials. */
     fun taskDetails(id: Long): TaskTransferDetails? = transferDetails[id]?.snapshot()
@@ -285,6 +286,7 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
                     // 释放任务级的下载器状态（在飞 Call 登记 + 已学到的重定向终址）。
                     // 不释放的话每完成一个任务就留两条永不回收的条目 → 长跑进程无界增长。
                     downloader.releaseTask(id)
+                    instrumentedBackends.remove(id)?.releaseTask(id)
                 }
             } catch (e: CancellationException) {
                 completions[id]?.complete(Result.failure(e))
@@ -699,13 +701,28 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
 
         setState(id, request, TaskState.DOWNLOADING)
         transferDetails[id]?.phase(TransferPhase.PROBING)
-        transferDetails[id]?.let { downloader.attachTelemetry(id, it, transferPolicies[id]?.backpressureGroup,
-            context.config.backpressureConsecutiveFailures > 0) }
 
         // Delegate the protocol layer to the resolved backend (built-in HTTP by default;
         // a plugin backend when the optional runtime installs a resolver).
         val backend = backendFor(request, policy)
-        transferDetails[id]?.requestMetricsAvailable = backend is BuiltinHttpBackend
+        if (backend is ClientInstrumentedBackend) {
+            val telemetry = transferDetails[id]
+            if (telemetry != null) {
+                backend.prepareTask(
+                    id,
+                    telemetry,
+                    connectionBudget,
+                    transferPolicies[id]?.backpressureGroup,
+                    context.config.backpressureConsecutiveFailures > 0,
+                )
+                instrumentedBackends[id] = backend
+                telemetry.requestMetricsAvailable = true
+            }
+        } else if (backend is BuiltinHttpBackend) {
+            transferDetails[id]?.let { downloader.attachTelemetry(id, it, transferPolicies[id]?.backpressureGroup,
+                context.config.backpressureConsecutiveFailures > 0) }
+            transferDetails[id]?.requestMetricsAvailable = true
+        }
         if (context.unverifiableResumePolicy == UnverifiableResumePolicy.FAIL && backend !is BuiltinHttpBackend) {
             throw UnsupportedOperationException("Resume verification policy is unsupported by backend ${backend.name}")
         }

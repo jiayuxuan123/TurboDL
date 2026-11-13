@@ -1,0 +1,20 @@
+{
+  "version": "0.5.0.6",
+  "date": "2026-11-13",
+  "targeted_tests": [
+    {
+      "module": "turbodl-core",
+      "suite": "RoutedHttpTelemetryTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    }
+  ],
+  "total": {
+    "suites": 1,
+    "tests": 3,
+    "failures": 0,
+    "skipped": 0
+  },
+  "release_gate": "Targeted HTTP routing regression; full suite intentionally not repeated for this emergency patch."
+}

@@ -3,6 +3,20 @@ package dev.turbodl.core
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext as currentCtx
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+/** Internal bridge used when the factory-created backend is routed by TurboClient. */
+internal interface ClientInstrumentedBackend {
+    fun prepareTask(
+        taskId: Long,
+        telemetry: TaskTelemetry,
+        connectionBudget: ConnectionBudget,
+        backpressureGroup: String?,
+        recoverConcurrency: Boolean,
+    )
+
+    fun releaseTask(taskId: Long)
+}
 
 /**
  * Built-in multi-threaded HTTP/HTTPS download backend.
@@ -33,7 +47,27 @@ internal class BuiltinHttpBackend(
     private val onConfigSeen: ((TurboConfig) -> Unit)? = null,
     /** Shared across all built-in tasks; null keeps the legacy unlimited behavior. */
     private val connectionBudget: ConnectionBudget? = null,
-) : DownloadBackend {
+) : DownloadBackend, ClientInstrumentedBackend {
+
+    /** A routed backend is shared by tasks, so the client budget is attached per task. */
+    private val taskBudgets = ConcurrentHashMap<Long, ConnectionBudget>()
+
+    override fun prepareTask(
+        taskId: Long,
+        telemetry: TaskTelemetry,
+        connectionBudget: ConnectionBudget,
+        backpressureGroup: String?,
+        recoverConcurrency: Boolean,
+    ) {
+        taskBudgets[taskId] = connectionBudget
+        downloader.attachTelemetry(taskId, telemetry, backpressureGroup, recoverConcurrency)
+    }
+
+    override fun releaseTask(taskId: Long) {
+        taskBudgets.remove(taskId)
+    }
+
+    private fun budgetFor(taskId: Long): ConnectionBudget? = taskBudgets[taskId] ?: connectionBudget
 
     override val name: String = "builtin-http"
 
@@ -45,6 +79,7 @@ internal class BuiltinHttpBackend(
     override suspend fun download(context: BackendContext): BackendResult {
         // 先让客户端持有器看到最新配置：传输层设置（代理/DNS/TLS/超时）变了就在此重建。
         onConfigSeen?.invoke(context.config)
+        val taskBudget = budgetFor(context.taskId)
         val request = context.request
         val chunkDir = context.workDir
 
@@ -77,7 +112,7 @@ internal class BuiltinHttpBackend(
             // 首个分片会拿到 200 整文件并走已有的 RANGE_IGNORED 回退链路，正确性不受影响。
             SegmentDownloader.ProbeResult(knownSize, true, request.url)
         } else {
-            val probeLease = connectionBudget?.acquire(1)
+            val probeLease = taskBudget?.acquire(1)
             try {
                 downloader.probeWithRetry(
                     request.url,
@@ -89,7 +124,7 @@ internal class BuiltinHttpBackend(
                         ?: context.config.maxConnectionsPerTask) > 1,
                 )
             } finally {
-                probeLease?.let { connectionBudget?.release(it) }
+                probeLease?.let { taskBudget?.release(it) }
             }
         }
         val total = probe.totalSize ?: request.knownSize.takeIf { it > 0 } ?: -1L
@@ -147,7 +182,7 @@ internal class BuiltinHttpBackend(
         //  - 强校验器变化 → 丢弃旧分片（原行为）；
         //  - validator 必须在**任何分片写入之前**落盘；now 为空时清掉旧文件而非留着。
         val resumeLease = try {
-            connectionBudget?.acquire(1)
+            taskBudget?.acquire(1)
         } catch (t: Throwable) {
             store.close()
             throw t
@@ -183,7 +218,7 @@ internal class BuiltinHttpBackend(
             store.close()
             throw e
         } finally {
-            resumeLease?.let { connectionBudget?.release(it) }
+            resumeLease?.let { taskBudget?.release(it) }
         }
 
         // 静默上报元数据（尽力而为，不影响下载）：宿主可用服务器建议名重命名、记录 MIME 等。
@@ -440,6 +475,7 @@ internal class BuiltinHttpBackend(
         chunkDir: File,
         hasOldParts: Boolean,
     ): BackendResult {
+        val taskBudget = budgetFor(context.taskId)
         val request = context.request
         val connections = (request.connectionsOverride
             ?: context.config.maxConnectionsPerTask).coerceIn(1, 256)
@@ -475,7 +511,7 @@ internal class BuiltinHttpBackend(
                 }
             } else null
             val ok = try {
-                val wholeLease = connectionBudget?.acquire(1)
+                val wholeLease = taskBudget?.acquire(1)
                 try {
                     downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
                         context.throttle(d)
@@ -485,7 +521,7 @@ internal class BuiltinHttpBackend(
                         context.reportProgress(acc, 1)
                     }
                 } finally {
-                    wholeLease?.let { connectionBudget?.release(it) }
+                    wholeLease?.let { taskBudget?.release(it) }
                 }
             } finally {
                 watchdog?.cancel()
@@ -504,7 +540,7 @@ internal class BuiltinHttpBackend(
 
         // 【先拿预算，再预热】旧实现把预热放在 acquire 之前：maxTotalConnections=1 时
         // 仍然会额外建立 warmUpMaxParallel 条连接，预热变成了绕过全局预算的后门。
-        val budgetLease = connectionBudget?.acquire(connections)
+        val budgetLease = taskBudget?.acquire(connections)
         val effectiveConnections = budgetLease?.permits ?: connections
 
         // 连接预热 / DNS 预解析：正式分片前先对解析后的最终 URL 建好若干连接（并解析 DNS），
@@ -573,7 +609,7 @@ internal class BuiltinHttpBackend(
                 mirrors = mirrorPool,
             )
         } finally {
-            budgetLease?.let { connectionBudget?.release(it) }
+            budgetLease?.let { taskBudget?.release(it) }
         }
 
         return when (outcome) {
@@ -594,7 +630,7 @@ internal class BuiltinHttpBackend(
 
                 val outPart = request.destination
                 var acc = 0L
-                val wholeLease = connectionBudget?.acquire(1)
+                val wholeLease = taskBudget?.acquire(1)
                 val ok = try {
                     downloader.downloadWhole(context.taskId, effectiveUrl, outPart, taskHeaders, total) { d ->
                         context.throttle(d)
@@ -603,7 +639,7 @@ internal class BuiltinHttpBackend(
                         context.reportProgress(acc, 1)
                     }
                 } finally {
-                    wholeLease?.let { connectionBudget?.release(it) }
+                    wholeLease?.let { taskBudget?.release(it) }
                 }
                 if (!ok) throw IllegalStateException("Whole-file fallback download failed")
                 BackendResult(listOf(outPart), total)
