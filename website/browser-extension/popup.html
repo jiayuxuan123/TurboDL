@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TurboDL Link Relay</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f3f1e9;
+      --surface: #fffdf7;
+      --ink: #161a1d;
+      --muted: #586069;
+      --line: #b9b7ad;
+      --rail: #1558d6;
+      --rail-ink: #fff;
+      --signal: #d64b2b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #15191d;
+        --surface: #1d2329;
+        --ink: #f2f0e8;
+        --muted: #aab2ba;
+        --line: #505a64;
+        --rail: #7ea9ff;
+        --rail-ink: #101b31;
+        --signal: #ff876d;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      width: 380px;
+      min-height: 280px;
+      margin: 0;
+      padding: 18px;
+      background:
+        linear-gradient(90deg, color-mix(in srgb, var(--rail) 10%, transparent) 0 4px, transparent 4px),
+        var(--paper);
+      color: var(--ink);
+      font: 14px/1.5 "Sentient", Georgia, "Noto Serif SC", serif;
+    }
+    h1 { margin: 0; font-size: 21px; letter-spacing: -0.035em; }
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--rail);
+      font: 800 10px/1.4 "Cascadia Mono", Consolas, monospace;
+      letter-spacing: 0.16em;
+    }
+    .current {
+      margin-top: 16px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .kind { color: var(--signal); font: 750 11px/1.4 "Cascadia Mono", Consolas, monospace; }
+    .url {
+      display: -webkit-box;
+      margin: 6px 0 0;
+      overflow: hidden;
+      font: 11px/1.55 "Cascadia Mono", Consolas, monospace;
+      overflow-wrap: anywhere;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 4;
+    }
+    .actions { display: grid; gap: 8px; margin-top: 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    button, .site-link {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      font: 700 13px/1.4 "Cascadia Mono", Consolas, monospace;
+      text-align: center;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .site-link { display: grid; place-items: center; }
+    button:hover, .site-link:hover { border-color: var(--rail); }
+    button:focus-visible, .site-link:focus-visible {
+      outline: 3px solid var(--signal);
+      outline-offset: 2px;
+    }
+    .primary { border-color: var(--rail); background: var(--rail); color: var(--rail-ink); }
+    .command {
+      min-height: 58px;
+      padding: 9px;
+      overflow-wrap: anywhere;
+      text-align: left;
+    }
+    .status { min-height: 20px; margin: 10px 0 0; color: var(--rail); font-size: 12px; }
+    .recent { margin-top: 14px; }
+    .recent h2 {
+      margin: 0 0 7px;
+      font: 800 10px/1.4 "Cascadia Mono", Consolas, monospace;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .recent ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+    .recent button { width: 100%; min-height: 32px; padding: 5px 8px; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <p class="eyebrow">TURBODL · LINK RELAY</p>
+  <h1>Move a URL to TurboDL</h1>
+  <section class="current" aria-label="Current tab">
+    <div class="kind" id="kind">Reading the current tab</div>
+    <p class="url" id="url">…</p>
+  </section>
+  <div class="actions">
+    <div class="row">
+      <button class="primary" id="copy-url" type="button">Copy URL</button>
+      <a class="site-link" href="https://turbodl.yunl.us.ci/" target="_blank" rel="noopener">Open website</a>
+    </div>
+    <button class="command" id="copy-command" type="button">Copy CLI command</button>
+  </div>
+  <p class="status" id="status" aria-live="polite"></p>
+  <section class="recent" aria-labelledby="recent-title">
+    <h2 id="recent-title">Recent links</h2>
+    <ul id="recent-list"><li class="empty">No links yet.</li></ul>
+  </section>
+  <script src="popup.js"></script>
+</body>
+</html>

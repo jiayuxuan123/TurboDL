@@ -1012,6 +1012,35 @@ def _page_download(lang: str, href) -> str:
 
 <section class="section">
   {seg_rule()}
+  <h2>{"Browser link relay" if en else "浏览器链接中继"}</h2>
+  <p class="section-lead">{
+      "Copy the current tab URL or a ready-to-run CLI command. The extension keeps its five most recent links locally and never reads page content."
+      if en else
+      "复制当前标签页网址，或直接复制一条可运行的 CLI 命令。扩展只在浏览器本地保留最近 5 条链接，不读取网页正文。"
+  }</p>
+  <div class="extension-offer">
+    <div>
+      <span class="tag">Manifest V3</span>
+      <h3>{"TurboDL Link Relay" if en else "TurboDL 链接中继"}</h3>
+      <p>{
+          "Useful when a browser downloads with the wrong client or when you want to hand a URL to TurboDL without retyping it."
+          if en else
+          "适合浏览器下载被错误客户端接管，或不想手动重敲 URL 时使用。"
+      }</p>
+    </div>
+    <div class="extension-actions">
+      <a class="btn btn-primary" href="{{ASSET:extensions/turbodl-link-relay.zip}}" download>
+        {icon("download")}<span>{"Download extension ZIP" if en else "下载扩展 ZIP"}</span>
+      </a>
+      <a class="text-link" href="https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked">{
+          "Chrome: load unpacked" if en else "Chrome：加载未打包扩展"
+      }</a>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  {seg_rule()}
   <h2>{"Previous releases" if en else "历史版本"}</h2>
   {table(
       ["Version" if en else "版本", "Published" if en else "发布日期", "Assets" if en else "附件", "Release"],

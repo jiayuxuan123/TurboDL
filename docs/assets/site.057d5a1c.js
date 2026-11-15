@@ -7,42 +7,10 @@
   var reducedMotion = window.matchMedia
     ? window.matchMedia("(prefers-reduced-motion: reduce)")
     : { matches: false };
-  var inertStore = new Map();
   var lastTrigger = null;
 
   function all(root, selector) {
     return Array.prototype.slice.call((root || document).querySelectorAll(selector));
-  }
-
-  function focusable(dialog) {
-    return all(
-      dialog,
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
-        'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
-    ).filter(function (element) {
-      return !element.hidden && element.getClientRects().length > 0;
-    });
-  }
-
-  function setBackgroundInert(dialog, inert) {
-    var node = dialog;
-    while (node && node !== document.body) {
-      var parent = node.parentElement;
-      if (!parent) break;
-      Array.prototype.forEach.call(parent.children, function (sibling) {
-        if (sibling === node || sibling.tagName === "SCRIPT") return;
-        if (inert) {
-          if (!inertStore.has(sibling)) {
-            inertStore.set(sibling, sibling.inert);
-          }
-          sibling.inert = true;
-        } else if (inertStore.has(sibling)) {
-          sibling.inert = inertStore.get(sibling);
-          inertStore.delete(sibling);
-        }
-      });
-      node = parent;
-    }
   }
 
   function openDialog(dialog, trigger) {
@@ -54,8 +22,7 @@
       dialog.setAttribute("open", "");
     }
     document.body.classList.add("dialog-open");
-    setBackgroundInert(dialog, true);
-    var first = focusable(dialog)[0];
+    var first = dialog.querySelector("[autofocus], button, a[href]");
     if (first) first.focus({ preventScroll: true });
   }
 
@@ -63,30 +30,9 @@
     if (!dialog || !dialog.open) return;
     if (typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
-    setBackgroundInert(dialog, false);
-    inertStore.clear();
     document.body.classList.remove("dialog-open");
     if (lastTrigger && lastTrigger.focus) {
       lastTrigger.focus({ preventScroll: true });
-    }
-  }
-
-  function trapFocus(event) {
-    if (event.key !== "Tab") return;
-    var dialog = event.currentTarget;
-    var items = focusable(dialog);
-    if (!items.length) {
-      event.preventDefault();
-      return;
-    }
-    var first = items[0];
-    var last = items[items.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
     }
   }
 
@@ -102,27 +48,12 @@
         closeDialog(dialog);
       });
     });
-    dialog.addEventListener("keydown", trapFocus);
     dialog.addEventListener("cancel", function (event) {
       event.preventDefault();
       closeDialog(dialog);
     });
     dialog.addEventListener("close", function () {
-      setBackgroundInert(dialog, false);
-      inertStore.clear();
       document.body.classList.remove("dialog-open");
-    });
-    dialog.addEventListener("click", function (event) {
-      if (event.target !== dialog) return;
-      var rect = dialog.getBoundingClientRect();
-      if (
-        event.clientX < rect.left ||
-        event.clientX > rect.right ||
-        event.clientY < rect.top ||
-        event.clientY > rect.bottom
-      ) {
-        closeDialog(dialog);
-      }
     });
   }
 
