@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "automatic_downloads": false,
+  "dependencies": [
+    {
+      "name": "libressl",
+      "version": "4.4.1",
+      "url": "https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.4.1.tar.gz",
+      "sha256": "290cdf1b53c086255dc302f118b98602a444e9ae6d11e9bfdd8c9b1b60aa3a22",
+      "license": "ISC/BSD and retained OpenSSL notices",
+      "license_files_required": true
+    },
+    {
+      "name": "pugixml",
+      "version": "1.16",
+      "url": "https://github.com/zeux/pugixml/releases/download/v1.16/pugixml-1.16.tar.gz",
+      "sha256": "4cee1ca4aad395170f4c7a07824f3bdd41f28316c6e1e1090a1425b278ec0b4b",
+      "license": "MIT"
+    },
+    {
+      "name": "ffmpeg",
+      "version": "9.0.2",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+      "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+      "verified_signer": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+      "license": "LGPL-2.1-or-later with GPL and nonfree disabled",
+      "network_disabled": true
+    },
+    {
+      "name": "libtorrent-rasterbar",
+      "version": "2.1.2",
+      "url": "https://github.com/arvidn/libtorrent/releases/download/v2.1.2/libtorrent-rasterbar-2.1.2.tar.gz",
+      "sha256": "3362546d9cd71b9e49ee6cac7d3f1f914ce9cdb217c86b63d5b22cbed0334dbc",
+      "license": "BSD-3-Clause and bundled dependency notices",
+      "license_files_required": true
+    },
+    {
+      "name": "boost-headers",
+      "version": "1.92.0",
+      "url": "https://archives.boost.io/release/1.92.0/source/boost_1_92_0.tar.bz2",
+      "sha256": "5c1d40cb8e19adbf740a4ec2da35b3e58f3f5804b1dce44deb53df72193cbc6c",
+      "license": "BSL-1.0"
+    },
+    {
+      "name": "curl-windows-development-bundle",
+      "version": "8.23.0_9",
+      "role": "Windows development transport; target source builds are separately required",
+      "url": "https://curl.se/windows/dl-8.23.0_9/curl-8.23.0_9-win64-mingw.zip",
+      "sha256": "89cb71930f4242d884e8e349463455932ab1d089b20f4f99318261a3cbff9167",
+      "license": "curl and individual bundled dependency licenses",
+      "license_files_required": true
+    },
+    {
+      "name": "sqlite-amalgamation",
+      "version": "3.54.1",
+      "url": "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+      "sha256": "0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9",
+      "sha3_256": "92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30",
+      "license": "public-domain",
+      "compile_options": ["SQLITE_THREADSAFE=1", "SQLITE_DQS=0", "SQLITE_OMIT_LOAD_EXTENSION=1"]
+    }
+  ]
+}

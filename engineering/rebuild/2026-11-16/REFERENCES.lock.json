@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "frozen_on": "2026-11-17",
+  "scope": "source refs and official Windows artifacts; no parity result",
+  "references": [
+    {
+      "name": "aria2",
+      "repository": "aria2/aria2",
+      "tag": "release-1.37.0",
+      "source_commit": "02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a",
+      "release_url": "https://github.com/aria2/aria2/releases/tag/release-1.37.0",
+      "archive": "aria2-1.37.0-win-64bit-build1.zip",
+      "bytes": 2475379,
+      "sha256": "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288",
+      "publisher_digest_verified": false,
+      "binaries": [
+        {
+          "path": "aria2-1.37.0-win-64bit-build1\\aria2c.exe",
+          "bytes": 5649408,
+          "sha256": "be2099c214f63a3cb4954b09a0becd6e2e34660b886d4c898d260febfe9d70c2"
+        }
+      ],
+      "runtime_verified": false
+    },
+    {
+      "name": "gopeed",
+      "repository": "GopeedLab/gopeed",
+      "tag": "v1.9.3",
+      "source_commit": "a5cd53f94c18ac65add684b1113fa5f0b47cc4da",
+      "release_url": "https://github.com/GopeedLab/gopeed/releases/tag/v1.9.3",
+      "archive": "gopeed-web-v1.9.3-windows-amd64.zip",
+      "bytes": 40411930,
+      "sha256": "ee3d41fa19c366b820a2483619328156579108ac03c53ea35cdb33327320f756",
+      "publisher_digest_verified": true,
+      "binaries": [
+        {
+          "path": "gopeed-web-v1.9.3-windows-amd64\\gopeed.exe",
+          "bytes": 93701120,
+          "sha256": "71ae0d89f7ac1f3a5e481aa2ee836ce110738f606cc61b68764ca9131aa27bc4"
+        }
+      ],
+      "runtime_verified": false
+    },
+    {
+      "name": "wenxi",
+      "repository": "z7786/wenxi",
+      "tag": "v2.3.5+235",
+      "source_commit": "1b2fc625109472793ceddc32edd8d9b4b72274cf",
+      "release_url": "https://github.com/z7786/wenxi/releases/tag/v2.3.5%2B235",
+      "archive": "asterlink-2.3.5+235-windows-x64.zip",
+      "bytes": 60285115,
+      "sha256": "a40987cb265a8a575ea9ad2e914b53d57f5020980b93bf1b3e345b067e731cfe",
+      "publisher_digest_verified": true,
+      "binaries": [
+        {
+          "path": "asterlink.exe",
+          "bytes": 317952,
+          "sha256": "fa7c4aaa3e26466a9724fe59c24849b41dde5c263cb559312c0fa2f4c1fc2f62"
+        },
+        {
+          "path": "asterlink_gopeed.exe",
+          "bytes": 35976704,
+          "sha256": "dd5477f0776ddca42522182c404dd02f8425673ca2b695b6e233d7f20ee664af"
+        },
+        {
+          "path": "tools\\player-7za.exe",
+          "bytes": 1335296,
+          "sha256": "5bea5af5215089d97749d438351d7288310d0b8a472616edbe1b34168ad1001c"
+        }
+      ],
+      "runtime_verified": false
+    }
+  ]
+}

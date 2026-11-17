@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "frozen_on": "2026-11-16",
+  "baseline": {"turbodl": "0.5.0.6", "yunget": "2.7.39"},
+  "references": {"aria2": "1.37.0", "gopeed": "1.9.3", "wenxi": "2.3.5", "curl": "8.23.0"},
+  "protocols": ["http1", "http2", "http3", "hls", "dash", "ftp", "sftp", "bittorrent", "magnet", "metalink", "ed2k"],
+  "platforms": ["android", "windows", "linux", "macos", "ios"],
+  "performance": {
+    "paired_rounds": 5,
+    "maximum_rounds": 9,
+    "noisy_cv": 0.15,
+    "confidence": 0.95,
+    "reference_elapsed_ratio_upper_bound": 1.10,
+    "baseline_maximum_regression": 0.05,
+    "reference_resource_ratio_upper_bound": 1.25,
+    "tracks": ["default_settings", "common_connection_ceiling"],
+    "required_metrics": ["cold_start_ms", "first_byte_ms", "transfer_ms", "file_visible_ms", "wire_bytes", "requests", "sockets", "streams", "cpu_seconds", "peak_rss", "duplicate_bytes", "sha256", "error", "exit_status"],
+    "result_rules": {"timeout": "FAIL", "hash_mismatch": "FAIL", "missing_metric": "VERIFYING", "unsupported": "BLOCKED", "excess_variance": "VERIFYING"}
+  },
+  "network": {
+    "ledger": "_bench/results/traffic-budget/traffic-ledger.jsonl",
+    "additional_allowance_bytes": 0,
+    "minimum_independent_sources": 3,
+    "minimum_access_networks": 2,
+    "requires_authorized_cloud_drive": true,
+    "cold_and_warm_separate": true,
+    "source_resolution_and_transfer_separate": true
+  },
+  "runtime": {"soak_hours_per_platform": 24, "android_real_device_required": true, "ios_real_device_required": true, "cross_compile_is_runtime_pass": false},
+  "fixtures": {"sizes_bytes": [65536, 1048576, 33554432, 268435456, 1073741824], "connection_ceilings": [1, 8, 16, 64, 128, 256], "candidate_frozen_before_holdout": true, "keep_all_failures": true}
+}

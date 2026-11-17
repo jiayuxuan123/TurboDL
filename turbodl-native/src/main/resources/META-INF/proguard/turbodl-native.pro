@@ -1,0 +1,2 @@
+-keep class dev.turbodl.nativebridge.NativeBridge { *; }
+-keep class dev.turbodl.nativebridge.NativeSnapshot { public <init>(long[],java.lang.String,java.lang.String); *; }
