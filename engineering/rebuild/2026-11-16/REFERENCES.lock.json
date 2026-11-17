@@ -69,6 +69,25 @@
         }
       ],
       "runtime_verified": false
+    },
+    {
+      "name": "curl",
+      "repository": "curl/curl",
+      "tag": "curl-8_23_0",
+      "source_commit": "3163ec065643ba20709f190111f42c3e1fe95273",
+      "release_url": "https://github.com/curl/curl/releases/tag/curl-8_23_0",
+      "archive": "curl-8.23.0_9-win64-mingw.zip",
+      "bytes": 8665536,
+      "sha256": "89cb71930f4242d884e8e349463455932ab1d089b20f4f99318261a3cbff9167",
+      "publisher_digest_verified": true,
+      "binaries": [
+        {
+          "path": "bin/curl.exe",
+          "bytes": 3959912,
+          "sha256": "3c871d76f592b7b2050c6070a293d296c9fd67a0b3d165b2fa4cd7d7e4a02f58"
+        }
+      ],
+      "runtime_verified": false
     }
   ]
 }

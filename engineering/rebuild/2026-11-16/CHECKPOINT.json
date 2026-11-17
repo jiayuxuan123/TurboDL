@@ -55,7 +55,7 @@
     "turbodl-native/src/main/resources/META-INF/proguard/turbodl-native.pro": "38214fae462d200987181b792eb8bb8ec3f1d61de5d1b14ef1ccd0f7c457906c"
   },
   "native_library_sha256": "0c624b096ee0d35a2e9f4f4e65cdd8e7c58eb82efc79e75c6ecb08089e6cdbe9",
-  "remaining_bytes": 1281713609,
+  "remaining_bytes": 1281711436,
   "known_blockers": [
     "Android/Apple devices unavailable",
     "Full real-network matrix not funded",

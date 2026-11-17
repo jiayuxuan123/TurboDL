@@ -128,7 +128,8 @@ Official reference metadata and three isolated Windows archives are separately
 reconciled. Official tags are pinned to commits; archive/executable hashes are
 frozen in REFERENCES.json and ASSETS.json under the external cache. Gopeed and
 Wenxi archives match publisher digests; aria2 has no publisher digest in that
-release metadata, so only its local digest/ZIP CRC are claimed. Reference runtime
-capabilities and comparisons have not yet run.
-Last balance: **1,281,713,609 bytes**, no open reservations. Read the live ledger
+release metadata, so only its local digest/ZIP CRC are claimed. Aria2/curl version-feature output and static Go module/build information are
+saved in REFERENCE-CAPABILITIES.json. Protocol workloads and comparisons have
+not yet run. Curl is separately pinned to its official tag and local binary.
+Last balance: **1,281,711,436 bytes**, no open reservations. Read the live ledger
 before another outbound experiment. Real-network/device gates remain mandatory.
