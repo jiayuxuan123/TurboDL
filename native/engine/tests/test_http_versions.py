@@ -3,11 +3,13 @@ import asyncio
 import ctypes as C
 import datetime
 import hashlib
+import http.server
 import ipaddress
 import json
 import os
 from pathlib import Path
 import ssl
+import struct
 import subprocess
 import threading
 import unittest
@@ -92,6 +94,72 @@ class HttpVersionTests(EngineCase):
         final = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(final['negotiated_http_versions'], 1 << (version - 1))
         self.assertEqual(output.read_bytes(), DATA)
+
+    def test_rejected_ipv6_candidate_does_not_fail_allowed_ipv4_transfer(self):
+        self.verify_mixed_addresses(ipaddress.IPv4Address('127.0.0.1'), COMPLETED)
+
+    def test_transfer_reports_policy_when_all_dns_candidates_are_rejected(self):
+        self.verify_mixed_addresses(ipaddress.IPv4Address('169.254.1.27'), FAILED)
+
+    def verify_mixed_addresses(self, ipv4, expected_state):
+        https = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        https.load_cert_chain(self.ca, self.private)
+        addresses = {1: ipv4.packed, 28: ipaddress.IPv6Address('fdfe:dcba:9876::57').packed}
+        queries = set()
+
+        class Resolver(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_POST(self):
+                query = self.rfile.read(int(self.headers['Content-Length']))
+                question_end = query.index(0, 12) + 5
+                record_type = struct.unpack_from('!H', query, question_end - 4)[0]
+                queries.add(record_type)
+                address = addresses[record_type]
+                reply = (query[:2] + struct.pack('!5H', 0x8180, 1, 1, 0, 0)
+                         + query[12:question_end]
+                         + struct.pack('!HHHIH', 0xc00c, record_type, 1, 60, len(address))
+                         + address)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/dns-message')
+                self.send_header('Content-Length', str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+
+        with http.server.ThreadingHTTPServer(('127.0.0.1', reserve_port(self)), Resolver) as resolver:
+            resolver.socket = https.wrap_socket(resolver.socket, server_side=True)
+            thread = threading.Thread(target=resolver.serve_forever, daemon=True)
+            thread.start()
+            try:
+                network = NetworkOptions(C.sizeof(NetworkOptions), ABI)
+                network.ca_bundle = str(self.ca).encode()
+                network.doh_url = f'https://127.0.0.1:{resolver.server_port}/dns-query'.encode()
+                options = ExtendedOptions(C.sizeof(ExtendedOptions), ABI)
+                options.url = f'http://dual-stack.example.test:{self.server.server_port}/file'.encode()
+                options.destination = str(self.path/'mixed-addresses.bin').encode()
+                options.stable_key = b'mixed-addresses'
+                options.connections = 1
+                options.request_window_bytes = 262144
+                options.connect_timeout_ms = 2000
+                options.read_timeout_ms = 2000
+                options.network = C.pointer(network)
+                engine = self.engine()
+                task = C.c_uint64()
+                self.assertEqual(0, self.lib.td_task_submit(
+                    engine, C.cast(C.byref(options), C.POINTER(TaskOptions)), C.byref(task)))
+                done = self.until(engine, task.value, lambda snapshot: snapshot.state in (COMPLETED, FAILED))
+                self.assertEqual({1, 28}, queries)
+                self.assertEqual(expected_state, done.state, done.message)
+                if expected_state == COMPLETED:
+                    self.assertEqual(DATA, (self.path/'mixed-addresses.bin').read_bytes())
+                else:
+                    self.assertEqual(10, done.error)
+                    self.assertEqual(0, done.http_status)
+            finally:
+                resolver.shutdown()
+                thread.join(2)
+
     def test_http2_ranges_use_real_tls_alpn_and_h2_frames(self):
         import h2.config,h2.connection,h2.events
         async def handle(reader,writer):

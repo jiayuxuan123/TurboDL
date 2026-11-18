@@ -84,6 +84,11 @@ bool socket_allowed(curl_sockaddr* a,bool test_loopback){
     return (b[0]&0xe0)==0x20 && !(b[0]==0x20 && b[1]==0x01 && b[2]==0x0d && b[3]==0xb8);
 }
 struct Request;
+struct RangeRetry {
+    uint32_t attempts=0;
+    uint64_t end=0;
+    Clock::time_point ready_at{};
+};
 struct Source {
     std::string url,representation;
     Headers headers;
@@ -110,7 +115,7 @@ struct Task {
     std::vector<Source> sources;
     size_t next_source=0;
     uint32_t connections=1,connect_ms=10000,read_ms=30000,redirects=0,retry_count=3,host_limit=512,http_version=0;
-    std::map<uint64_t,uint32_t> range_retries;
+    std::map<uint64_t,RangeRetry> range_retries;
     uint64_t window=1048576,checkpoint_bytes=0;
     int64_t checkpoint_total=-1;
     uint64_t source_offset=0,maximum_bytes=0;
@@ -174,6 +179,7 @@ struct Request {
     bool headers_ready=false,redirect=false,paused=false,restart_whole=false,http=true;
     bool empty_representation=false;
     bool reused_connection=false;
+    bool address_rejected=false,address_allowed=false;
     uint8_t tail_splits=0;
     bool open_ended=false;
     Clock::time_point started_at=Clock::now(),first_byte_at{},sample_at{};
@@ -392,7 +398,11 @@ struct td_engine {
     }
     static curl_socket_t socket_cb(void* user,curlsocktype,curl_sockaddr* address){
         auto& r=*static_cast<Request*>(user);
-        if(!socket_allowed(address,r.task->loopback)){r.error=TD_ERROR_POLICY;r.message="Destination rejected by network policy";return CURL_SOCKET_BAD;}
+        if(!socket_allowed(address,r.task->loopback)){
+            r.address_rejected=true;
+            return CURL_SOCKET_BAD;
+        }
+        r.address_allowed=true;
         return ::socket(address->family,address->socktype,address->protocol);
     }
     static size_t header_cb(char* p,size_t a,size_t b,void* user){
@@ -466,10 +476,13 @@ struct td_engine {
     }
     static int progress_cb(void* user,curl_off_t,curl_off_t,curl_off_t,curl_off_t){return static_cast<Request*>(user)->task->command.load()!=0;}
     void start(Task& t,td::Range range){
-        auto available=td::process_resources().buffer_ceiling();
-        if(available<td::ResourceDomain::request_buffer_bytes)return;
-        auto capacity=std::clamp<uint64_t>((range.end-range.begin)/2,32768,512*1024);
-        capacity=std::min(capacity,(available-16384)/2);
+        const auto budget=td::process_resources().buffer_ceiling();
+        constexpr auto minimum=td::ResourceDomain::request_buffer_bytes;
+        if(budget<minimum)return;
+        const auto slots=std::min(t.connections,t.host_limit);
+        const auto request_budget=std::max(minimum,budget/slots);
+        const auto capacity=std::clamp<uint64_t>((range.end-range.begin)/2,32768,
+            std::min<uint64_t>(512*1024,(request_budget-16384)/2));
         const auto payload_bytes=capacity*2+16384;
         size_t selected=0;uint64_t lease=0;std::string source_origin,budget_key;
         for(size_t i=0;i<t.sources.size();++i){
@@ -529,6 +542,10 @@ struct td_engine {
     void completion(Request& r,CURLcode result){
         Task& t=*r.task;auto& source=t.sources.at(r.source_index);active(t);
         if(t.command.load()!=0)return;
+        if(!r.error && result==CURLE_COULDNT_CONNECT && r.address_rejected && !r.address_allowed){
+            r.error=TD_ERROR_POLICY;
+            r.message="Destination rejected by network policy";
+        }
         if(r.tail_splits && r.cursor==r.assigned.end && (result==CURLE_WRITE_ERROR || result==CURLE_ABORTED_BY_CALLBACK))result=CURLE_OK;
         if(r.restart_whole){t.whole_file=true;t.identity_checked=false;return;}
         if(r.redirect){
@@ -568,10 +585,16 @@ struct td_engine {
             // Parallel ranges do not consume each other's retry allowance.
             // After verified writes advance the cursor, retire the old hole.
             if(r.cursor>r.assigned.begin)t.range_retries.erase(r.assigned.begin);
-            auto& attempts=t.range_retries[r.cursor];
-            if(++attempts>t.retry_count){fail(t,TD_ERROR_NETWORK,"Network retry limit reached; saved bytes retained");return;}
-            if(attempts==1 && r.reused_connection && r.body_bytes==0 && (result==CURLE_RECV_ERROR || result==CURLE_SEND_ERROR || result==CURLE_GOT_NOTHING))return;
-            t.retry_at=Clock::now()+std::chrono::milliseconds(250u<<std::min(attempts,5u));return;
+            auto& retry=t.range_retries[r.cursor];
+            if(++retry.attempts>t.retry_count){fail(t,TD_ERROR_NETWORK,"Network retry limit reached; saved bytes retained");return;}
+            retry.end=r.assigned.end;
+            if(retry.attempts==1 && r.reused_connection && r.body_bytes==0 &&
+               (result==CURLE_RECV_ERROR || result==CURLE_SEND_ERROR || result==CURLE_GOT_NOTHING)){
+                retry.ready_at={};
+                return;
+            }
+            retry.ready_at=Clock::now()+std::chrono::milliseconds(250u<<std::min(retry.attempts,5u));
+            return;
         }
         if(t.total<0){t.total=static_cast<int64_t>(r.cursor);std::lock_guard lock(t.mutex);t.view.total_bytes=t.total;}
         if(r.body_bytes==0 && t.total!=0){fail(t,TD_ERROR_RANGE,"Response made no progress");return;}
@@ -715,10 +738,16 @@ struct td_engine {
         constexpr uint64_t checkpoint_size_limit=64*1024*1024;
         if(t.coverage.bytes()>t.checkpoint_bytes && (t.coverage.bytes()-t.checkpoint_bytes>=checkpoint_size_limit || Clock::now()-t.checkpoint_at>std::chrono::seconds(1))){start_checkpoint(t);return;}
         uint32_t ceiling=t.identity_checked && t.range_supported && (!t.etag.empty() || !t.expected.empty())?t.connections:1;
+        if(t.requests.size()>=ceiling)return;
         std::vector<td::Range> reserved;for(auto& r:t.requests)reserved.push_back(r->assigned);
-        if(reserved.size()>=ceiling)return;
+        const auto now=Clock::now();
+        for(const auto& [begin,retry]:t.range_retries){
+            if(retry.ready_at<=now)continue;
+            if(ceiling==1)return;
+            if(begin<retry.end)reserved.push_back({begin,retry.end});
+        }
         auto total=t.total>=0?static_cast<uint64_t>(t.total):max_offset;
-        while(reserved.size()<ceiling){
+        while(t.requests.size()<ceiling){
             auto request_window=t.window;
             if(t.total<0 && !t.whole_file && http_url(t.url)){
                 // The discovery request also carries useful payload. A single
@@ -736,6 +765,10 @@ struct td_engine {
             }
             auto gap=t.coverage.gap(total,(t.whole_file || !http_url(t.url))?total:request_window,reserved);
             if(!gap){assist_tail(t);break;}
+            if(auto retry=t.range_retries.lower_bound(gap->begin);retry!=t.range_retries.end()){
+                const auto boundary=retry->first==gap->begin?retry->second.end:retry->first;
+                if(boundary>gap->begin)gap->end=std::min(gap->end,boundary);
+            }
             auto before=t.requests.size();start(t,*gap);
             if(t.requests.size()==before)break;
             reserved.push_back(*gap);
@@ -818,6 +851,11 @@ struct td_engine {
                     if(t->torrent_job)timeout=std::min(timeout,50L);
                     if(t->media_job)timeout=std::min(timeout,t->media_job->next_timer());
                     if(t->retry_at>now)timeout=std::min(timeout,static_cast<long>(std::max<int64_t>(1,std::chrono::duration_cast<std::chrono::milliseconds>(t->retry_at-now).count())));
+                    for(const auto& [offset,retry]:t->range_retries){
+                        (void)offset;
+                        if(retry.ready_at>now)timeout=std::min(timeout,static_cast<long>(std::max<int64_t>(
+                            1,std::chrono::duration_cast<std::chrono::milliseconds>(retry.ready_at-now).count())));
+                    }
                     if(t->command.load() && !t->io.valid() && t->requests.empty())timeout=0;
                     for(const auto& request:t->requests){
                         if(request->paused && block_available(*request))timeout=std::min(timeout,10L);

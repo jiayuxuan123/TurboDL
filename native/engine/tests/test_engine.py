@@ -108,6 +108,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             self.send_response(302);self.send_header('Content-Length','0');self.send_header('Location','/file');self.end_headers();return
         payload=DATA
         if self.path=='/small-slow-first':payload=DATA[:49152]
+        if self.path=='/wide-range':payload=self.server.wide_payload
         etag='"fixture-v1"'
         if self.path=='/changed':payload=bytes(b^0x5a for b in DATA);etag='"fixture-v2"'
         request_range=self.headers.get('Range')
@@ -140,6 +141,22 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if ranged:self.send_header('Content-Range',f'bytes {start}-{end}/{len(payload)}')
         self.end_headers()
         try:
+            if self.path=='/wide-range':
+                with self.lock:
+                    if type(self).active>=48:self.server.wide_ready.set()
+                self.server.wide_ready.wait(1)
+            if self.path=='/retry-isolation':
+                if start==0:
+                    self.server.healthy_range_started.wait(1.5)
+                elif start==262144:
+                    with self.lock:
+                        self.server.isolated_attempts+=1
+                        first=self.server.isolated_attempts==1
+                    if first:
+                        self.close_connection=True
+                        return
+                else:
+                    self.server.healthy_range_started.set()
             if self.path=='/header-gate':
                 self.wfile.flush()
                 if start==0:self.server.header_peer_released=self.server.header_peer.wait(.4)
@@ -481,6 +498,35 @@ class NativeEngineTests(EngineCase):
         self.assertGreaterEqual(len(self.server.disconnect_attempts),4,'fixture must fail several independent ranges')
         self.assertTrue(all(tries>=2 for tries in self.server.disconnect_attempts.values()))
         self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
+    def test_large_ranges_fit_high_concurrency_in_the_android_buffer_budget(self):
+        self.server.wide_payload = DATA * 40
+        self.server.wide_ready = threading.Event()
+        self.server.socket.listen(128)
+        engine = self.engine(connections=64, buffers=32*1024*1024)
+        task = self.submit(engine, '/wide-range', connections=64, sha=False)
+        done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED), timeout=18)
+        self.assertEqual(COMPLETED, done.state, done.message)
+        self.assertGreaterEqual(done.peak_active_requests, 48)
+        self.assertTrue(self.server.wide_ready.is_set(), 'at least 48 ranges must reach the server together')
+        with (self.path / 'task.bin').open('rb') as stream:
+            self.assertEqual(hashlib.sha256(self.server.wide_payload).hexdigest(),
+                             hashlib.file_digest(stream, 'sha256').hexdigest())
+
+    def test_healthy_range_starts_during_another_ranges_retry_delay(self):
+        self.server.isolated_attempts = 0
+        self.server.healthy_range_started = threading.Event()
+        engine = self.engine(connections=2)
+        task = self.submit(engine, '/retry-isolation', connections=2)
+        done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED))
+        self.assertEqual(COMPLETED, done.state, done.message)
+        with Fixture.lock:
+            starts = [int(row[1].removeprefix('bytes=').split('-')[0])
+                      for row in Fixture.requests if row[0] == '/retry-isolation' and row[1]]
+        first = starts.index(262144)
+        retry = starts.index(262144, first + 1)
+        self.assertTrue(any(offset > 262144 for offset in starts[first + 1:retry]), starts)
+        self.assertEqual(DATA, (self.path / 'task.bin').read_bytes())
 
     def test_a_permanently_disconnected_range_still_obeys_its_retry_limit(self):
         e=self.engine(connections=1)
