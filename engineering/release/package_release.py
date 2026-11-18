@@ -72,6 +72,48 @@ def archive(path, entries):
         assert bundle.testzip() is None, path
 
 
+ANDROID_TARGETS = {'arm64-v8a': (2, 183), 'armeabi-v7a': (1, 40), 'x86_64': (2, 62), 'x86': (1, 3)}
+WINDOWS_ENGINE_FILES = (
+    'tdl-vnext.exe', 'turbodl_engine.dll', 'libcurl-x64.dll', 'libtorrent-rasterbar.dll',
+    'avutil-61.dll', 'avcodec-63.dll', 'avformat-63.dll',
+)
+
+
+def shared_core_entries(root):
+    files = []
+    for abi, (elf_class, machine) in ANDROID_TARGETS.items():
+        file = root / 'android' / abi / 'libturbodl_engine.so'
+        with file.open('rb') as stream:
+            header = stream.read(64)
+            assert header[:6] == b'\x7fELF' + bytes([elf_class, 1]), file
+            assert struct.unpack_from('<H', header, 18)[0] == machine, file
+            if elf_class == 2:
+                offset = struct.unpack_from('<Q', header, 32)[0]
+                width, count = struct.unpack_from('<HH', header, 54)
+                alignment_offset, format_code = 48, '<Q'
+            else:
+                offset = struct.unpack_from('<I', header, 28)[0]
+                width, count = struct.unpack_from('<HH', header, 42)
+                alignment_offset, format_code = 28, '<I'
+            stream.seek(offset)
+            segments = [stream.read(width) for _ in range(count)]
+        loads = [segment for segment in segments if segment[:4] == b'\x01\x00\x00\x00']
+        assert loads and all(struct.unpack_from(format_code, s, alignment_offset)[0] >= 16384 for s in loads), file
+        files.append((file, f'shared-core/android/{abi}/{file.name}', False))
+    for name in WINDOWS_ENGINE_FILES:
+        file = root / 'windows-x86_64' / name
+        check_binary(file, 'windows-x86_64')
+        files.append((file, f'platforms/windows-x86_64/{name}', name.endswith('.exe')))
+    for relative in ('include/turbodl/engine.h', 'jvm/turbodl-native.jar', 'dependencies.lock.json'):
+        file = root / relative
+        assert file.is_file(), file
+        files.append((file, f'shared-core/{relative}', False))
+    licenses = sorted(path for path in (root / 'licenses').rglob('*') if path.is_file())
+    assert licenses, 'Include the shared core and dependency license notices'
+    files.extend((file, f'shared-core/{file.relative_to(root).as_posix()}', False) for file in licenses)
+    return files
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--version', required=True)
@@ -79,6 +121,7 @@ def main():
     parser.add_argument('--test-report', type=Path, required=True)
     parser.add_argument('--ab-report', type=Path, required=True)
     parser.add_argument('--platform-report', type=Path, required=True)
+    parser.add_argument('--shared-core', type=Path)
     args = parser.parse_args()
     version = args.version
     out = args.output.resolve()
@@ -121,6 +164,8 @@ def main():
         exe = '.exe' if target.startswith('windows') else ''
         binaries = [ROOT / 'native/dist/launcher' / target / 'bin' / ('turbodl' + exe),
                     ROOT / 'native/dist/dataplane' / target / 'bin' / ('zig-probe' + exe)]
+        if args.shared_core and target == 'windows-x86_64':
+            binaries[0] = args.shared_core / target / 'turbodl.exe'
         for binary in binaries:
             check_binary(binary, target)
         native[target] = binaries
@@ -131,6 +176,8 @@ def main():
         data = universal([native['macos-x86_64'][index], native['macos-arm64'][index]])
         entries.append((data, 'platforms/macos-universal2/' + name, True))
     entries.append((cli, 'platforms/macos-universal2/' + cli.name, False))
+    if args.shared_core:
+        entries.extend(shared_core_entries(args.shared_core))
     product = out / f'TurboDL-v{version}-polyglot-local.zip'
     archive(product, entries)
     files.append(product)

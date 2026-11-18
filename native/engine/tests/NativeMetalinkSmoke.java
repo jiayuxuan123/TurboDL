@@ -10,7 +10,7 @@ public final class NativeMetalinkSmoke {
     static byte[] utf8(String value) { return value.getBytes(StandardCharsets.UTF_8); }
     public static void main(String[] args) throws Exception {
         NativeBridge.load(new File(args[0]));
-        long engine=NativeBridge.nCreate(utf8(args[1]+"/metal-journal"),2,4,1024*1024,1);
+        long engine=NativeBridge.nCreate(utf8(args[1]+"/metal-journal"),2,4,8*1024*1024,1);
         File output=new File(args[1],"metal-jni.bin");
         String xml="<metalink xmlns=\"urn:ietf:params:xml:ns:metalink\"><file name=\"fixture.bin\"><hash type=\"sha-256\">"+args[3]+"</hash><url>"+args[2]+"</url></file></metalink>";
         try {

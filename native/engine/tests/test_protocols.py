@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import socket
 import ssl
+import subprocess
 import threading
 import unittest
 from test_engine import ABI,DATA,COMPLETED,FAILED,Fixture,EngineCase,NetworkOptions,Policy,ExtendedOptions,TaskOptions
@@ -115,6 +116,18 @@ class ProtocolTests(EngineCase):
             t=self.submit_network(e,f'sftp://127.0.0.1:{port}/fixture.bin',network)
             done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED),timeout=12)
             self.assertEqual(COMPLETED,done.state,done.message);self.assertEqual(DATA,(self.path/'protocol.bin').read_bytes())
+            name = 'tdl-vnext.exe' if os.name == 'nt' else 'tdl-vnext'
+            cli = os.environ.get('TD_PUBLIC_CLI') or str(Path(os.environ['TD_ENGINE_LIBRARY']).with_name(name))
+            output = self.path / 'cli-sftp.bin'
+            result = subprocess.run(
+                [cli, f'sftp://127.0.0.1:{port}/fixture.bin', '-o', str(output),
+                 '--username', 'fixture', '--password', TEST_PASSWORD, '--ssh-known-hosts', str(known),
+                 '--sha256', hashlib.sha256(DATA).hexdigest(), '--connections', '1',
+                 '--deadline', '12', '--allow-loopback-fixture'],
+                capture_output=True, text=True, encoding='utf-8', timeout=16,
+            )
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout[-800:])
+            self.assertEqual(DATA, output.read_bytes())
             other=paramiko.RSAKey.generate(2048);known.write_text(f'[127.0.0.1]:{port} {other.get_name()} {other.get_base64()}\n',encoding='ascii')
             t=self.submit_network(e,f'sftp://127.0.0.1:{port}/fixture.bin',network,Policy(C.sizeof(Policy),ABI,0,1,None),key='wrong-host-key')
             failed=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED),timeout=8)

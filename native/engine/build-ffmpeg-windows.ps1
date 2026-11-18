@@ -28,19 +28,19 @@ $llvm=Join-Path $NdkDirectory 'toolchains\llvm\prebuilt\windows-x86_64\bin'
 $nmPosix=(& $cygpath -u (Join-Path $llvm 'llvm-nm.exe')).Trim()
 $stripPosix=(& $cygpath -u (Join-Path $llvm 'llvm-strip.exe')).Trim()
 $dlltool=Join-Path $llvm 'llvm-dlltool.exe'
-$dlltoolPosix=(& $cygpath -u $dlltool).Trim()
 Push-Location $build
 try {
     if(-not $SkipConfigure){
     & (Join-Path $gitBin 'bash.exe') --noprofile --norc "$sourcePosix/configure" `
         "--prefix=$prefixPosix" "--cc=$toolsPosix/zig-cc.exe" "--host-cc=$toolsPosix/zig-cc.exe" "--ar=$toolsPosix/zig-ar.exe" `
-        "--ranlib=$toolsPosix/zig-ranlib.exe" "--nm=$nmPosix" "--strip=$stripPosix" "--dlltool=$dlltoolPosix" `
+        "--ranlib=$toolsPosix/zig-ranlib.exe" "--nm=$nmPosix" "--strip=$stripPosix" `
         --target-os=mingw32 --arch=x86_64 --enable-cross-compile --enable-shared --disable-static `
         --disable-everything --disable-autodetect --disable-network --disable-programs --disable-doc `
         --disable-debug --disable-asm --disable-x86asm --disable-gpl --disable-nonfree --disable-avdevice `
         --disable-avfilter --disable-swresample --disable-swscale --enable-small `
         --enable-demuxer=mov,mpegts,aac,h264,hevc --enable-muxer=mp4,mov,mpegts,adts `
         --enable-protocol=file --enable-parser=aac,h264,hevc `
+        --enable-encoder=aac,mpeg4 --enable-decoder=aac,mpeg4 `
         --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb
     if($LASTEXITCODE -ne 0){throw 'FFmpeg configuration failed'}
     }
@@ -70,4 +70,23 @@ try {
     }
     & $make install
     if($LASTEXITCODE -ne 0){throw 'FFmpeg library install failed'}
+    # Native Windows make routes this 17 KiB header-install command through
+    # cmd.exe's 8 KiB limit. Install the exact planned public headers one at a
+    # time so a successful make cannot silently leave libavutil empty.
+    $installPlan=& $make -n install-headers
+    if($LASTEXITCODE -ne 0){throw 'Cannot inspect FFmpeg public headers'}
+    $prefixFull=[IO.Path]::GetFullPath($Prefix)
+    foreach($line in $installPlan){
+        if($line -notmatch 'install -m 644 (?<sources>.+) "(?<destination>[^"]+/include/libav(?:format|codec|util))"'){continue}
+        $destination=[IO.Path]::GetFullPath($Matches.destination)
+        if(-not $destination.StartsWith($prefixFull+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Header destination escaped prefix'}
+        $sources=$Matches.sources
+        foreach($headerMatch in [regex]::Matches($sources,'(?:"(?<path>[^"]+\.h)"|(?<path>[^\s]+\.h))')){
+            $headerPath=$headerMatch.Groups['path'].Value
+            if(-not [IO.Path]::IsPathRooted($headerPath)){$headerPath=Join-Path $build $headerPath}
+            $header=[IO.Path]::GetFullPath($headerPath)
+            Copy-Item -LiteralPath $header -Destination $destination -Force
+        }
+    }
+    if(-not (Test-Path -LiteralPath (Join-Path $prefixFull 'include\libavutil\avutil.h'))){throw 'FFmpeg public header installation incomplete'}
 } finally {Pop-Location}

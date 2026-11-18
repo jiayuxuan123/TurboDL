@@ -11,6 +11,7 @@ struct HlsKey {
     std::string url;
     std::array<uint8_t,16> iv{};
     bool explicit_iv=false;
+    uint64_t generation=0;
 };
 struct HlsMap {
     std::string url;

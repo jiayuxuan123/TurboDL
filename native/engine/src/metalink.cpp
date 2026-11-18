@@ -116,9 +116,17 @@ extern "C" TD_API int32_t td_metalink_submit(td_engine* engine,const char* xml,
         for(size_t i=1;i<urls.size();++i)mirrors.push_back({sizeof(td_source_options),TD_ABI_VERSION,urls[i].value.c_str(),nullptr,0,0,nullptr});
         options.url=urls.front().value.c_str();options.expected_sha256=hash.c_str();
         options.mirrors=mirrors.data();options.mirror_count=static_cast<uint32_t>(mirrors.size());
-        // XML cannot authorize sending credentials to any supplied URL.
-        // Protected sources use the explicit task/source API instead.
-        if(options.header_count || options.network)return TD_UNSUPPORTED;
+        // Let callers choose transport and trust settings. The document is
+        // untrusted and cannot authorize sending credentials to its sources.
+        if(options.header_count)return TD_UNSUPPORTED;
+        if(options.network) {
+            const auto& network=*options.network;
+            if(network.struct_size<sizeof(network) || network.abi_version!=TD_ABI_VERSION)return TD_INVALID;
+            for(auto field:{network.username,network.password,network.ssh_known_hosts,
+                            network.ssh_public_key,network.ssh_private_key}){
+                if(field && *field)return TD_UNSUPPORTED;
+            }
+        }
         auto size=child(file,"size");int64_t expected_size=0;
         if(size){expected_size=integer(trim(size.text().as_string()));options.expected_size=&expected_size;}
         return td_task_submit(engine,&options,out);

@@ -58,7 +58,16 @@ class BackendResult(
     val orderedParts: List<File>,
     val totalBytes: Long,
     val partOffsets: List<Long>? = null,
-)
+) {
+    internal var directoryOutput: File? = null
+        private set
+
+    companion object {
+        /** Return the verified directory itself as the completed result. */
+        fun directory(output: File, totalBytes: Long): BackendResult =
+            BackendResult(emptyList(), totalBytes).apply { directoryOutput = output }
+    }
+}
 
 /**
  * Services the engine provides to a backend during a download.

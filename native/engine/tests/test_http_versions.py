@@ -4,8 +4,11 @@ import ctypes as C
 import datetime
 import hashlib
 import ipaddress
+import json
+import os
 from pathlib import Path
 import ssl
+import subprocess
 import threading
 import unittest
 from cryptography import x509
@@ -75,6 +78,20 @@ class HttpVersionTests(EngineCase):
         self.assertGreater(metrics.finished_requests,1);self.assertGreater(metrics.new_connections,0)
         self.assertGreater(metrics.task_first_byte_us,0);self.assertEqual(0,metrics.active_streams)
         self.assertTrue(self.seen)
+    def verify_cli(self, port, version):
+        name = 'tdl-vnext.exe' if os.name == 'nt' else 'tdl-vnext'
+        cli = os.environ.get('TD_PUBLIC_CLI') or str(Path(os.environ['TD_ENGINE_LIBRARY']).with_name(name))
+        output = self.path / f'cli-http{version}.bin'
+        result = subprocess.run(
+            [cli, f'https://127.0.0.1:{port}/file', '-o', str(output), '--connections', '4',
+             '--http-policy', f'http{version}', '--ca-bundle', str(self.ca),
+             '--sha256', hashlib.sha256(DATA).hexdigest(), '--deadline', '15', '--allow-loopback-fixture'],
+            capture_output=True, text=True, encoding='utf-8', timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout[-800:])
+        final = json.loads(result.stdout.splitlines()[-1])
+        self.assertEqual(final['negotiated_http_versions'], 1 << (version - 1))
+        self.assertEqual(output.read_bytes(), DATA)
     def test_http2_ranges_use_real_tls_alpn_and_h2_frames(self):
         import h2.config,h2.connection,h2.events
         async def handle(reader,writer):
@@ -106,6 +123,7 @@ class HttpVersionTests(EngineCase):
             return server.sockets[0].getsockname()[1]
         port=asyncio.run_coroutine_threadsafe(start(),self.loop).result(timeout=5)
         e=self.engine();self.verify(e,self.submit_version(e,port,2),2)
+        self.verify_cli(port, 2)
     def test_http3_ranges_use_real_quic_and_h3_streams(self):
         from aioquic.asyncio import serve
         from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -128,5 +146,6 @@ class HttpVersionTests(EngineCase):
             server=await serve('127.0.0.1',port,configuration=config,create_protocol=Server);self.services.append(server);return port
         port=asyncio.run_coroutine_threadsafe(start(),self.loop).result(timeout=5)
         e=self.engine();self.verify(e,self.submit_version(e,port,3),3)
+        self.verify_cli(port, 3)
 
 if __name__=='__main__':unittest.main(verbosity=2)

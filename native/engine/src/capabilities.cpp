@@ -35,7 +35,11 @@ std::string report() {
 #else
     out+=",\"bittorrent\":false,\"magnet\":false";
 #endif
+#ifdef TD_WITH_MEDIA
+    out+=",\"hls\":true,\"dash\":true,\"ed2k\":false";
+#else
     out+=",\"hls\":false,\"dash\":false,\"ed2k\":false";
+#endif
 #ifdef TD_WITH_METALINK
     out+=",\"metalink\":true}";
 #else

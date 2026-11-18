@@ -1,14 +1,12 @@
 // TurboDL native fast-start launcher.
 //
-// Polyglot split: this tiny native binary owns process start, instant feedback
-// and argument hand-off. The Kotlin/JVM engine (turbodl-cli-all.jar) remains the
-// unchanged core that does the actual downloading. The launcher never touches the
-// data plane; it only starts fast and hands the task to the JVM.
+// Select the bundled C++ core before submitting a task. Legacy CLI options
+// and plugins continue to use the JVM entry point.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
-const version = "0.5.0.6";
+const version = "0.5.0.7";
 const jar_name = "turbodl-cli-all.jar";
 
 fn fail(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) noreturn {
@@ -69,6 +67,59 @@ fn resolveNativeDataplane(allocator: std.mem.Allocator, exe_dir: ?[]const u8) []
     fail(allocator, "cannot find {s}; place it next to the launcher or set TURBODL_NATIVE", .{name});
 }
 
+fn sharedCore(allocator: std.mem.Allocator, exe_dir: ?[]const u8) ?[]const u8 {
+    const dir = exe_dir orelse return null;
+    const name = if (builtin.os.tag == .windows) "tdl-vnext.exe" else "tdl-vnext";
+    const beside = std.fs.path.join(allocator, &.{ dir, name }) catch unreachable;
+    if (exists(beside)) return beside;
+    allocator.free(beside);
+    return null;
+}
+
+fn canUseSharedCore(args: []const [:0]u8) bool {
+    var has_output = false;
+    var has_hash = false;
+    var has_mirror = false;
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (!std.mem.startsWith(u8, arg, "-")) continue;
+        if (std.mem.eql(u8, arg, "--capabilities") or
+            std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return true;
+        if (std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "--force-http1") or
+            std.mem.eql(u8, arg, "--allow-loopback-fixture")) continue;
+        const value_options = [_][]const u8{
+            "-o", "--output", "-c", "--connections", "--threads", "--sha256", "--known-size",
+            "--stable-key", "--checkpoint-dir", "--window-bytes", "--deadline", "--connect-timeout-ms",
+            "--read-timeout-ms", "--speed-limit", "--retry", "-r", "--http-policy",
+            "--username", "--password", "--proxy", "-p", "--doh", "--ca-bundle",
+            "--ssh-known-hosts", "--ssh-public-key", "--ssh-private-key",
+            "--header", "-H", "--user-agent", "-A", "--mirror", "-M", "--mirror-header",
+            "--hls", "--dash", "--segments", "--record-seconds", "--max-bandwidth",
+            "--max-segment-bytes", "--audio-language", "--video-representation", "--audio-representation",
+            "--torrent", "--metalink", "--base-url", "--file-name", "--select-file",
+            "--seed-seconds", "--upload-limit",
+        };
+        var recognized = false;
+        for (value_options) |option| {
+            if (std.mem.eql(u8, arg, option)) {
+                recognized = true;
+                break;
+            }
+        }
+        // --timeout has different units in the compatibility CLI.
+        if (!recognized or index + 1 >= args.len) return false;
+        index += 1;
+        if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) has_output = true;
+        if (std.mem.eql(u8, arg, "--sha256")) has_hash = true;
+        if (std.mem.eql(u8, arg, "--mirror") or std.mem.eql(u8, arg, "-M")) has_mirror = true;
+        if (std.mem.eql(u8, arg, "--speed-limit")) {
+            _ = std.fmt.parseUnsigned(u64, args[index], 10) catch return false;
+        }
+    }
+    return has_output and (!has_mirror or has_hash);
+}
+
 fn runChild(allocator: std.mem.Allocator, argv: []const []const u8, label: []const u8) noreturn {
     var child = std.process.Child.init(argv, allocator);
     child.stdin_behavior = .Inherit;
@@ -93,6 +144,11 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+    const exe_path = std.fs.selfExePathAlloc(allocator) catch null;
+    defer if (exe_path) |path| allocator.free(path);
+    const exe_dir = if (exe_path) |p| std.fs.path.dirname(p) else null;
+    const shared = sharedCore(allocator, exe_dir);
+    defer if (shared) |path| allocator.free(path);
 
     // Fully native fast path: no JVM boot for a version query.
     if (args.len >= 2 and
@@ -101,21 +157,21 @@ pub fn main() !void {
         std.mem.eql(u8, args[1], "version")))
     {
         try std.io.getStdOut().writer().print(
-            "turbodl {s} (native starter + Kotlin/JVM core)\n",
-            .{version},
+            "turbodl {s} ({s})\n",
+            .{ version, if (shared != null) "C++ core + JVM compatibility" else "Kotlin/JVM core" },
         );
         return;
     }
 
-    const exe_path = std.fs.selfExePathAlloc(allocator) catch null;
-    const exe_dir = if (exe_path) |p| std.fs.path.dirname(p) else null;
-
-    if (args.len >= 2 and std.mem.eql(u8, args[1], "native")) {
-        const native_exe = resolveNativeDataplane(allocator, exe_dir);
+    const explicit_native = args.len >= 2 and std.mem.eql(u8, args[1], "native");
+    const explicit_jvm = args.len >= 2 and std.mem.eql(u8, args[1], "jvm");
+    if (explicit_native or (!explicit_jvm and shared != null and canUseSharedCore(args[1..]))) {
+        const native_exe = shared orelse resolveNativeDataplane(allocator, exe_dir);
+        const start: usize = if (explicit_native) 2 else 1;
         var native_argv = std.ArrayList([]const u8).init(allocator);
         defer native_argv.deinit();
         try native_argv.append(native_exe);
-        for (args[2..]) |arg| try native_argv.append(arg);
+        for (args[start..]) |arg| try native_argv.append(arg);
         runChild(allocator, native_argv.items, "the native data-plane engine");
     }
 
@@ -129,7 +185,8 @@ pub fn main() !void {
     try argv.append(java);
     try argv.append("-jar");
     try argv.append(jar);
-    for (args[1..]) |arg| try argv.append(arg);
+    const start: usize = if (explicit_jvm) 2 else 1;
+    for (args[start..]) |arg| try argv.append(arg);
 
     runChild(allocator, argv.items, "the JVM engine");
 }

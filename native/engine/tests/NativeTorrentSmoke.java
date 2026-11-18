@@ -10,7 +10,7 @@ public final class NativeTorrentSmoke {
     static byte[] utf8(String value) { return value.getBytes(StandardCharsets.UTF_8); }
     public static void main(String[] args) throws Exception {
         NativeBridge.load(new File(args[0]));
-        long engine=NativeBridge.nCreate(utf8(args[1]+"/java-journal"),2,8,2*1024*1024,1);
+        long engine=NativeBridge.nCreate(utf8(args[1]+"/java-journal"),2,8,8*1024*1024,1);
         File target=new File(args[1],"java-torrent");
         try {
             long task=NativeBridge.nSubmitTorrent(engine,utf8(args[2]),utf8(target.getAbsolutePath()),

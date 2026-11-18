@@ -122,6 +122,106 @@ class NativeTransferClient(
             network.encoded(),network.httpVersion,policy.retries,policy.maxConnectionsPerHost,policy.cooldownGroup.encodeToByteArray())
     }
 
+    class HttpSource(val url: String, val headers: Map<String, String> = emptyMap())
+
+    enum class MediaProtocol(internal val code: Int) { AUTO(0), HLS(1), DASH(2) }
+
+    data class MediaPolicy(
+        val protocol: MediaProtocol = MediaProtocol.AUTO,
+        val parallelSegments: Int = 4,
+        val maximumBandwidth: Long = 0,
+        val maximumSegmentBytes: Long = 64L * 1024 * 1024,
+        val audioLanguage: String? = null,
+        val videoRepresentation: String? = null,
+        val audioRepresentation: String? = null,
+        val recordingSeconds: Int = 0,
+    )
+
+    data class MediaDetails(
+        val stage: Int, val failureStage: Int, val tracks: Int, val live: Boolean,
+        val units: Long, val verifiedUnits: Long, val recordedMilliseconds: Long,
+    )
+
+    fun submitMedia(
+        source: HttpSource,
+        destination: File,
+        stableKey: String,
+        expectedSha256: String? = null,
+        representationId: String? = null,
+        media: MediaPolicy = MediaPolicy(),
+        policy: Policy = Policy(),
+        network: Network = Network(),
+    ): Long {
+        val entries = source.headers.entries.toList()
+        return NativeBridge.nSubmitMedia(
+            activeHandle(), source.url.encodeToByteArray(), destination.absolutePath.encodeToByteArray(),
+            stableKey.encodeToByteArray(), expectedSha256?.encodeToByteArray(),
+            entries.map { it.key.encodeToByteArray() }.toTypedArray(),
+            entries.map { it.value.encodeToByteArray() }.toTypedArray(),
+            policy.connections, policy.requestWindowBytes, policy.connectTimeoutMs, policy.readTimeoutMs,
+            network.encoded(), network.httpVersion, policy.retries, policy.maxConnectionsPerHost,
+            policy.cooldownGroup.encodeToByteArray(), representationId?.encodeToByteArray(),
+            media.protocol.code, media.parallelSegments, media.maximumBandwidth, media.maximumSegmentBytes,
+            media.audioLanguage?.encodeToByteArray(), media.videoRepresentation?.encodeToByteArray(),
+            media.audioRepresentation?.encodeToByteArray(), media.recordingSeconds,
+        )
+    }
+
+    fun finishRecording(taskId: Long) = NativeBridge.nFinishMedia(activeHandle(), taskId)
+
+    fun mediaDetails(taskId: Long): MediaDetails {
+        val fields = NativeBridge.nMediaDetails(activeHandle(), taskId)
+        check(fields.size == 7) { "Native media details ABI mismatch" }
+        return MediaDetails(fields[0].toInt(), fields[1].toInt(), fields[2].toInt(), fields[3] != 0L,
+            fields[4], fields[5], fields[6])
+    }
+
+    data class ByteSlice(val offset: Long, val length: Long) {
+        init {
+            require(offset >= 0 && length > 0 && offset <= Long.MAX_VALUE - length)
+        }
+    }
+
+    /**
+     * The SHA-256 and known size describe the output, including when only a slice is requested.
+     * Mixing mirrors requires an expected digest. A representation ID must identify immutable
+     * content in the caller's account scope. The checkpoint is owned by the native engine.
+     */
+    fun submitHttp(
+        source: HttpSource,
+        destination: File,
+        stableKey: String,
+        expectedSha256: String? = null,
+        knownSize: Long? = null,
+        mirrors: List<HttpSource> = emptyList(),
+        slice: ByteSlice? = null,
+        maximumBytes: Long = 0,
+        representationId: String? = null,
+        policy: Policy = Policy(),
+        network: Network = Network(),
+    ): Long {
+        require(mirrors.size <= 32)
+        require(mirrors.isEmpty() || !expectedSha256.isNullOrBlank())
+        require(knownSize == null || knownSize >= 0)
+        require(slice == null || knownSize == null || slice.length == knownSize)
+        require(maximumBytes >= 0)
+        val primaryHeaders = source.headers.entries.toList()
+        val mirrorHeaders = mirrors.map { it.headers.entries.toList() }
+        return NativeBridge.nSubmitHttp(
+            activeHandle(), source.url.encodeToByteArray(), destination.absolutePath.encodeToByteArray(),
+            stableKey.encodeToByteArray(), expectedSha256?.encodeToByteArray(),
+            primaryHeaders.map { it.key.encodeToByteArray() }.toTypedArray(),
+            primaryHeaders.map { it.value.encodeToByteArray() }.toTypedArray(),
+            policy.connections, policy.requestWindowBytes, policy.connectTimeoutMs, policy.readTimeoutMs,
+            network.encoded(), network.httpVersion, policy.retries, policy.maxConnectionsPerHost,
+            policy.cooldownGroup.encodeToByteArray(), knownSize ?: -1, slice?.offset ?: 0,
+            slice?.length ?: 0, maximumBytes, representationId?.encodeToByteArray(),
+            mirrors.map { it.url.encodeToByteArray() }.toTypedArray(),
+            mirrorHeaders.map { fields -> fields.map { it.key.encodeToByteArray() }.toTypedArray() }.toTypedArray(),
+            mirrorHeaders.map { fields -> fields.map { it.value.encodeToByteArray() }.toTypedArray() }.toTypedArray(),
+        )
+    }
+
     fun query(taskId: Long) = Snapshot.from(NativeBridge.nQuery(activeHandle(),taskId))
     fun poll(capacity: Int = 64) = NativeBridge.nPoll(activeHandle(),capacity).map { Event(it.counters[12],it.counters[13].toInt(),Snapshot.from(it)) }
     fun pause(taskId: Long) = NativeBridge.nControl(activeHandle(),taskId,1)

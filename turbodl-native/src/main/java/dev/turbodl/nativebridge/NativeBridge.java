@@ -36,6 +36,20 @@ public final class NativeBridge {
         byte[] expectedSha256, byte[][] headerNames, byte[][] headerValues, int connections,
         long windowBytes, int connectTimeoutMs, int readTimeoutMs, byte[][] network,
         int httpVersion, int retries, int hostLimit, byte[] cooldownGroup);
+    static native long nSubmitHttp(long handle, byte[] url, byte[] destination, byte[] stableKey,
+        byte[] expectedSha256, byte[][] headerNames, byte[][] headerValues, int connections,
+        long windowBytes, int connectTimeoutMs, int readTimeoutMs, byte[][] network,
+        int httpVersion, int retries, int hostLimit, byte[] cooldownGroup, long knownSize,
+        long sliceOffset, long sliceLength, long maximumBytes, byte[] representation,
+        byte[][] mirrorUrls, byte[][][] mirrorHeaderNames, byte[][][] mirrorHeaderValues);
+    static native long nSubmitMedia(long handle, byte[] url, byte[] destination, byte[] stableKey,
+        byte[] expectedSha256, byte[][] headerNames, byte[][] headerValues, int connections,
+        long windowBytes, int connectTimeoutMs, int readTimeoutMs, byte[][] network,
+        int httpVersion, int retries, int hostLimit, byte[] cooldownGroup, byte[] representation,
+        int protocol, int parallelSegments, long maximumBandwidth, long maximumSegmentBytes,
+        byte[] language, byte[] videoRepresentation, byte[] audioRepresentation, int recordingSeconds);
+    static native void nFinishMedia(long handle, long task);
+    static native long[] nMediaDetails(long handle, long task);
     public static native NativeSnapshot nQuery(long handle, long task);
     public static native NativeSnapshot[] nPoll(long handle, int capacity);
     public static native void nControl(long handle, long task, int command);

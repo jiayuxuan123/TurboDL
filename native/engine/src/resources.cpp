@@ -8,8 +8,29 @@ uint64_t ResourceDomain::join(uint32_t connections,uint64_t buffers,uint64_t spe
     std::lock_guard lock(mutex_);auto id=++next_;owners_[id]={connections,buffers,speed,tasks,std::move(wake)};wake_locked();return id;
 }
 void ResourceDomain::wake_locked()const{for(const auto& [id,limit]:owners_){(void)id;if(limit.wake)limit.wake();}}
-void ResourceDomain::leave(uint64_t owner){std::lock_guard lock(mutex_);owners_.erase(owner);wake_locked();}
-uint64_t ResourceDomain::acquire(const std::string& origin,uint32_t host_limit,uint32_t weight){
+void ResourceDomain::leave(uint64_t owner){
+    std::lock_guard lock(mutex_);
+    owners_.erase(owner);
+    if(owners_.empty()){
+        // A closed engine owns no outstanding transfers. Clearing here makes
+        // process-wide accounting self-healing if a shutdown path missed a
+        // late lease; otherwise one failed test or host can poison every
+        // engine created later in the same process.
+        hosts_.clear();leases_.clear();cooldowns_.clear();
+        connections_=buffers_=0;
+        task_leases_.clear();task_queue_.clear();
+        external_transfers_.clear();
+        processing_.clear();
+        tokens_=0;token_time_=std::chrono::steady_clock::now();
+    }
+    wake_locked();
+}
+uint64_t ResourceDomain::buffer_ceiling(){
+    std::lock_guard lock(mutex_);uint64_t bytes=UINT64_MAX;
+    for(const auto& [id,limit]:owners_){(void)id;bytes=std::min(bytes,limit.buffers);}
+    return bytes;
+}
+uint64_t ResourceDomain::acquire(const std::string& origin,uint32_t host_limit,uint32_t weight,uint64_t payload_bytes){
     std::lock_guard lock(mutex_);
     uint32_t connections=std::numeric_limits<uint32_t>::max();
     uint64_t buffers=std::numeric_limits<uint64_t>::max();
@@ -21,19 +42,27 @@ uint64_t ResourceDomain::acquire(const std::string& origin,uint32_t host_limit,u
         if(cooling->second>std::chrono::steady_clock::now())return 0;
         cooldowns_.erase(cooling);
     }
-    if(!weight || weight>connections || connections_>connections-weight || buffers<request_buffer_bytes || buffers_>buffers-request_buffer_bytes || weight>host_limit || active>host_limit-weight)return 0;
-    auto id=++next_lease_;leases_[id]={origin,host_limit,weight};connections_+=weight;buffers_+=request_buffer_bytes;auto& entry=hosts_[origin];entry.active+=weight;entry.caps.insert(host_limit);return id;
+    if(!weight || payload_bytes<request_buffer_bytes || weight>connections || connections_>connections-weight || buffers<payload_bytes || buffers_>buffers-payload_bytes || weight>host_limit || active>host_limit-weight)return 0;
+    auto id=++next_lease_;leases_[id]={origin,host_limit,weight,payload_bytes};connections_+=weight;buffers_+=payload_bytes;auto& entry=hosts_[origin];entry.active+=weight;entry.caps.insert(host_limit);return id;
 }
 void ResourceDomain::release(uint64_t id){
     std::lock_guard lock(mutex_);auto lease=leases_.find(id);if(lease==leases_.end())return;
     auto it=hosts_.find(lease->second.origin);
     if(it!=hosts_.end()){it->second.active-=lease->second.weight;auto cap=it->second.caps.find(lease->second.cap);if(cap!=it->second.caps.end())it->second.caps.erase(cap);if(!it->second.active)hosts_.erase(it);}
-    connections_-=lease->second.weight;buffers_-=request_buffer_bytes;leases_.erase(lease);wake_locked();
+    connections_-=lease->second.weight;buffers_-=lease->second.bytes;leases_.erase(lease);wake_locked();
 }
 uint64_t ResourceDomain::used_buffers(){std::lock_guard lock(mutex_);return buffers_;}
 void ResourceDomain::cooldown(const std::string& origin,uint64_t milliseconds){
     std::lock_guard lock(mutex_);
-    if(cooldowns_.size()>=1024){auto now=std::chrono::steady_clock::now();std::erase_if(cooldowns_,[&](auto& p){return p.second<=now;});if(cooldowns_.size()>=1024)return;}
+    if(cooldowns_.size()>=1024){
+        auto now=std::chrono::steady_clock::now();
+        std::erase_if(cooldowns_,[&](auto& p){return p.second<=now;});
+        if(cooldowns_.size()>=1024){
+            auto oldest=std::min_element(cooldowns_.begin(),cooldowns_.end(),
+                [](const auto& left,const auto& right){return left.second<right.second;});
+            if(oldest!=cooldowns_.end())cooldowns_.erase(oldest);
+        }
+    }
     auto until=std::chrono::steady_clock::now()+std::chrono::milliseconds(milliseconds);
     auto it=cooldowns_.find(origin);
     if(it==cooldowns_.end())cooldowns_[origin]=until;else it->second=std::max(it->second,until);
@@ -90,5 +119,15 @@ void ResourceDomain::release_task(uint64_t id){
 }
 ResourceDomain::Snapshot ResourceDomain::snapshot(){
     std::lock_guard lock(mutex_);return {task_leases_.size(),connections_,buffers_,external_transfers_.size(),task_queue_.size()};
+}
+uint64_t ResourceDomain::acquire_processing(uint64_t bytes){
+    std::lock_guard lock(mutex_);if(!bytes || !processing_.empty())return 0;
+    uint64_t maximum=UINT64_MAX;for(const auto& [owner,value]:owners_){(void)owner;maximum=std::min(maximum,value.buffers);}
+    if(bytes>maximum || buffers_>maximum-bytes)return 0;
+    auto id=++next_lease_;processing_[id]=bytes;buffers_+=bytes;return id;
+}
+void ResourceDomain::release_processing(uint64_t id){
+    std::lock_guard lock(mutex_);auto found=processing_.find(id);if(found==processing_.end())return;
+    buffers_-=found->second;processing_.erase(found);wake_locked();
 }
 }

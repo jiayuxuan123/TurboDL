@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sys
+import shutil
 import threading
 import time
 import unittest
@@ -66,6 +67,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
     active=0
     peak=0
     short_reads=0
+    short_read_end=0
     def log_message(self,*args):pass
     def handle(self):
         try:super().handle()
@@ -105,6 +107,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if self.path in ('/redirect','/redirect-loop'):
             self.send_response(302);self.send_header('Content-Length','0');self.send_header('Location','/file');self.end_headers();return
         payload=DATA
+        if self.path=='/small-slow-first':payload=DATA[:49152]
         etag='"fixture-v1"'
         if self.path=='/changed':payload=bytes(b^0x5a for b in DATA);etag='"fixture-v2"'
         request_range=self.headers.get('Range')
@@ -117,6 +120,19 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if start>=len(payload):
             self.send_response(416);self.send_header('Content-Length','0');self.end_headers();return
         body=payload[start:end+1]
+        if self.path=='/disconnect-always':
+            self.close_connection=True;return
+        if self.path=='/disconnect-once' and len(body)>32768:
+            with self.lock:
+                tries=self.server.disconnect_attempts.get(start,0)
+                self.server.disconnect_attempts[start]=tries+1
+            if tries==0:
+                self.close_connection=True;return
+        straggler=False
+        if self.path=='/straggler' and len(body)>32768:
+            with self.lock:
+                if not hasattr(self.server,'straggler_socket'):self.server.straggler_socket=self.client_address
+                straggler=self.server.straggler_socket==self.client_address
         self.send_response(206 if ranged else 200)
         self.send_header('Content-Length',str(len(body)))
         self.send_header('Accept-Ranges','bytes')
@@ -124,14 +140,23 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if ranged:self.send_header('Content-Range',f'bytes {start}-{end}/{len(payload)}')
         self.end_headers()
         try:
-            if self.path=='/short-once':
+            if self.path=='/header-gate':
+                self.wfile.flush()
+                if start==0:self.server.header_peer_released=self.server.header_peer.wait(.4)
+                else:self.server.header_peer.set()
+            if self.path=='/short-once' and len(body)>32768:
                 with self.lock:
                     short=type(self).short_reads==0
                     type(self).short_reads+=1
                 if short:
+                    type(self).short_read_end=start+32768
                     self.wfile.write(body[:32768]);self.wfile.flush();self.close_connection=True;return
-            for i in range(0,len(body),8192):
-                self.wfile.write(body[i:i+8192]);self.wfile.flush()
+            slow_first=self.path=='/small-slow-first' and start==0
+            chunk=1024 if slow_first else 8192
+            for i in range(0,len(body),chunk):
+                self.wfile.write(body[i:i+chunk]);self.wfile.flush()
+                if slow_first:time.sleep(.03)
+                if straggler:time.sleep(.025)
                 if self.path in ('/slow','/changed','/no-validator','/sparse','/short-once'):
                     time.sleep(.012 if self.path=='/sparse' and start==0 else .004)
         except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
@@ -152,12 +177,18 @@ class EngineCase(unittest.TestCase):
         self.url=f'http://127.0.0.1:{self.server.server_port}'
         self.temp=tempfile.TemporaryDirectory(prefix='turbodl-native-')
         self.path=Path(self.temp.name);self.engines=[]
-        with Fixture.lock:Fixture.requests.clear();Fixture.peak=Fixture.active;Fixture.short_reads=0
+        with Fixture.lock:Fixture.requests.clear();Fixture.peak=Fixture.active;Fixture.short_reads=0;Fixture.short_read_end=0
     def tearDown(self):
         for handle in self.engines:self.assertEqual(0,self.lib.td_engine_destroy(handle))
+        resources=self.resources()
+        self.assertEqual(
+            (0,0,0,0,0),
+            (resources.tasks,resources.connections,resources.buffers,
+             resources.external_transfers,resources.queued_tasks),
+            'engine destruction left process-wide resources behind')
         self.server.shutdown();self.server.server_close();self.thread.join(2)
         self.temp.cleanup()
-    def engine(self,slots=2,connections=4,buffers=1024*1024):
+    def engine(self,slots=2,connections=4,buffers=8*1024*1024):
         opts=Options(C.sizeof(Options),ABI,os.fsencode(self.path/'journal'),slots,connections,buffers,1,0)
         handle=C.c_void_p();self.assertEqual(0,self.lib.td_engine_create(C.byref(opts),C.byref(handle)));self.engines.append(handle);return handle
     def submit(self,e,path='/file',key='task',sha=True,connections=1):
@@ -184,6 +215,20 @@ class EngineCase(unittest.TestCase):
         self.fail(f'task did not settle: state={s.state} error={s.error} message={s.message!r}')
 
 class NativeEngineTests(EngineCase):
+    def test_long_native_output_and_checkpoint_paths_remain_usable(self):
+        original_path=self.path
+        self.path=self.path/('cache-'+('a'*76))/('records-'+('b'*76))/('task-'+('c'*76))
+        independent_path=Path('\\\\?\\'+str(self.path)) if os.name=='nt' else self.path
+        independent_path.mkdir(parents=True)
+        try:
+            e=self.engine();t=self.submit(e)
+            done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED))
+            self.assertEqual(COMPLETED,done.state,done.message)
+            self.assertEqual(DATA,(independent_path/'task.bin').read_bytes())
+        finally:
+            for handle in self.engines:self.lib.td_engine_destroy(handle)
+            self.engines.clear();shutil.rmtree(Path('\\\\?\\'+str(original_path)) if os.name=='nt' else original_path)
+
     def test_empty_range_representation_can_complete_with_independent_digest(self):
         e=self.engine()
         options=TaskOptions(C.sizeof(TaskOptions),ABI,(self.url+'/empty').encode(),str(self.path/'empty.bin').encode(),b'empty',hashlib.sha256(b'').hexdigest().encode(),None,0,1,262144,1000,1500)
@@ -198,6 +243,12 @@ class NativeEngineTests(EngineCase):
         done=self.until(e,task.value,lambda s:s.state in (COMPLETED,FAILED))
         self.assertEqual(COMPLETED,done.state,done.message);self.assertEqual(0,done.total_bytes)
         self.assertEqual(b'',(self.path/'empty.bin').read_bytes())
+        self.assertEqual(0,self.lib.td_engine_destroy(e));self.engines.remove(e)
+        e=self.engine()
+        self.assertEqual(0,self.lib.td_task_submit(e,C.byref(options),C.byref(task)))
+        reopened=self.until(e,task.value,lambda s:s.state in (COMPLETED,FAILED))
+        self.assertEqual(COMPLETED,reopened.state,reopened.message)
+        self.assertEqual(0,reopened.request_count)
     def test_unknown_length_transfer_publishes_the_final_size(self):
         e=self.engine();t=self.submit(e,'/chunked',key='chunked')
         done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED))
@@ -215,8 +266,10 @@ class NativeEngineTests(EngineCase):
     def test_submission_and_shutdown_wake_an_idle_reactor(self):
         e=self.engine();time.sleep(.1)
         started=time.monotonic();t=self.submit(e,'/slow')
-        self.until(e,t,lambda s:s.downloaded_bytes>=8192,timeout=.5)
+        # Startup is an event-loop wake-up check, not a throughput gate.
+        self.until(e,t,lambda s:s.state==TRANSFERRING,timeout=.5)
         self.assertLess(time.monotonic()-started,.5)
+        self.until(e,t,lambda s:s.downloaded_bytes>=8192,timeout=2)
         self.assertEqual(0,self.lib.td_task_control(e,t,1));self.until(e,t,lambda s:s.state==PAUSED)
         time.sleep(.1);started=time.monotonic()
         self.assertEqual(0,self.lib.td_engine_destroy(e));self.engines.remove(e)
@@ -394,6 +447,72 @@ class NativeEngineTests(EngineCase):
         self.assertGreaterEqual(peak,2,'fixture must observe parallel requests')
         self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
 
+    def test_verified_headers_start_peer_ranges_before_first_body_arrives(self):
+        self.server.header_peer=threading.Event();self.server.header_peer_released=False
+        e=self.engine(connections=4);t=self.submit(e,'/header-gate',connections=4)
+        done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED))
+        self.assertEqual(COMPLETED,done.state,done.message)
+        self.assertTrue(self.server.header_peer_released,'scheduler waited for the first body instead of using verified response headers')
+        self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
+    def test_idle_connections_reassign_a_measured_slow_tail_without_corrupting_bytes(self):
+        e=self.engine(connections=4);t=self.submit(e,'/straggler',connections=4)
+        done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED),timeout=8)
+        self.assertEqual(COMPLETED,done.state,done.message)
+        self.assertGreater(done.request_count,5,'idle connections never helped the measured slow range')
+        self.assertLessEqual(done.peak_active_requests,4)
+        self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
+    def test_slow_discovery_covering_the_whole_file_uses_an_idle_peer(self):
+        e=self.engine(connections=2)
+        task=self.submit(e,'/small-slow-first',connections=2,sha=False)
+        done=self.until(e,task,lambda snapshot:snapshot.state in (COMPLETED,FAILED))
+        self.assertEqual(COMPLETED,done.state,done.message)
+        self.assertGreaterEqual(done.request_count,2)
+        self.assertLessEqual(done.request_count,4)
+        self.assertEqual(2,done.peak_active_requests)
+        self.assertEqual(DATA[:49152],(self.path/'task.bin').read_bytes())
+
+    def test_parallel_connection_failures_do_not_spend_other_ranges_retry_allowances(self):
+        self.server.disconnect_attempts={}
+        e=self.engine(connections=8);t=self.submit(e,'/disconnect-once',connections=8)
+        done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED),timeout=10)
+        self.assertEqual(COMPLETED,done.state,done.message)
+        self.assertGreaterEqual(len(self.server.disconnect_attempts),4,'fixture must fail several independent ranges')
+        self.assertTrue(all(tries>=2 for tries in self.server.disconnect_attempts.values()))
+        self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
+    def test_a_permanently_disconnected_range_still_obeys_its_retry_limit(self):
+        e=self.engine(connections=1)
+        policy=Policy(C.sizeof(Policy),ABI,1,1,self.path.name.encode())
+        o=ExtendedOptions();o.struct_size=C.sizeof(o);o.abi_version=ABI
+        o.url=(self.url+'/disconnect-always').encode();o.destination=str(self.path/'retry-limit.bin').encode()
+        o.stable_key=b'retry-limit';o.connections=1;o.request_window_bytes=262144;o.policy=C.pointer(policy)
+        task=C.c_uint64();self.assertEqual(0,self.lib.td_task_submit(e,C.cast(C.byref(o),C.POINTER(TaskOptions)),C.byref(task)))
+        done=self.until(e,task.value,lambda s:s.state in (COMPLETED,FAILED))
+        self.assertEqual(FAILED,done.state);self.assertEqual(1,done.error)
+        self.assertEqual(2,done.request_count);self.assertEqual(0,done.active_requests)
+
+    def test_pause_after_tail_reassignment_preserves_extents_without_expected_hash(self):
+        e=self.engine(connections=4);t=self.submit(e,'/straggler',connections=4,sha=False)
+        self.until(e,t,lambda s:s.request_count>5 and s.state not in (COMPLETED,FAILED),timeout=5)
+        self.assertEqual(0,self.lib.td_task_control(e,t,1))
+        paused=self.until(e,t,lambda s:s.state in (PAUSED,FAILED))
+        self.assertEqual(PAUSED,paused.state,paused.message)
+        self.assertEqual(paused.downloaded_bytes,paused.durable_bytes)
+        self.assertEqual(0,self.lib.td_engine_destroy(e));self.engines.remove(e)
+        e=self.engine(connections=4);t=self.submit(e,'/straggler',connections=4,sha=False)
+        done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED))
+        self.assertEqual(COMPLETED,done.state,done.message)
+        self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
+    def test_single_connection_uses_one_open_ended_range(self):
+        e=self.engine(connections=1);t=self.submit(e,'/slow',connections=1)
+        done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED))
+        self.assertEqual(COMPLETED,done.state,done.message)
+        self.assertEqual(1,done.request_count)
+        self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
     def test_parallel_pause_and_process_recreation_preserve_disjoint_extents(self):
         e=self.engine(connections=4);t=self.submit(e,'/sparse',connections=4)
         self.until(e,t,lambda s:s.downloaded_bytes>=400000)
@@ -425,8 +544,9 @@ class NativeEngineTests(EngineCase):
         e=self.engine();t=self.submit(e,'/short-once',connections=3)
         done=self.until(e,t,lambda s:s.state in (COMPLETED,FAILED))
         self.assertEqual(COMPLETED,done.state,done.message)
-        with Fixture.lock:requests=list(Fixture.requests)
-        self.assertTrue(any(r[1] and r[1].startswith('bytes=32768-') for r in requests))
+        with Fixture.lock:requests=list(Fixture.requests);missing=Fixture.short_read_end
+        self.assertGreaterEqual(missing,32768,'fixture must actually interrupt a data response')
+        self.assertTrue(any(r[1] and r[1].startswith(f'bytes={missing}-') for r in requests),'retry must start at the interrupted response extent')
         self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
 
     def test_clients_share_real_connection_budget(self):

@@ -34,29 +34,53 @@ const server = http.createServer(async (req, res) => {
   }
   const profile = profiles[url.pathname.slice(1).replace(/\.bin$/, '')];
   if (!profile || !run || !['GET', 'HEAD'].includes(req.method)) return res.writeHead(404).end();
-  const stats = sessions.get(run) || { requests: 0, active: 0, peak: 0, sent: 0, first_request_ms: performance.now() };
+  const stats = sessions.get(run) || {
+    requests: 0, active: 0, peak: 0, sent: 0,
+    first_request_ms: performance.now(), method_counts: {}, status_counts: {},
+  };
   sessions.set(run, stats);
+  stats.requests++;
+  stats.method_counts[req.method] = (stats.method_counts[req.method] || 0) + 1;
   let start = 0, end = profile.bytes.length - 1;
   const range = req.headers.range;
   if (range) {
     const match = /^bytes=(\d+)-(\d*)$/.exec(range);
-    if (!match) return res.writeHead(416).end();
+    if (!match) {
+      stats.invalid_range_requests = (stats.invalid_range_requests || 0) + 1;
+      stats.status_counts['416'] = (stats.status_counts['416'] || 0) + 1;
+      return res.writeHead(416, { 'Content-Range': `bytes */${profile.bytes.length}` }).end();
+    }
     start = Number(match[1]); end = match[2] ? Math.min(Number(match[2]), end) : end;
-    if (start > end || start >= profile.bytes.length) return res.writeHead(416).end();
+    if (start > end || start >= profile.bytes.length) {
+      stats.invalid_range_requests = (stats.invalid_range_requests || 0) + 1;
+      stats.status_counts['416'] = (stats.status_counts['416'] || 0) + 1;
+      return res.writeHead(416, { 'Content-Range': `bytes */${profile.bytes.length}` }).end();
+    }
   }
   const headers = { 'Content-Length': String(end - start + 1), 'Content-Type': 'application/octet-stream',
     'Accept-Ranges': 'bytes', ETag: '"range-profile-v1"', 'Cache-Control': 'no-store' };
   if (range) headers['Content-Range'] = `bytes ${start}-${end}/${profile.bytes.length}`;
-  res.writeHead(range ? 206 : 200, headers);
-  if (req.method === 'HEAD') return res.end();
-  stats.requests++; stats.active++; stats.peak = Math.max(stats.active, stats.peak);
+  const status = range ? 206 : 200;
+  stats.status_counts[String(status)] = (stats.status_counts[String(status)] || 0) + 1;
+  if (req.method === 'HEAD') {
+    stats.head_requests = (stats.head_requests || 0) + 1;
+    return res.writeHead(status, headers).end();
+  }
+  res.writeHead(status, headers);
+  stats.active++; stats.peak = Math.max(stats.active, stats.peak);
   // Only a real data request claims the slow socket; metadata probes do not.
-  if (profile.slowConnection && end > start && stats.slow_socket === undefined) {
+  if ((profile.slowConnection || profile.slowFirst) && end > start && stats.slow_socket === undefined) {
     stats.slow_socket = req.socket.remotePort;
   }
   const rate = profile.rate || (profile.slowConnection && req.socket.remotePort === stats.slow_socket ? 200 * 1024 : 0);
   let released = false;
-  const release = () => { if (!released) { released = true; stats.active--; stats.last_response_ms = performance.now(); } };
+  const release = () => {
+    if (!released) {
+      released = true;
+      stats.active--;
+      stats.last_response_ms = performance.now() - stats.first_request_ms;
+    }
+  };
   res.once('close', release); res.once('finish', release);
   res.flushHeaders();
   if (profile.delay) await wait(profile.delay);
@@ -64,7 +88,7 @@ const server = http.createServer(async (req, res) => {
   let offset = start;
   try {
     while (offset <= end && !res.destroyed) {
-      const slow = profile.slowFirst && start === 0;
+      const slow = profile.slowFirst && req.socket.remotePort === stats.slow_socket;
       const count = Math.min(slow ? 1024 : 16 * 1024, end - offset + 1);
       if (slow) await wait(30);
       else if (rate) {
@@ -72,7 +96,9 @@ const server = http.createServer(async (req, res) => {
         if (delay > 0) await wait(delay);
       }
       if (res.destroyed) break;
-      if (stats.first_byte_ms === undefined) stats.first_byte_ms = performance.now();
+      if (stats.first_byte_ms === undefined) {
+        stats.first_byte_ms = performance.now() - stats.first_request_ms;
+      }
       const ready = res.write(profile.bytes.subarray(offset, offset + count));
       stats.sent += count; offset += count;
       if (!ready) await new Promise(resolve => {

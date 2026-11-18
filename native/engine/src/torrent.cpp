@@ -176,6 +176,18 @@ public:
         if(pending_ && paused_ && !saving_ && !final_checkpoint_){
             final_checkpoint_=true;handle_.save_resume_data(lt::torrent_handle::flush_disk_cache|lt::torrent_handle::save_info_dict);saving_=true;
         }
+        if(pending_ && stop_deadline_ && std::chrono::steady_clock::now()>=*stop_deadline_){
+            // Cancellation/pause must remain responsive even if libtorrent
+            // cannot produce a final resume alert. The last periodic
+            // checkpoint is retained; no completed piece is discarded.
+            release();
+            if(pending_==4){
+                view_.state=view_.downloaded_bytes==static_cast<uint64_t>(std::max<int64_t>(view_.total_bytes,0))?TD_COMPLETED:TD_FAILED;
+                if(view_.state==TD_FAILED)view_.error=TD_ERROR_STORAGE;
+            }else view_.state=pending_==TD_CANCEL?TD_CANCELLED:TD_PAUSED;
+            pending_=0;
+            return;
+        }
         auto status=handle_.status();
         if(status.has_metadata && !selection_applied_){
             auto info=handle_.torrent_file();std::vector<lt::download_priority_t> priorities(static_cast<size_t>(info->num_files()),lt::dont_download);
@@ -195,7 +207,15 @@ public:
     }
     void control(uint32_t command)override{
         if(command==TD_RESUME){throw std::logic_error("Resume requires recreating the protocol job");}
-        else{if(!session_){view_.state=command==TD_CANCEL?TD_CANCELLED:TD_PAUSED;return;}pending_=command;final_checkpoint_=false;view_.state=TD_PAUSING;handle_.pause();}
+        else{
+            if(!session_){view_.state=command==TD_CANCEL?TD_CANCELLED:TD_PAUSED;return;}
+            pending_=command;final_checkpoint_=false;
+            // Pause must wait for a durable resume record. Cancellation is
+            // allowed to fall back to the last periodic checkpoint so a
+            // stalled libtorrent alert cannot keep the task alive forever.
+            stop_deadline_=command==TD_CANCEL?std::optional(std::chrono::steady_clock::now()+std::chrono::seconds(3)):std::nullopt;
+            view_.state=TD_PAUSING;handle_.pause();
+        }
     }
     td_snapshot snapshot()const override{return view_;}
     void connect_peer(const std::string& host,uint16_t port)override{
@@ -233,6 +253,7 @@ private:
     uint32_t pending_=0;bool saving_=false,selection_applied_=false,selection_pending_=false,paused_=false,final_checkpoint_=false,rechecking_=false,recheck_pending_=false;
     uint64_t last_speed_=0,checkpoint_bytes_=0;
     std::optional<std::chrono::steady_clock::time_point> finished_at_;
+    std::optional<std::chrono::steady_clock::time_point> stop_deadline_;
     std::chrono::steady_clock::time_point last_saved_=std::chrono::steady_clock::now();
     PeerLeases leases_;
     RateShare rate_;

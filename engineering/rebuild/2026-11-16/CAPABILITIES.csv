@@ -3,7 +3,7 @@ BASE-01,baseline,published artifacts and source frozen,PASS,baseline/BASELINE.js
 BASE-02,baseline,reference commits artifacts and execution capabilities frozen,VERIFYING,REFERENCES.lock.json; execution capabilities not yet measured
 ABI-01,api,versioned C ABI and ownership,VERIFYING,57 local checks; full binary compatibility open
 STATE-01,lifecycle,terminal transitions and task generations,IN_PROGRESS,Local lifecycle passes; other protocols open
-STATE-02,lifecycle,pause resume cancel and shutdown,VERIFYING,native-checkpoint-regression.log: 70 localhost development checks
+STATE-02,lifecycle,pause resume cancel and shutdown,VERIFYING,serial-media-sdk-20261118/gate.json: 93 integration checks and two component executables
 BUDGET-01,resources,shared process resource domain,VERIFYING,Shared task/request/buffer and mixed HTTP/BT tests
 BUDGET-02,resources,all protocols and plugins obey budgets,IN_PROGRESS,Discovery/socket and plugin accounting open
 HTTP-01,http,single stream and complete SHA-256,VERIFYING,Local C/CLI/JNI outputs and independent SHA
@@ -16,18 +16,19 @@ NET-01,network,proxy DNS IPv6 and platform certificates,NOT_IMPLEMENTED,
 STORE-01,storage,SQLite durable checkpoints and exclusive ownership,VERIFYING,Local SQLite/file flush/exclusive output tests
 STORE-02,storage,process kill and corrupt checkpoint recovery,VERIFYING,Kill/corrupt blocks/BT changed-piece recheck
 STORE-03,storage,full disk lost permission and seekless targets,NOT_IMPLEMENTED,
-HLS-01,media,playlist selection AES128 ByteRange and init segments,IN_PROGRESS,9 manifest parser groups and FFmpeg build; transfer/AES/mux still open
-HLS-02,media,live timeline changes resume and playable output,NOT_IMPLEMENTED,
-DASH-01,media,MPD tracks muxing resume and playable output,IN_PROGRESS,XML/FFmpeg dependencies built; orchestration open
+HLS-01,media,playlist selection AES128 ByteRange and init segments,VERIFYING,13 local media transfers with independent packet/decode checks; target platforms open
+HLS-02,media,live timeline changes resume and playable output,VERIFYING,Local live/endlist/finish and same-engine/recreated resume; more live edge cases open
+DASH-01,media,MPD tracks muxing resume and playable output,VERIFYING,Local template audio/video mux output decoded; dynamic MPD/period edges and platforms open
 FTP-01,protocol,FTP login metadata download and resume,VERIFYING,Actual local login and complete transfer
 SFTP-01,protocol,SFTP host verification download and resume,VERIFYING,Actual local login and wrong known-host rejection
 BT-01,p2p,libtorrent DHT tracker selection verification and resume,IN_PROGRESS,Local metadata/selection barrier/recheck passes; DHT/tracker gates still open
 BT-02,p2p,upload limits seeding limits and shutdown,VERIFYING,Rate/seed cancellation/mixed admission tests
 META-01,protocol,Metalink hash and multisource interoperability,VERIFYING,8 v3/v4 complete-download checks; more interop open
+ED2K-00,p2p,ED2K link hash and AICH offline primitives,VERIFYING,td-ed2k-p0-tests; strict parser/hash regression pass
 ED2K-01,p2p,ED2K server peer transfer hash and recovery,NOT_IMPLEMENTED,
-JVM-01,compatibility,old public JVM API and plugin bridge,IN_PROGRESS,Adapter/JNI HTTP and BT work; old API bridge open
+JVM-01,compatibility,old public JVM API and plugin bridge,IN_PROGRESS,JNI HTTP slice and mirror fallback plus playable live recording verified; old API routing and plugins open
 APP-01,integration,YunGet task policy refresh target and diagnostics,NOT_IMPLEMENTED,
-PLAT-01,android,API24 ABIs certificates storage and real device,BLOCKED,No Android device; native target build also required
+PLAT-01,android,API24 ABIs certificates storage and real device,BLOCKED,Four-ABI build entry exists; ABI-specific curl TLS and FFmpeg and device validation remain
 PLAT-02,windows,x64 and ARM64 build and runtime,VERIFYING,Windows x64 C/CLI/JNI; ARM64 runtime open
 PLAT-03,linux,glibc musl x64 and ARM64 runtime,NOT_IMPLEMENTED,
 PLAT-04,macos,x64 and ARM64 runtime,NOT_IMPLEMENTED,

@@ -9,7 +9,7 @@ public final class NativeBridgeSmoke {
     private static byte[] utf8(String s){return s.getBytes(StandardCharsets.UTF_8);}
     public static void main(String[] args) throws Exception {
         NativeBridge.load(new File(args[0]));
-        long engine=NativeBridge.nCreate(utf8(args[1]+"/jni-journal"),2,4,1024*1024,1);
+        long engine=NativeBridge.nCreate(utf8(args[1]+"/jni-journal"),2,4,8*1024*1024,1);
         File target=new File(args[1],"JNI-\u4e2d\u6587-\ud83c\udf24.bin");
         byte[][] network=new byte[8][];for(int i=0;i<network.length;i++)network[i]=new byte[0];
         try {

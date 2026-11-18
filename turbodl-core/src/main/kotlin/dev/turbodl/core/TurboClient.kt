@@ -727,7 +727,14 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
             throw UnsupportedOperationException("Resume verification policy is unsupported by backend ${backend.name}")
         }
         val result = backend.download(context)
-        finish(id, request, result.orderedParts, result.totalBytes, result.partOffsets)
+        finish(
+            id,
+            request,
+            result.orderedParts,
+            result.totalBytes,
+            result.partOffsets,
+            result.directoryOutput,
+        )
     }
 
     private suspend fun finish(
@@ -736,9 +743,33 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
         parts: List<File>,
         total: Long,
         offsets: List<Long>? = null,
+        directoryOutput: File? = null,
     ) {
         setState(id, request, TaskState.MERGING)
         transferDetails[id]?.phase(TransferPhase.FINALIZING)
+        if (directoryOutput != null) {
+            require(directoryOutput.isDirectory) {
+                "后端声明了目录产物，但目录不存在：$directoryOutput"
+            }
+            require(request.expectedSha256 == null) {
+                "目录产物不支持单文件 SHA-256 校验"
+            }
+            val size = withContext(Dispatchers.IO) {
+                directoryOutput.walkTopDown()
+                    .filter { it.isFile }
+                    .sumOf { it.length() }
+            }
+            if (size <= 0) throw IllegalStateException("目录产物为空：$directoryOutput")
+            clearTurbodlFileIdentity(request.destination)
+            chunkDirOf(id).deleteRecursively()
+            updateProgress(id) {
+                it.copy(downloadedBytes = size, totalBytes = size, activeConnections = 0)
+            }
+            setState(id, request, TaskState.COMPLETED)
+            emit(TurboEvent.Completed(id, directoryOutput, size))
+            completions[id]?.complete(Result.success(directoryOutput))
+            return
+        }
         val dest = request.destination
         // 【预先合并命中】后端已把完整数据写进目标文件（overlap merge），
         // parts 就是目标文件本身 —— 此时**不能再合并一次**（那是把文件拷到自己身上）。

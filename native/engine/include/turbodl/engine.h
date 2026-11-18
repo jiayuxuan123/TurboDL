@@ -22,6 +22,7 @@ enum td_state { TD_QUEUED=0, TD_PROBING=1, TD_TRANSFERRING=2, TD_PAUSING=3, TD_P
 enum td_command { TD_PAUSE=1, TD_RESUME=2, TD_CANCEL=3 };
 enum td_error { TD_ERROR_NONE=0, TD_ERROR_NETWORK=1, TD_ERROR_HTTP=2, TD_ERROR_STORAGE=3, TD_ERROR_INTEGRITY=4, TD_ERROR_SOURCE_CHANGED=5, TD_ERROR_IDENTITY_UNVERIFIABLE=6, TD_ERROR_RANGE=7, TD_ERROR_LOCKED=8, TD_ERROR_RATE_LIMITED=9, TD_ERROR_POLICY=10, TD_ERROR_TRUST=11, TD_ERROR_AUTH=12 };
 enum td_flags { TD_TEST_ALLOW_LOOPBACK=1u };
+enum td_transfer_flags { TD_TRANSFER_WHOLE_FILE=1u, TD_TRANSFER_RESTART_UNVERIFIABLE_CACHE=2u };
 enum td_event_kind { TD_EVENT_STATE=1, TD_EVENT_PROGRESS=2 };
 
 typedef struct td_engine_options {
@@ -89,6 +90,8 @@ typedef struct td_task_options {
     uint32_t mirror_count;
     uint32_t reserved;
     const int64_t* expected_size;
+    uint32_t transfer_flags;
+    uint32_t reserved2;
 } td_task_options;
 struct td_source_options {
     uint32_t struct_size;
@@ -119,6 +122,34 @@ typedef struct td_torrent_limits {
     uint64_t download_bytes_per_second;
     uint64_t upload_bytes_per_second;
 } td_torrent_limits;
+
+enum td_media_protocol { TD_MEDIA_AUTO=0, TD_MEDIA_HLS=1, TD_MEDIA_DASH=2 };
+enum td_media_stage { TD_MEDIA_RESOLVING=1, TD_MEDIA_DOWNLOADING=2, TD_MEDIA_PROCESSING=3, TD_MEDIA_SAVING=4, TD_MEDIA_DONE=5 };
+typedef struct td_media_options {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    const td_task_options* transfer;
+    uint32_t protocol;
+    uint32_t parallel_segments;
+    uint64_t maximum_bandwidth;
+    uint64_t maximum_segment_bytes;
+    const char* audio_language;
+    const char* video_representation;
+    const char* audio_representation;
+    uint32_t recording_seconds; /* zero records a live source until finish() */
+    uint32_t reserved;
+} td_media_options;
+typedef struct td_media_details {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t stage;
+    uint32_t failure_stage;
+    uint32_t tracks;
+    uint32_t live;
+    uint64_t media_units;
+    uint64_t verified_units;
+    uint64_t recorded_milliseconds;
+} td_media_details;
 
 typedef struct td_snapshot {
     uint32_t struct_size;
@@ -200,6 +231,10 @@ TD_API int32_t td_task_replace_source(td_engine*, td_task_id, const td_source_op
 TD_API int32_t td_task_forget(td_engine*, td_task_id);
 TD_API int32_t td_torrent_submit(td_engine*, const td_torrent_options*, td_task_id* out);
 TD_API int32_t td_torrent_connect_peer(td_engine*, td_task_id, const char* address, uint16_t port);
+TD_API int32_t td_media_submit(td_engine*, const td_media_options*, td_task_id* out);
+/* Gracefully stop live recording and publish the recorded output. */
+TD_API int32_t td_media_finish(td_engine*, td_task_id);
+TD_API int32_t td_media_query(td_engine*, td_task_id, td_media_details* out);
 TD_API int32_t td_task_query(td_engine*, td_task_id, td_snapshot* out);
 TD_API int32_t td_engine_poll(td_engine*, td_event* out, uint32_t capacity, uint32_t* count);
 /* Feature report is a static, immutable UTF-8 JSON string owned by the library. */

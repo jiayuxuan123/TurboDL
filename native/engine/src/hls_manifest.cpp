@@ -102,7 +102,7 @@ HlsManifest parse_hls_manifest(const std::string& content,const std::string& bas
             if(attrs["METHOD"]=="NONE")key.reset();
             else{
                 if(attrs["METHOD"]!="AES-128" || (!attrs["KEYFORMAT"].empty() && attrs["KEYFORMAT"]!="identity"))throw std::invalid_argument("Unsupported encrypted HLS method");
-                HlsKey next;next.url=resolve(base,attrs["URI"]);
+                HlsKey next;next.url=resolve(base,attrs["URI"]);next.generation=sequence;
                 if(!attrs["IV"].empty()){next.iv=iv(attrs["IV"]);next.explicit_iv=true;}
                 key=std::move(next);
             }

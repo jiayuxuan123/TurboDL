@@ -9,7 +9,7 @@ from test_engine import DATA,ABI,Options,TaskOptions,Snapshot,load
 
 lib=load()
 path=Path(sys.argv[1])
-options=Options(C.sizeof(Options),ABI,os.fsencode(path/'journal'),1,1,1024*1024,1,0)
+options=Options(C.sizeof(Options),ABI,os.fsencode(path/'journal'),1,1,8*1024*1024,1,0)
 engine=C.c_void_p()
 if lib.td_engine_create(C.byref(options),C.byref(engine))!=0:raise RuntimeError('engine create failed')
 task=TaskOptions(C.sizeof(TaskOptions),ABI,sys.argv[2].encode(),str(path/'task.bin').encode(),b'task',hashlib.sha256(DATA).hexdigest().encode(),None,0,1,262144,1000,1500)

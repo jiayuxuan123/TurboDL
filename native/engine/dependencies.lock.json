@@ -11,6 +11,41 @@
       "license_files_required": true
     },
     {
+      "name": "curl",
+      "version": "8.23.0",
+      "url": "https://curl.se/download/curl-8.23.0.tar.xz",
+      "sha256": "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5",
+      "license": "curl"
+    },
+    {
+      "name": "nghttp2",
+      "version": "1.71.0",
+      "url": "https://github.com/nghttp2/nghttp2/releases/download/v1.71.0/nghttp2-1.71.0.tar.xz",
+      "sha256": "c0f55121d88650e4b9227aec28cebaf664d2417ca60fe70be0f8d38829f52116",
+      "license": "MIT"
+    },
+    {
+      "name": "nghttp3",
+      "version": "1.19.0",
+      "url": "https://github.com/ngtcp2/nghttp3/releases/download/v1.19.0/nghttp3-1.19.0.tar.xz",
+      "sha256": "228e17f5cc3d4de7bfced9912bd09de30e7f45741cc47503cf88d3fa9209e155",
+      "license": "MIT"
+    },
+    {
+      "name": "ngtcp2",
+      "version": "1.26.0",
+      "url": "https://github.com/ngtcp2/ngtcp2/releases/download/v1.26.0/ngtcp2-1.26.0.tar.xz",
+      "sha256": "7804aa0fa1c39942ba322a90805824c37231f7675b08d0c3cc4332858a7b085e",
+      "license": "MIT"
+    },
+    {
+      "name": "libssh2",
+      "version": "1.11.1",
+      "url": "https://libssh2.org/download/libssh2-1.11.1.tar.xz",
+      "sha256": "9954cb54c4f548198a7cbebad248bdc87dd64bd26185708a294b2b50771e3769",
+      "license": "BSD-3-Clause"
+    },
+    {
       "name": "pugixml",
       "version": "1.16",
       "url": "https://github.com/zeux/pugixml/releases/download/v1.16/pugixml-1.16.tar.gz",
