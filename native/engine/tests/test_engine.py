@@ -141,6 +141,58 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if ranged:self.send_header('Content-Range',f'bytes {start}-{end}/{len(payload)}')
         self.end_headers()
         try:
+            if self.path=='/silent-with-active-peer':
+                if start==0:
+                    self.wfile.write(body[:65536])
+                    self.wfile.flush()
+                    self.server.silent_peer_release.wait(12)
+                    self.close_connection=True
+                    return
+                if start==65536:
+                    self.server.silent_peer_reclaimed.set()
+                elif start==262144:
+                    # Keep streaming steadily without completing until the stalled peer is reclaimed.
+                    pos=0
+                    while pos<len(body):
+                        step=4096 if not self.server.silent_peer_reclaimed.is_set() else 65536
+                        self.wfile.write(body[pos:pos+step])
+                        self.wfile.flush()
+                        pos+=step
+                        if not self.server.silent_peer_reclaimed.is_set():
+                            time.sleep(.18)
+                    return
+            if self.path=='/all-stalled':
+                with self.lock:
+                    attempt=self.server.all_stalled_attempts.get(start,0)+1
+                    self.server.all_stalled_attempts[start]=attempt
+                if attempt==1 and start in (0,262144):
+                    self.wfile.write(body[:32768])
+                    self.wfile.flush()
+                    self.server.all_stalled_release.wait(12)
+                    self.close_connection=True
+                    return
+            if self.path=='/silent-range' and start==0:
+                self.wfile.write(body[:65536])
+                self.wfile.flush()
+                self.server.silent_range_release.wait(12)
+                self.close_connection=True
+                return
+            if self.path=='/silent-mid-transfer':
+                if start==0:
+                    self.wfile.write(body[:65536])
+                    self.wfile.flush()
+                    self.server.silent_mid_release.wait(12)
+                    self.close_connection=True
+                    return
+                if start==65536:
+                    self.server.silent_mid_reclaimed.set()
+                elif start>262144:
+                    self.wfile.write(body[:65536])
+                    self.wfile.flush()
+                    self.server.silent_mid_reclaimed.wait(6)
+                    self.wfile.write(body[65536:])
+                    self.wfile.flush()
+                    return
             if self.path=='/wide-range':
                 with self.lock:
                     if type(self).active>=48:self.server.wide_ready.set()
@@ -185,7 +237,7 @@ class EngineCase(unittest.TestCase):
         cls.next_port=8791
     def setUp(self):
         while True:
-            if self.next_port>8850:raise RuntimeError('local fixture port range exhausted')
+            if self.next_port>8990:raise RuntimeError('local fixture port range exhausted')
             port=type(self).next_port;type(self).next_port+=1
             try:self.server=http.server.ThreadingHTTPServer(('127.0.0.1',port),Fixture);break
             except OSError:continue
@@ -208,8 +260,8 @@ class EngineCase(unittest.TestCase):
     def engine(self,slots=2,connections=4,buffers=8*1024*1024):
         opts=Options(C.sizeof(Options),ABI,os.fsencode(self.path/'journal'),slots,connections,buffers,1,0)
         handle=C.c_void_p();self.assertEqual(0,self.lib.td_engine_create(C.byref(opts),C.byref(handle)));self.engines.append(handle);return handle
-    def submit(self,e,path='/file',key='task',sha=True,connections=1):
-        o=TaskOptions(C.sizeof(TaskOptions),ABI,(self.url+path).encode(),str(self.path/(key+'.bin')).encode(),key.encode(),hashlib.sha256(DATA).hexdigest().encode() if sha else None,None,0,connections,256*1024,1000,1500)
+    def submit(self,e,path='/file',key='task',sha=True,connections=1,read_timeout_ms=1500):
+        o=TaskOptions(C.sizeof(TaskOptions),ABI,(self.url+path).encode(),str(self.path/(key+'.bin')).encode(),key.encode(),hashlib.sha256(DATA).hexdigest().encode() if sha else None,None,0,connections,256*1024,1000,read_timeout_ms)
         # Independent fixture services can reuse a port after teardown. Their
         # caller scopes must not inherit another test's intentional 5-min wait.
         if path.startswith('/limited'):
@@ -479,6 +531,71 @@ class NativeEngineTests(EngineCase):
         self.assertGreater(done.request_count,5,'idle connections never helped the measured slow range')
         self.assertLessEqual(done.peak_active_requests,4)
         self.assertEqual(DATA,(self.path/'task.bin').read_bytes())
+
+    def test_a_silent_range_recovers_without_manual_pause(self):
+        self.server.silent_range_release = threading.Event()
+        engine = self.engine()
+        try:
+            task = self.submit(engine, '/silent-range', connections=4, read_timeout_ms=10000)
+            done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED), timeout=6)
+            self.assertEqual(COMPLETED, done.state, done.message)
+            self.assertLessEqual(done.peak_active_requests, 4)
+            with Fixture.lock:
+                self.assertTrue(any(row[1] and row[1].startswith('bytes=65536-') for row in Fixture.requests))
+            self.assertEqual(DATA, (self.path / 'task.bin').read_bytes())
+        finally:
+            self.server.silent_range_release.set()
+
+    def test_a_silent_range_recovers_mid_transfer_while_slots_are_full(self):
+        self.server.silent_mid_release = threading.Event()
+        self.server.silent_mid_reclaimed = threading.Event()
+        engine = self.engine(connections=2)
+        try:
+            task = self.submit(engine, '/silent-mid-transfer', connections=2, read_timeout_ms=10000)
+            done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED), timeout=6)
+            self.assertEqual(COMPLETED, done.state, done.message)
+            self.assertTrue(self.server.silent_mid_reclaimed.is_set(), 'stalled slot was not reclaimed while peer occupied the second slot')
+            self.assertEqual(DATA, (self.path / 'task.bin').read_bytes())
+        finally:
+            self.server.silent_mid_reclaimed.set()
+            self.server.silent_mid_release.set()
+
+    def test_a_silent_range_recovers_while_peer_keeps_streaming(self):
+        self.server.silent_peer_release = threading.Event()
+        self.server.silent_peer_reclaimed = threading.Event()
+        engine = self.engine(connections=2)
+        try:
+            task = self.submit(engine, '/silent-with-active-peer', connections=2, read_timeout_ms=12000)
+            done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED), timeout=9)
+            self.assertEqual(COMPLETED, done.state, done.message)
+            self.assertTrue(self.server.silent_peer_reclaimed.is_set(), 'stalled range was not reclaimed while active peer streamed')
+            self.assertEqual(DATA, (self.path / 'task.bin').read_bytes())
+        finally:
+            self.server.silent_peer_reclaimed.set()
+            self.server.silent_peer_release.set()
+
+    def test_all_stalled_ranges_recover_before_read_timeout(self):
+        self.server.all_stalled_attempts = {}
+        self.server.all_stalled_release = threading.Event()
+        engine = self.engine(connections=2)
+        try:
+            started = time.monotonic()
+            task = self.submit(engine, '/all-stalled', connections=2, read_timeout_ms=10000)
+            done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED), timeout=9)
+            elapsed = time.monotonic() - started
+            self.assertEqual(COMPLETED, done.state, done.message)
+            self.assertLess(elapsed, 8.5, 'all-stalled streams waited for full read timeout instead of recovering early')
+            self.assertEqual(DATA, (self.path / 'task.bin').read_bytes())
+        finally:
+            self.server.all_stalled_release.set()
+
+    def test_no_etag_single_source_uses_parallel_ranges_without_bypassing_resume_check(self):
+        engine = self.engine(connections=4)
+        task = self.submit(engine, '/no-validator', key='no-etag-parallel', sha=False, connections=4)
+        done = self.until(engine, task, lambda snapshot: snapshot.state in (COMPLETED, FAILED), timeout=8)
+        self.assertEqual(COMPLETED, done.state, done.message)
+        self.assertGreaterEqual(done.peak_active_requests, 2, 'single-source range server without ETag collapsed to 1 connection')
+        self.assertEqual(DATA, (self.path / 'no-etag-parallel.bin').read_bytes())
 
     def test_slow_discovery_covering_the_whole_file_uses_an_idle_peer(self):
         e=self.engine(connections=2)

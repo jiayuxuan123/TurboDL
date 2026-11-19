@@ -122,7 +122,7 @@ struct Task {
     int64_t source_length=-1;
     int64_t total=-1;
     int64_t expected_length=-1;
-    bool prepared=false,identity_checked=false,range_supported=false,loopback=false,whole_file=false,checkpoint_failed=false;
+    bool prepared=false,identity_checked=false,range_supported=false,loopback=false,whole_file=false,checkpoint_failed=false,session_range_allowed=false;
     bool restart_unverifiable=false,internal=false,media=false;
     td::MediaOptions media_options;
     std::unique_ptr<td::MediaJob> media_job;
@@ -137,7 +137,10 @@ struct Task {
     bool stream_hash_valid=false;
     std::vector<std::unique_ptr<Request>> requests;
     std::vector<CURL*> idle_easies;
-    struct SourceSpeed {double bytes_per_second=0,startup_seconds=0;};
+    struct SourceSpeed {
+        double bytes_per_second=0,startup_seconds=0;
+        Clock::time_point last_completed_at{};
+    };
     std::map<std::string,SourceSpeed> speeds;
     std::future<std::string> io;
     uint32_t io_purpose=0,failure_code=0;
@@ -182,7 +185,7 @@ struct Request {
     bool address_rejected=false,address_allowed=false;
     uint8_t tail_splits=0;
     bool open_ended=false;
-    Clock::time_point started_at=Clock::now(),first_byte_at{},sample_at{};
+    Clock::time_point started_at=Clock::now(),first_byte_at{},sample_at{},last_body_at{};
     uint64_t sampled_bytes=0;
     double bytes_per_second=0;
     uint64_t lease_id=0;
@@ -339,7 +342,7 @@ struct td_engine {
     }
     void release_task(Task& t){if(t.task_lease)td::process_resources().release_task(t.task_lease);t.task_lease=0;}
     bool admit_task(Task& t){return td::process_resources().admit_task(t.task_lease);}
-    void close_target(Task& t){if(t.file){std::fclose(t.file);t.file=nullptr;}t.lock.reset();t.prepared=false;release_task(t);}
+    void close_target(Task& t){if(t.file){std::fclose(t.file);t.file=nullptr;}t.lock.reset();t.prepared=false;t.session_range_allowed=false;release_task(t);}
     void checkpoint(Task& t){
         if(!t.file)return;
         std::vector<td::BlockDigest> blocks;blocks.reserve(t.pending.size());for(auto& [offset,b]:t.pending){(void)offset;blocks.push_back(b);}
@@ -392,7 +395,7 @@ struct td_engine {
         bool complete=t.total>=0 && t.coverage.bytes()==static_cast<uint64_t>(t.total);
         bool same_source=saved && !t.sources.empty() && saved->source_origin==source_identity(t,t.sources.front());
         if(saved && complete && t.expected.empty() && !same_source)throw ResumeIdentityError("Completed cache source identity changed");
-        t.identity_checked=complete && same_source && t.restart_unverifiable;t.range_supported=false;t.checkpoint_bytes=t.coverage.bytes();
+        t.identity_checked=complete && same_source && t.restart_unverifiable;t.range_supported=false;t.session_range_allowed=false;t.checkpoint_bytes=t.coverage.bytes();
         t.checkpoint_total=exists && saved?saved->total:-1;
         std::lock_guard l(t.mutex);t.view.downloaded_bytes=t.coverage.bytes();t.view.durable_bytes=t.coverage.bytes();t.view.total_bytes=t.total;
     }
@@ -442,10 +445,17 @@ struct td_engine {
             }else{r.error=TD_ERROR_HTTP;r.message="Unexpected success response";}
             if(!r.error && t.coverage.bytes()>0){
                 if(t.expected.empty() && !t.etag.empty() && t.etag!=r.etag){r.error=TD_ERROR_SOURCE_CHANGED;r.message="Source validator changed";}
-                else if((t.etag.empty() || t.validator_origin!=r.source_identity) && t.expected.empty()){r.error=TD_ERROR_IDENTITY_UNVERIFIABLE;r.message="Resume identity cannot be verified";}
+                else if(t.expected.empty() && (t.validator_origin!=r.source_identity || (t.etag.empty() && !t.session_range_allowed))){r.error=TD_ERROR_IDENTITY_UNVERIFIABLE;r.message="Resume identity cannot be verified";}
             }
-            if(!r.error && r.status==206 && !t.whole_file && t.coverage.bytes()==0 && t.expected.empty() && (r.etag.empty() || r.etag.rfind("W/",0)==0))r.restart_whole=true;
-            if(!r.error && !r.restart_whole){if(t.etag.empty() && !r.etag.empty() && r.etag.rfind("W/",0)!=0)t.etag=r.etag;t.validator_origin=r.source_identity;t.identity_checked=true;r.engine->dispatch_ready=true;}
+            const bool allow_unvalidated_single_source=!t.whole_file && t.sources.size()==1 && (!t.representation_id.empty() || t.connections>1);
+            if(!r.error && r.status==206 && !t.whole_file && t.coverage.bytes()==0 && t.expected.empty() && (r.etag.empty() || r.etag.rfind("W/",0)==0) && !allow_unvalidated_single_source)r.restart_whole=true;
+            if(!r.error && !r.restart_whole){
+                if(t.etag.empty() && !r.etag.empty() && r.etag.rfind("W/",0)!=0)t.etag=r.etag;
+                if(t.etag.empty() && t.expected.empty() && r.status==206 && t.coverage.bytes()==0 && allow_unvalidated_single_source)t.session_range_allowed=true;
+                t.validator_origin=r.source_identity;
+                t.identity_checked=true;
+                r.engine->dispatch_ready=true;
+            }
             {std::lock_guard l(t.mutex);t.view.total_bytes=t.total;}
             return n;
         }catch(...){r.error=TD_ERROR_HTTP;r.message="Malformed response headers";return 0;}
@@ -467,6 +477,7 @@ struct td_engine {
             if(!td::process_resources().receive(n)){r.paused=true;return CURL_WRITEFUNC_PAUSE;}
             std::memcpy(r.blocks[r.block_index].data()+r.block_used,p,accepted);r.block_used+=accepted;r.cursor+=accepted;r.body_bytes+=accepted;
             auto now=Clock::now();
+            r.last_body_at=now;
             if(r.first_byte_at==Clock::time_point{}){r.first_byte_at=now;r.sample_at=now;}
             auto seconds=std::chrono::duration<double>(now-r.sample_at).count();
             if(seconds>=.05){r.bytes_per_second=static_cast<double>(r.body_bytes-r.sampled_bytes)/seconds;r.sampled_bytes=r.body_bytes;r.sample_at=now;}
@@ -600,11 +611,68 @@ struct td_engine {
         if(r.body_bytes==0 && t.total!=0){fail(t,TD_ERROR_RANGE,"Response made no progress");return;}
         t.range_retries.erase(r.assigned.begin);
         if(r.body_bytes>=4096 && r.first_byte_at!=Clock::time_point{}){
-            const auto seconds=std::chrono::duration<double>(Clock::now()-r.first_byte_at).count();
+            const auto finished_at=Clock::now();
+            const auto seconds=std::chrono::duration<double>(finished_at-r.first_byte_at).count();
             auto& speed=t.speeds[r.source_identity];
+            speed.last_completed_at=finished_at;
             speed.bytes_per_second=std::max(speed.bytes_per_second,r.body_bytes/std::max(.001,seconds));
             const auto startup=std::chrono::duration<double>(r.first_byte_at-r.started_at).count();
             if(speed.startup_seconds==0 || startup<speed.startup_seconds)speed.startup_seconds=startup;
+        }
+    }
+    void reclaim_stalled(Task& t){
+        if(!t.range_supported || !t.retry_count)return;
+        if(td::process_resources().speed_limited())return;
+        auto now=Clock::now();
+        auto eligible=[](const Request& req){
+            return req.easy && !req.network_done && !req.paused && req.http && req.headers_ready &&
+                   !req.error && req.status==206 && req.first_byte_at!=Clock::time_point{} &&
+                   req.last_body_at!=Clock::time_point{} && req.cursor<req.assigned.end;
+        };
+        size_t active_eligible=0;
+        size_t all_stalled_count=0;
+        const auto all_stalled_threshold=t.read_ms>=6000
+            ? std::chrono::milliseconds(std::clamp<uint32_t>(t.read_ms/2,4000,10000))
+            : std::chrono::milliseconds{};
+        bool any_reclaimed=false;
+        for(const auto& request:t.requests){
+            auto& slow=*request;
+            if(!eligible(slow))continue;
+            ++active_eligible;
+            const auto idle=now-slow.last_body_at;
+            bool should_reclaim=false;
+            auto found=t.speeds.find(slow.source_identity);
+            if(found!=t.speeds.end() &&
+               found->second.last_completed_at>slow.last_body_at &&
+               idle>=std::chrono::seconds(2)){
+                should_reclaim=true;
+            }else if(idle>=std::chrono::seconds(4)){
+                for(const auto& other:t.requests){
+                    const auto& peer=*other;
+                    if(&peer==&slow || !eligible(peer) || peer.source_identity!=slow.source_identity)continue;
+                    if(peer.last_body_at>slow.last_body_at && now-peer.last_body_at<std::chrono::seconds(2)){
+                        should_reclaim=true;
+                        break;
+                    }
+                }
+            }
+            if(should_reclaim){
+                slow.network_result=CURLE_OPERATION_TIMEDOUT;
+                detach(slow);
+                flush(slow);
+                any_reclaimed=true;
+            }else if(all_stalled_threshold.count()>0 && idle>=all_stalled_threshold){
+                ++all_stalled_count;
+            }
+        }
+        if(!any_reclaimed && active_eligible>0 && active_eligible==t.requests.size() && all_stalled_count==active_eligible){
+            for(const auto& request:t.requests){
+                auto& slow=*request;
+                if(!eligible(slow))continue;
+                slow.network_result=CURLE_OPERATION_TIMEDOUT;
+                detach(slow);
+                flush(slow);
+            }
         }
     }
     bool assist_tail(Task& t){
@@ -612,10 +680,11 @@ struct td_engine {
         auto now=Clock::now();
         for(const auto& request:t.requests){
             auto& slow=*request;
-            if(!slow.easy || slow.network_done || slow.paused || slow.tail_splits>=2 || !slow.http || !slow.headers_ready || slow.error || slow.first_byte_at==Clock::time_point{} || !t.range_supported)continue;
-            if(slow.cursor>=slow.assigned.end || slow.assigned.end-slow.cursor<8192 || std::chrono::duration<double>(now-slow.first_byte_at).count()<.05 || slow.bytes_per_second<=0)continue;
+            if(!slow.easy || slow.network_done || slow.paused || !slow.http || !slow.headers_ready || slow.error || slow.first_byte_at==Clock::time_point{} || !t.range_supported || slow.cursor>=slow.assigned.end)continue;
             auto found=t.speeds.find(slow.source_identity);
             const bool has_sample=found!=t.speeds.end();
+            if(slow.tail_splits>=2 || slow.assigned.end-slow.cursor<8192 ||
+               std::chrono::duration<double>(now-slow.first_byte_at).count()<.05 || slow.bytes_per_second<=0)continue;
             if(has_sample && found->second.bytes_per_second<slow.bytes_per_second*1.5)continue;
             if(!has_sample && (slow.tail_splits || t.requests.size()!=1 || slow.assigned.begin!=0 ||
                                t.total<0 || slow.assigned.end!=static_cast<uint64_t>(t.total)))continue;
@@ -702,10 +771,11 @@ struct td_engine {
         if(t.command.load()!=0 || t.io.valid())return;
         if(!allow_task && !t.prepared)return;
         if(!t.prepared){if(!admit_task(t))return;state(t,TD_PROBING);t.io_purpose=1;t.io=disk.submit([this,&t]{prepare(t);return std::string{};});return;}
+        reclaim_stalled(t);
         for(auto& r:t.requests){
             if(r->network_done && !pending_writes(*r) && !r->block_used)completion(*r,r->network_result);
             if(t.command.load()!=0)break;
-            if(r->paused && block_available(*r) && r->easy){r->paused=false;curl_easy_pause(r->easy,CURLPAUSE_CONT);}
+            if(r->paused && block_available(*r) && r->easy){r->paused=false;r->last_body_at=Clock::now();curl_easy_pause(r->easy,CURLPAUSE_CONT);}
         }
         std::erase_if(t.requests,[](auto& r){return r->network_done && !pending_writes(*r) && !r->block_used;});
         if(t.command.load()!=0)return;
@@ -737,7 +807,7 @@ struct td_engine {
         // middle of short fast transfers while still capping fast-link loss.
         constexpr uint64_t checkpoint_size_limit=64*1024*1024;
         if(t.coverage.bytes()>t.checkpoint_bytes && (t.coverage.bytes()-t.checkpoint_bytes>=checkpoint_size_limit || Clock::now()-t.checkpoint_at>std::chrono::seconds(1))){start_checkpoint(t);return;}
-        uint32_t ceiling=t.identity_checked && t.range_supported && (!t.etag.empty() || !t.expected.empty())?t.connections:1;
+        uint32_t ceiling=t.identity_checked && t.range_supported && (!t.etag.empty() || !t.expected.empty() || t.session_range_allowed)?t.connections:1;
         if(t.requests.size()>=ceiling)return;
         std::vector<td::Range> reserved;for(auto& r:t.requests)reserved.push_back(r->assigned);
         const auto now=Clock::now();
@@ -857,6 +927,7 @@ struct td_engine {
                             1,std::chrono::duration_cast<std::chrono::milliseconds>(retry.ready_at-now).count())));
                     }
                     if(t->command.load() && !t->io.valid() && t->requests.empty())timeout=0;
+                    if(t->range_supported && !t->requests.empty())timeout=std::min(timeout,250L);
                     for(const auto& request:t->requests){
                         if(request->paused && block_available(*request))timeout=std::min(timeout,10L);
                         if(pending_writes(*request))timeout=std::min(timeout,1L);

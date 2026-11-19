@@ -26,6 +26,7 @@ public:
     long next_timer(long maximum_ms);
     bool receive(uint64_t bytes);
     void set_speed(uint64_t owner,uint64_t bytes_per_second);
+    bool speed_limited();
     uint64_t register_external_transfer();
     void unregister_external_transfer(uint64_t id);
     uint64_t external_speed(uint64_t id);

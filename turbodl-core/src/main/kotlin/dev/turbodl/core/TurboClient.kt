@@ -932,22 +932,28 @@ class TurboClient(config: TurboConfig = TurboConfig()) {
      * 避免多分片并发下瞬时速率剧烈抖动导致 ETA 在大范围内跳变。
      */
     private class SpeedRecorder {
-        private var lastBytes = 0L
-        private var lastTime = System.currentTimeMillis()
+        private var lastBytes: Long? = null
+        private var lastTimeNanos = 0L
         private var ewma = 0.0
         private var seeded = false
         @Synchronized
         fun sample(total: Long): Long? {
-            val now = System.currentTimeMillis()
-            val dt = now - lastTime
-            if (dt >= 500) {
-                val inst = if (dt > 0) ((total - lastBytes) * 1000.0 / dt).coerceAtLeast(0.0) else 0.0
-                lastBytes = total; lastTime = now
-                // EWMA 平滑（α=0.3）：既保留足够响应速度，又抑制分片抖动。
-                ewma = if (!seeded) { seeded = true; inst } else 0.3 * inst + 0.7 * ewma
-                return ewma.toLong().coerceAtLeast(0)
+            val now = System.nanoTime()
+            val previous = lastBytes
+            if (previous == null) {
+                lastBytes = total
+                lastTimeNanos = now
+                return 0L
             }
-            return null
+            val elapsed = now - lastTimeNanos
+            if (elapsed < 500_000_000L) return null
+            val instant = ((total - previous) * 1_000_000_000.0 / elapsed).coerceAtLeast(0.0)
+            lastBytes = total
+            lastTimeNanos = now
+            // EWMA 平滑（α=0.3）：既保留足够响应速度，又抑制分片抖动。
+            ewma = if (seeded) 0.3 * instant + 0.7 * ewma else instant
+            seeded = true
+            return ewma.toLong()
         }
     }
 }

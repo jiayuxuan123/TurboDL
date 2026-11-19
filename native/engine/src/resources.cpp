@@ -89,6 +89,10 @@ void ResourceDomain::set_speed(uint64_t owner,uint64_t speed){
     tokens_=0;token_time_=std::chrono::steady_clock::now();
     wake_locked();
 }
+bool ResourceDomain::speed_limited(){
+    std::lock_guard lock(mutex_);
+    return speed_locked()>0;
+}
 uint64_t ResourceDomain::speed_locked()const{
     uint64_t speed=0;
     for(const auto& [id,limit]:owners_){(void)id;if(limit.speed && (!speed || limit.speed<speed))speed=limit.speed;}

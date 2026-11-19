@@ -131,7 +131,11 @@ interface BackendContext {
         reportMetadata(suggestedFileName, contentType, etag, lastModified, probeMs, resumeNote)
     }
 
-    /** Report cumulative downloaded bytes and current active connection count. */
+    /**
+     * Report cumulative downloaded bytes and current active connection count.
+     * The first report sets the speed baseline. On resume, report restored bytes
+     * before reporting new transfer progress.
+     */
     suspend fun reportProgress(absoluteBytes: Long, activeConnections: Int)
 }
 

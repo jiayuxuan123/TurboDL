@@ -1,6 +1,6 @@
 # TurboDL
 
-当前维护版本 **0.5.0.8**。本版修复 C++ 原生核心在高并发时的缓冲分配、分片重试等待和双栈地址回退。详见 [0.5.0.8 更新日志](engineering/maintenance/RELEASE-0.5.0.8.md)与 [0.5.0.7 历史记录](engineering/maintenance/RELEASE-0.5.0.7.md)。
+当前维护版本 **0.5.0.9**。本版修复 C++ 原生核心在无强 ETag 单源并发下载、慢/停滞分片回收与限速协同及 SDK 续传测速基线方面的稳定性问题。详见 [0.5.0.9 更新日志](engineering/maintenance/RELEASE-0.5.0.9.md)与 [0.5.0.8 历史记录](engineering/maintenance/RELEASE-0.5.0.8.md)。
 
 > High-performance multi-threaded download engine SDK — the core remains pure Kotlin/JVM with no Android dependency and is embeddable in any JVM application (including Android). An optional native CLI fast path adds instant startup and a Zig HTTP data plane.
 

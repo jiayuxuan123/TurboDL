@@ -1,6 +1,10 @@
 package dev.turbodl.core
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.security.MessageDigest
 import kotlin.test.AfterTest
@@ -60,5 +64,44 @@ class BackendOverrideTest {
         assertTrue(result.isSuccess, "custom backend should succeed: ${result.exceptionOrNull()?.message}")
         assertEquals(payload.size.toLong(), out.length())
         assertEquals(sha256(payload), sha256(out.readBytes()))
+    }
+
+    @Test
+    fun restoredProgressIsNotSampledAsNewTraffic() = runBlocking {
+        tmpDir = File(System.getProperty("java.io.tmpdir"), "turbodl-restore-" + System.nanoTime()).apply { mkdirs() }
+        val restored = 32L * 1024 * 1024
+        val transferred = 64L * 1024
+        val restoredProgress = CompletableDeferred<TaskProgress>()
+        val transferredProgress = CompletableDeferred<TaskProgress>()
+        val client = TurboClient(TurboConfig(progressIntervalMs = 0))
+        client.backendResolver = BackendResolver {
+            object : DownloadBackend {
+                override val name = "restored-progress"
+                override fun supports(request: DownloadRequest) = true
+
+                override suspend fun download(context: BackendContext): BackendResult {
+                    delay(600)
+                    context.reportTotalSize(restored * 2)
+                    context.reportProgress(restored, 0)
+                    restoredProgress.complete(client.progress.value.getValue(context.taskId))
+                    delay(600)
+                    context.reportProgress(restored + transferred, 1)
+                    transferredProgress.complete(client.progress.value.getValue(context.taskId))
+                    awaitCancellation()
+                }
+            }
+        }
+        try {
+            client.submit(DownloadRequest("restored-progress://file", File(tmpDir, "resume.bin")), File(tmpDir, "work"))
+            withTimeout(8_000) {
+                val baseline = restoredProgress.await()
+                assertEquals(restored, baseline.downloadedBytes)
+                assertEquals(0L, baseline.speedBytesPerSec)
+                val next = transferredProgress.await()
+                assertTrue(next.speedBytesPerSec in 1..(transferred * 2))
+            }
+        } finally {
+            client.shutdown()
+        }
     }
 }
