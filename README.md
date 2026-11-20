@@ -116,6 +116,23 @@ Each fix is covered by a regression test (`RegressionFixesTest.kt`) plus two end
 
 ## Quick start
 
+在 Android 或 Kotlin/JVM 项目中接入 HTTP 下载，只需引入 `turbodl-core`。
+检出要使用的版本（例如 `v0.5.0.9`），用 JDK 17 或更新版本运行以下命令，把 SDK 安装到本机 Maven 仓库。Windows 下使用 `gradlew.bat`。
+
+```sh
+./gradlew :turbodl-core:publishToMavenLocal
+```
+
+在宿主项目的依赖仓库中加入 `mavenLocal()` 和 `mavenCentral()`，再在使用 SDK 的模块中添加与检出版本对应的依赖。
+
+```kotlin
+dependencies {
+    implementation("dev.turbodl:turbodl-core:0.5.0.9")
+}
+```
+
+下面的例子创建客户端、提交任务并等待结果。Android 应用需要声明 `android.permission.INTERNET`，并在协程中调用挂起方法。
+
 ```kotlin
 import dev.turbodl.core.*
 import java.io.File
