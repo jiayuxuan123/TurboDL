@@ -15,7 +15,7 @@ internal object TailAssistPolicy {
             observedNanos < MIN_OBSERVATION_NANOS) return null
         val eta = remaining / bytesPerSecond
         // Require room for startup and a safety margin before adding a request.
-        val breakEven = maxOf(MIN_REMAINING_SECONDS, startupNanos.coerceAtLeast(0) / 1e9 * 4)
+        val breakEven = maxOf(MIN_REMAINING_SECONDS, startupNanos.coerceAtLeast(0) / 1e9 * 2.5)
         return eta.takeIf { it.isFinite() && it > breakEven }
     }
 

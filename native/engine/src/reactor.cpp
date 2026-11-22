@@ -94,6 +94,8 @@ struct Source {
     Headers headers;
     uint32_t redirects=0,failures=0;
     bool disabled=false;
+    uint32_t rate_limit_attempts=0,rate_limit_ceiling=0;
+    Clock::time_point last_rate_limit_wave{};
 };
 struct ResumeIdentityError:std::runtime_error {using std::runtime_error::runtime_error;};
 struct Task {
@@ -185,7 +187,7 @@ struct Request {
     bool address_rejected=false,address_allowed=false;
     uint8_t tail_splits=0;
     bool open_ended=false;
-    Clock::time_point started_at=Clock::now(),first_byte_at{},sample_at{},last_body_at{};
+    Clock::time_point started_at=Clock::now(),first_byte_at{},sample_at{},last_body_at{},last_tail_split_at{};
     uint64_t sampled_bytes=0;
     double bytes_per_second=0;
     uint64_t lease_id=0;
@@ -304,7 +306,10 @@ struct td_engine {
             curl_easy_getinfo(r.easy,CURLINFO_NUM_CONNECTS,&connections);curl_easy_getinfo(r.easy,CURLINFO_HTTP_VERSION,&version);
             r.reused_connection=r.http && connections==0;
             {
-                std::lock_guard l(r.task->mutex);r.task->view.wire_bytes+=static_cast<uint64_t>(std::max<curl_off_t>(downloaded,0));
+                // A shortened range can commit the prefix of a callback even
+                // when curl excludes that final callback from its byte counter.
+                const auto wire=std::max(r.body_bytes,static_cast<uint64_t>(std::max<curl_off_t>(downloaded,0)));
+                std::lock_guard l(r.task->mutex);r.task->view.wire_bytes+=wire;
                 if(r.http){auto& m=r.task->metrics;++m.finished_requests;m.new_connections+=static_cast<uint64_t>(std::max(connections,0L));
                     m.dns_microseconds_sum+=static_cast<uint64_t>(std::max<curl_off_t>(dns,0));
                     m.connect_microseconds_sum+=static_cast<uint64_t>(std::max<curl_off_t>(connected-dns,0));
@@ -498,6 +503,9 @@ struct td_engine {
         size_t selected=0;uint64_t lease=0;std::string source_origin,budget_key;
         for(size_t i=0;i<t.sources.size();++i){
             selected=(t.next_source+i)%t.sources.size();auto& source=t.sources[selected];if(source.disabled)continue;
+            if(source.rate_limit_ceiling && std::count_if(t.requests.begin(),t.requests.end(),[selected](const auto& request){
+                return request->source_index==selected && !request->network_done;
+            })>=source.rate_limit_ceiling)continue;
             source_origin=origin(source.url);budget_key=source_origin+":"+t.cooldown_group;
             lease=td::process_resources().acquire(budget_key,t.host_limit,url_part(source.url,CURLUPART_SCHEME)=="ftp"?2:1,payload_bytes);
             if(lease){t.next_source=(selected+1)%t.sources.size();break;}
@@ -576,12 +584,28 @@ struct td_engine {
         if(r.error){if(alternative()){source.disabled=true;return;}fail(t,r.error,r.message);return;}
         if(r.empty_representation)return;
         if(r.status==429 || r.status==503){
-            auto wait=std::max<uint64_t>(r.retry_ms,250);td::process_resources().cooldown(r.budget_key,wait);
-            if(wait>30000 || ++source.failures>t.retry_count){if(alternative()){source.disabled=true;return;}fail(t,TD_ERROR_RATE_LIMITED,"Source rate limited; saved bytes retained");return;}
-            // A same-origin mirror cannot bypass the host cooldown. Wake the
-            // task at the cooldown boundary instead of relying on the generic
-            // one-second idle poll. An independent origin may proceed now.
-            if(!independent_alternative())t.retry_at=Clock::now()+std::chrono::milliseconds(wait);return;
+            const auto now=Clock::now();
+            // Requests admitted before the first rejection belong to the same
+            // wave, even if some finish after the host starts cooling down.
+            const bool new_wave=r.started_at>source.last_rate_limit_wave;
+            if(new_wave){
+                source.last_rate_limit_wave=now;
+                ++source.rate_limit_attempts;
+                const uint32_t current=source.rate_limit_ceiling?source.rate_limit_ceiling:std::min(t.connections,t.host_limit);
+                source.rate_limit_ceiling=std::max<uint32_t>(1,current/2);
+            }
+            const uint32_t shift=std::min<uint32_t>(source.rate_limit_attempts-1,5);
+            const uint64_t backoff=250ULL<<shift;
+            const auto wait=std::max<uint64_t>(r.retry_ms,new_wave?backoff:0);
+            if(wait){
+                td::process_resources().cooldown(r.budget_key,wait);
+                if(!independent_alternative())t.retry_at=std::max(t.retry_at,now+std::chrono::milliseconds(wait));
+            }
+            if(r.retry_ms>30000 || source.rate_limit_attempts>t.retry_count){
+                if(alternative())source.disabled=true;
+                else fail(t,TD_ERROR_RATE_LIMITED,"Source rate limited; saved bytes retained");
+            }
+            return;
         }
         if(r.status>=400){
             if(alternative()){source.disabled=true;return;}
@@ -678,35 +702,46 @@ struct td_engine {
     bool assist_tail(Task& t){
         if(t.sources.size()!=1)return false;
         auto now=Clock::now();
+        Request* best=nullptr;
+        double best_eta=-1.0;
+        uint64_t best_cut=0;
         for(const auto& request:t.requests){
             auto& slow=*request;
             if(!slow.easy || slow.network_done || slow.paused || !slow.http || !slow.headers_ready || slow.error || slow.first_byte_at==Clock::time_point{} || !t.range_supported || slow.cursor>=slow.assigned.end)continue;
             auto found=t.speeds.find(slow.source_identity);
             const bool has_sample=found!=t.speeds.end();
-            if(slow.tail_splits>=2 || slow.assigned.end-slow.cursor<8192 ||
+            const auto remaining=slow.assigned.end-slow.cursor;
+            if(slow.tail_splits>=6 || remaining<8192 ||
+               (slow.last_tail_split_at!=Clock::time_point{} && (now-slow.last_tail_split_at)<std::chrono::milliseconds(50)) ||
                std::chrono::duration<double>(now-slow.first_byte_at).count()<.05 || slow.bytes_per_second<=0)continue;
-            if(has_sample && found->second.bytes_per_second<slow.bytes_per_second*1.5)continue;
             if(!has_sample && (slow.tail_splits || t.requests.size()!=1 || slow.assigned.begin!=0 ||
                                t.total<0 || slow.assigned.end!=static_cast<uint64_t>(t.total)))continue;
-            const auto remaining=slow.assigned.end-slow.cursor;
             const auto first_startup=std::chrono::duration<double>(slow.first_byte_at-slow.started_at).count();
             const auto startup=std::max(.005,has_sample?found->second.startup_seconds:first_startup);
-            // A prefix may cover the entire object. Without a reference
-            // sample, require enough remaining work for an equally fast peer.
-            if(remaining/slow.bytes_per_second<=std::max(has_sample?.1:.25,startup*4))continue;
+            const double eta=remaining/slow.bytes_per_second;
+            if(eta<=std::max(has_sample?.15:.25,startup*2.5))continue;
             const auto fast=has_sample?found->second.bytes_per_second:slow.bytes_per_second;
+            const uint64_t min_keep=remaining>=131072?32768ULL:4096ULL;
+            if(remaining<=min_keep*2)continue;
             const auto share=slow.bytes_per_second*(remaining+fast*startup)/(slow.bytes_per_second+fast);
-            const auto retained=std::clamp<uint64_t>(static_cast<uint64_t>(share),4096,remaining-4096);
-            const auto cut=slow.cursor+retained;
-            auto count=t.requests.size();start(t,{cut,slow.assigned.end});
-            if(t.requests.size()==count)return false;
-            // The old response can only commit up to the new boundary. Its
-            // buffered bytes precede cursor; in-flight disk jobs remain owned.
-            slow.assigned.end=cut;
-            ++slow.tail_splits;
-            return true;
+            const auto retained=std::clamp<uint64_t>(static_cast<uint64_t>(share),min_keep,remaining-min_keep);
+            const double joint_eta=std::max(retained/slow.bytes_per_second,startup+(remaining-retained)/fast);
+            if(joint_eta>=eta*.90)continue;
+            if(eta>best_eta){
+                best=&slow;
+                best_eta=eta;
+                best_cut=slow.cursor+retained;
+            }
         }
-        return false;
+        if(!best)return false;
+        auto count=t.requests.size();start(t,{best_cut,best->assigned.end});
+        if(t.requests.size()==count)return false;
+        // The old response can only commit up to the new boundary. Its
+        // buffered bytes precede cursor; in-flight disk jobs remain owned.
+        best->assigned.end=best_cut;
+        best->last_tail_split_at=now;
+        ++best->tail_splits;
+        return true;
     }
     void start_checkpoint(Task& t){
         if(t.io.valid() || !t.file)return;
@@ -760,7 +795,7 @@ struct td_engine {
             close_target(t);t.command=0;
             if(command==4)state(t,TD_FAILED,t.failure_code,t.failure_message);else state(t,command==TD_PAUSE?TD_PAUSED:TD_CANCELLED);
         }
-        else if(command==TD_RESUME){t.command=0;t.range_retries.clear();t.speeds.clear();t.checkpoint_failed=false;t.retry_at={};{std::lock_guard l(t.mutex);if(t.source_replaced){t.url=std::move(t.replacement_url);t.headers=std::move(t.replacement_headers);t.representation_id=std::move(t.replacement_representation);t.sources={{t.url,t.representation_id,t.headers}};t.source_replaced=false;t.redirects=0;t.whole_file=false;}for(auto& source:t.sources){source.disabled=false;source.failures=0;}++t.view.generation;}state(t,TD_QUEUED);}
+        else if(command==TD_RESUME){t.command=0;t.range_retries.clear();t.speeds.clear();t.checkpoint_failed=false;t.retry_at={};{std::lock_guard l(t.mutex);if(t.source_replaced){t.url=std::move(t.replacement_url);t.headers=std::move(t.replacement_headers);t.representation_id=std::move(t.replacement_representation);t.sources={{t.url,t.representation_id,t.headers}};t.source_replaced=false;t.redirects=0;t.whole_file=false;}for(auto& source:t.sources){source.disabled=false;source.failures=0;source.rate_limit_attempts=0;source.rate_limit_ceiling=0;source.last_rate_limit_wave={};}++t.view.generation;}state(t,TD_QUEUED);}
     }
     void step(Task& t,bool allow_task){
         if(t.media){step_media(t);return;}
@@ -808,6 +843,7 @@ struct td_engine {
         constexpr uint64_t checkpoint_size_limit=64*1024*1024;
         if(t.coverage.bytes()>t.checkpoint_bytes && (t.coverage.bytes()-t.checkpoint_bytes>=checkpoint_size_limit || Clock::now()-t.checkpoint_at>std::chrono::seconds(1))){start_checkpoint(t);return;}
         uint32_t ceiling=t.identity_checked && t.range_supported && (!t.etag.empty() || !t.expected.empty() || t.session_range_allowed)?t.connections:1;
+        if(t.sources.size()==1 && t.sources.front().rate_limit_ceiling)ceiling=std::min(ceiling,t.sources.front().rate_limit_ceiling);
         if(t.requests.size()>=ceiling)return;
         std::vector<td::Range> reserved;for(auto& r:t.requests)reserved.push_back(r->assigned);
         const auto now=Clock::now();
@@ -834,7 +870,7 @@ struct td_engine {
                 if(t.connections==1)request_window=static_cast<uint64_t>(t.total);
             }
             auto gap=t.coverage.gap(total,(t.whole_file || !http_url(t.url))?total:request_window,reserved);
-            if(!gap){assist_tail(t);break;}
+            if(!gap){if(!assist_tail(t))break;continue;}
             if(auto retry=t.range_retries.lower_bound(gap->begin);retry!=t.range_retries.end()){
                 const auto boundary=retry->first==gap->begin?retry->second.end:retry->first;
                 if(boundary>gap->begin)gap->end=std::min(gap->end,boundary);

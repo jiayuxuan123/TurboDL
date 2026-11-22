@@ -112,9 +112,9 @@ data class TurboConfig(
     /**
      * 单个分片最多被拆几次（防病态裂变）。
      *
-     * 默认 3 次。与最小片长、剩余时间及启动成本共同限制额外请求。
+     * 默认 6 次。与最小片长、剩余时间及启动成本共同限制额外请求。
      */
-    val maxSplitsPerSegment: Int = 3,
+    val maxSplitsPerSegment: Int = 6,
 
     /**
      * 下载中预先合并（overlap merge）：分片一完成就写进目标文件的临时副本，
@@ -576,9 +576,9 @@ data class TurboConfig(
      * 实测表现为「分片 X 重试 6 次仍失败（IOException: Canceled）」，整个任务失败。
      *
      * 真正的"卡死"（一个字节都不来）由 [readTimeoutMs] 在 30 秒内识别，那条路径更快；
-     * 这里保留 45s 作为"半死不活连接"的兜底，代价小、不会误伤正常排队。
+     * 这里与读超时对齐为 30s，避免高并发排队误杀，同时比 45s 更快回收半死连接。
      */
-    val stallTimeoutMs: Long = 45_000,
+    val stallTimeoutMs: Long = 30_000,
 
     /**
      * 连续卡死重置次数上限（默认 3）。达到后任务失败，避免无限重试假活。

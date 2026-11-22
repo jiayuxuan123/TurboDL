@@ -98,6 +98,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             time.sleep(3)
         if self.path=='/limited':
             self.send_response(429);self.send_header('Content-Length','0');self.send_header('Retry-After','300');self.end_headers();return
+        if self.path=='/always-503':
+            self.send_response(503);self.send_header('Content-Length','0');self.end_headers();return
         if self.path=='/limited-once':
             with self.lock:first=sum(1 for row in self.requests if row[0]==self.path)==1
             if first:
@@ -108,7 +110,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             self.send_response(302);self.send_header('Content-Length','0');self.send_header('Location','/file');self.end_headers();return
         payload=DATA
         if self.path=='/small-slow-first':payload=DATA[:49152]
-        if self.path=='/wide-range':payload=self.server.wide_payload
+        if self.path in ('/wide-range','/uniform-tail'):payload=self.server.wide_payload
         etag='"fixture-v1"'
         if self.path=='/changed':payload=bytes(b^0x5a for b in DATA);etag='"fixture-v2"'
         request_range=self.headers.get('Range')
@@ -121,6 +123,13 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if start>=len(payload):
             self.send_response(416);self.send_header('Content-Length','0');self.end_headers();return
         body=payload[start:end+1]
+        if self.path=='/burst-503' and start>0:
+            with self.lock:
+                reject=self.server.burst_503_count<self.server.burst_503.parties
+                if reject:self.server.burst_503_count+=1
+            if reject:
+                self.server.burst_503.wait()
+                self.send_response(503);self.send_header('Content-Length','0');self.end_headers();return
         if self.path=='/disconnect-always':
             self.close_connection=True;return
         if self.path=='/disconnect-once' and len(body)>32768:
@@ -226,7 +235,11 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(body[i:i+chunk]);self.wfile.flush()
                 if slow_first:time.sleep(.03)
                 if straggler:time.sleep(.025)
-                if self.path in ('/slow','/changed','/no-validator','/sparse','/short-once'):
+                if self.path=='/uniform-tail':
+                    # Near-uniform per-connection pacing (slow tail is only ~1.33x slower,
+                    # below the old 1.5x cutoff) to verify idle peers still split it.
+                    time.sleep(.024 if start>=(len(payload)//2) else .018)
+                if self.path in ('/slow','/changed','/no-validator','/sparse','/short-once','/burst-503'):
                     time.sleep(.012 if self.path=='/sparse' and start==0 else .004)
         except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
 
@@ -779,5 +792,35 @@ class NativeEngineTests(EngineCase):
         done=self.until(e,tid.value,lambda s:s.state in (COMPLETED,FAILED))
         self.assertEqual(FAILED,done.state);self.assertEqual(10,done.error)
         self.assertLessEqual((self.path/'limited.bin').stat().st_size,65536)
+
+    def test_uniform_throttled_single_source_splits_tail_for_idle_peers(self):
+        self.server.wide_payload = DATA * 4
+        e = self.engine(connections=4)
+        t = self.submit(e, '/uniform-tail', key='uniform-tail', sha=False, connections=4)
+        done = self.until(e, t, lambda s: s.state in (COMPLETED, FAILED), timeout=20)
+        self.assertEqual(COMPLETED, done.state, done.message)
+        self.assertGreater(done.request_count, 5, f'idle peers did not assist uniform tail: requests={done.request_count}')
+        with (self.path / 'uniform-tail.bin').open('rb') as stream:
+            self.assertEqual(
+                hashlib.sha256(self.server.wide_payload).hexdigest(),
+                hashlib.file_digest(stream, 'sha256').hexdigest(),
+            )
+
+    def test_burst_503_wave_deduplicates_and_reduces_concurrency_to_complete(self):
+        self.server.burst_503 = threading.Barrier(4, timeout=3)
+        self.server.burst_503_count = 0
+        e = self.engine(connections=16)
+        t = self.submit(e, '/burst-503', key='burst-503', connections=16)
+        done = self.until(e, t, lambda s: s.state in (COMPLETED, FAILED), timeout=12)
+        self.assertEqual(COMPLETED, done.state, done.message)
+        self.assertEqual(4, self.server.burst_503_count)
+        self.assertEqual(DATA, (self.path / 'burst-503.bin').read_bytes())
+
+    def test_persistent_503_stops_after_retry_budget(self):
+        e = self.engine()
+        t = self.submit(e, '/always-503', key='persistent-503')
+        done = self.until(e, t, lambda s: s.state == FAILED, timeout=7)
+        self.assertEqual(9, done.error)
+        self.assertEqual(4, done.request_count)
 
 if __name__=='__main__':unittest.main(verbosity=2)

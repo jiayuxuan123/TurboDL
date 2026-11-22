@@ -51,7 +51,7 @@ internal class AdaptiveConcurrencyController(
     private val minimumConcurrency: Int = min(maximumConcurrency, 4),
     private val requiredSamples: Int = 2,
     private val upwardSamples: Int = 3,
-    private val holdWindowsAfterReject: Int = 16,
+    private val holdWindowsAfterReject: Int = 120,
     private val holdWindowsAfterAccept: Int = 4,
 ) {
     /** 控制器意图。scheduler 负责真正落 desired 与 ceiling。 */
@@ -85,6 +85,7 @@ internal class AdaptiveConcurrencyController(
      * 每次 HOLD 结束重新测基线时清空。
      */
     private var rejectedLevel = 0
+    private var consecutiveRejects = 0
 
     init {
         require(maximumConcurrency >= 1)
@@ -110,6 +111,7 @@ internal class AdaptiveConcurrencyController(
         samples.clear()
         hold = 0
         rejectedLevel = 0
+        consecutiveRejects = 0
     }
 
     /**
@@ -165,15 +167,17 @@ internal class AdaptiveConcurrencyController(
                     Direction.UP -> measured >= baseline * GAIN_RATIO
                 }
                 if (!worthwhile) {
-                    // 该方向没有收益：回到已接受的档位，持有若干窗口后再重新测量。
+                    // 该方向没有收益：回到已接受的档位，按连续被拒次数指数拉长持有期后再重新测量。
                     rejectedLevel = probeLevel
                     probeLevel = 0
                     phase = Phase.HOLD
-                    hold = holdWindowsAfterReject
+                    consecutiveRejects++
+                    hold = holdWindowsAfterReject * (1 shl min(consecutiveRejects - 1, 3))
                     return Decision(target = level, suggestedCeiling = level)
                 }
                 level = probeLevel
                 rejectedLevel = 0
+                consecutiveRejects = 0
                 baseline = measured
                 return beginProbe(cap)
             }
@@ -227,10 +231,9 @@ internal class AdaptiveConcurrencyController(
             Direction.DOWN -> if (level <= minimumConcurrency) 0 else max(minimumConcurrency, level / 2)
             Direction.UP -> if (level >= cap) 0 else min(cap, level * 2)
         }
-        // 刚被拒的档位不重探：否则会周期性掉速（见 rejectedLevel 的说明）。
+        // 刚被拒的档位不跳过直接再腰斩：停在当前已接受档位进入持有期。
         if (next == rejectedLevel && direction == Direction.DOWN) {
-            val lower = if (next <= minimumConcurrency) 0 else max(minimumConcurrency, next / 2)
-            next = lower
+            next = 0
         }
         if (next <= 0 || next == level) {
             // 没有可探的方向：停在当前档位。
@@ -256,13 +259,12 @@ internal class AdaptiveConcurrencyController(
 
     private companion object {
         /** 下探时至少要保住基线的这个比例，才认为「少一半连接没有损失」。 */
-        const val KEEP_RATIO = 0.90
+        const val KEEP_RATIO = 0.92
 
         /**
-         * Upward probing requires a 1.3x aggregate gain. Doubling connections on a
-         * per-connection-limited link easily clears this; noisy CDN/aggregate caps
-         * do not. This also matches the product-level "1.3x or do not raise" rule.
+         * Upward probing requires a 1.15x aggregate gain so valid step-ups
+         * do not fail during short TCP/TLS warm-up windows.
          */
-        const val GAIN_RATIO = 1.30
+        const val GAIN_RATIO = 1.15
     }
 }

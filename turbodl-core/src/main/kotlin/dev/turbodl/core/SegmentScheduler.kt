@@ -172,6 +172,13 @@ internal class SegmentScheduler(
          */
         const val ADAPTIVE_MIN_ACTIVE_RATIO = 0.5
 
+        internal fun adaptiveWindowActiveAtTarget(
+            activeNow: Int,
+            windowMaxActive: Int,
+            measuredAt: Int,
+        ): Boolean = activeNow in max(1, (measuredAt * ADAPTIVE_MIN_ACTIVE_RATIO).toInt())..measuredAt &&
+            windowMaxActive <= measuredAt
+
         /** 队列暂空但仍有在飞分片时的等待间隔（毫秒）。 */
         const val DRAIN_WAIT_MS = 30L
 
@@ -543,6 +550,7 @@ internal class SegmentScheduler(
         var throughputWindowStartedAt = System.nanoTime()
         var throughputWindowConcurrency = desired.get()
         var throughputWindowEligible = true
+        val windowMaxActiveConns = AtomicInteger(0)
 
         /**
          * 学到的「服务器能接受的并发天花板」。
@@ -668,6 +676,7 @@ internal class SegmentScheduler(
             throughputWindowStartedAt = nowNanos
             throughputWindowConcurrency = concurrency
             throughputWindowEligible = concurrency == desired.get()
+            windowMaxActiveConns.set(activeConns.get())
         }
 
         /**
@@ -702,13 +711,17 @@ internal class SegmentScheduler(
                 val inFlightNow = inFlight.get()
                 val notTail = queued > 0 || inFlightNow >= measuredAt
                 val activeNow = activeConns.get()
+                val maxActiveInWindow = max(activeNow, windowMaxActiveConns.get())
                 // A lower target does not stop requests already in flight. Until
                 // those extra workers finish, the window still carries the old
                 // concurrency's throughput and would falsely "prove" that halving
-                // connections is free. Require a window at or below the new target
-                // on both ends, not just a lower bound.
-                val activeAtTarget = activeNow in
-                    max(1, (measuredAt * ADAPTIVE_MIN_ACTIVE_RATIO).toInt())..measuredAt
+                // connections is free. Require the entire window to stay at or
+                // below the target concurrency, not only its end instant.
+                val activeAtTarget = adaptiveWindowActiveAtTarget(
+                    activeNow = activeNow,
+                    windowMaxActive = maxActiveInWindow,
+                    measuredAt = measuredAt,
+                )
                 val eligible = throughputWindowEligible &&
                     measuredAt == desired.get() && notTail && activeAtTarget &&
                     !windowHadFailure.get() && bytes > 0
@@ -717,6 +730,7 @@ internal class SegmentScheduler(
                 throughputWindowStartedAt = nowNanos
                 throughputWindowConcurrency = desired.get()
                 throughputWindowEligible = true
+                windowMaxActiveConns.set(activeConns.get())
                 windowHadFailure.set(false)
                 if (!eligible) {
                     // 窗口不合格（收尾/限速/失败/并发刚变）：不做任何档位判断。
@@ -762,6 +776,7 @@ internal class SegmentScheduler(
                     throughputWindowStartedAt = nowNanos
                     throughputWindowConcurrency = desired.get()
                     throughputWindowEligible = true
+                    windowMaxActiveConns.set(activeConns.get())
                 }
             }
         }
@@ -955,6 +970,7 @@ internal class SegmentScheduler(
                     throughputWindowStartedAt = System.nanoTime()
                     throughputWindowConcurrency = target
                     throughputWindowEligible = false
+                    windowMaxActiveConns.set(activeConns.get())
                 }
                 reportConns()
             }
@@ -1125,7 +1141,14 @@ internal class SegmentScheduler(
                         seg.writtenAtAttemptStart = seg.written
                         seg.beginAttempt()
                         inFlight.incrementAndGet()
-                        activeConns.incrementAndGet()
+                        if (adaptive == null) {
+                            activeConns.incrementAndGet()
+                        } else {
+                            synchronized(throughputLock) {
+                                val active = activeConns.incrementAndGet()
+                                windowMaxActiveConns.set(max(windowMaxActiveConns.get(), active))
+                            }
+                        }
                         inFlightSegments.add(seg)
                         reportConns()
                         // 每个分片自己挑来源：快的镜像多派，失败的镜像进退避窗口。

@@ -1,6 +1,6 @@
 # TurboDL
 
-当前维护版本 **0.5.0.9**。本版修复 C++ 原生核心在无强 ETag 单源并发下载、慢/停滞分片回收与限速协同及 SDK 续传测速基线方面的稳定性问题。详见 [0.5.0.9 更新日志](engineering/maintenance/RELEASE-0.5.0.9.md)与 [0.5.0.8 历史记录](engineering/maintenance/RELEASE-0.5.0.8.md)。
+当前维护版本 **0.5.0.10**。本版修复 C++ 原生核心在均匀限速尾段拒绝拆分导致 95%–99% 并发衰减、并发 429/503 波次放大秒死与无降并发，以及 Kotlin 核心吞吐自适应窗口污染和尾段拆分受限等问题。详见 [0.5.0.10 更新日志](engineering/maintenance/RELEASE-0.5.0.10.md)与 [0.5.0.9 历史记录](engineering/maintenance/RELEASE-0.5.0.9.md)。
 
 > High-performance multi-threaded download engine SDK — the core remains pure Kotlin/JVM with no Android dependency and is embeddable in any JVM application (including Android). An optional native CLI fast path adds instant startup and a Zig HTTP data plane.
 
@@ -117,7 +117,7 @@ Each fix is covered by a regression test (`RegressionFixesTest.kt`) plus two end
 ## Quick start
 
 在 Android 或 Kotlin/JVM 项目中接入 HTTP 下载，只需引入 `turbodl-core`。
-检出要使用的版本（例如 `v0.5.0.9`），用 JDK 17 或更新版本运行以下命令，把 SDK 安装到本机 Maven 仓库。Windows 下使用 `gradlew.bat`。
+检出要使用的版本（例如 `v0.5.0.10`），用 JDK 17 或更新版本运行以下命令，把 SDK 安装到本机 Maven 仓库。Windows 下使用 `gradlew.bat`。
 
 ```sh
 ./gradlew :turbodl-core:publishToMavenLocal
@@ -127,7 +127,7 @@ Each fix is covered by a regression test (`RegressionFixesTest.kt`) plus two end
 
 ```kotlin
 dependencies {
-    implementation("dev.turbodl:turbodl-core:0.5.0.9")
+    implementation("dev.turbodl:turbodl-core:0.5.0.10")
 }
 ```
 

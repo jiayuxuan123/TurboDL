@@ -6,7 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const version = "0.5.0.9";
+const version = "0.5.0.10";
 const jar_name = "turbodl-cli-all.jar";
 
 fn fail(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) noreturn {

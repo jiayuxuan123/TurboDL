@@ -180,4 +180,57 @@ class AdaptiveConcurrencyControllerTest {
         val decision = feed(c, 100_000.0, limit = 64, windows = 3)
         assertEquals(16, decision.target, "背压恢复后应从低档重新向上寻找吞吐")
     }
+
+    @Test
+    fun `repeated rejections back off hold duration exponentially`() {
+        val c = AdaptiveConcurrencyController(
+            maximumConcurrency = 32,
+            holdWindowsAfterReject = 2,
+        )
+        startProbing(c, 3_200_000.0)
+        assertEquals(32, feed(c, 1_000_000.0).target) // 1st reject -> hold = 2
+
+        // Wait 2 hold windows + 1 exit + 2 baseline -> 2nd probe starts
+        var secondProbeAt = -1
+        for (w in 1..10) {
+            val d = c.observe(3_200_000.0, rampDone = true, concurrencyLimit = 32)
+            if (d.target == 16) {
+                secondProbeAt = w
+                break
+            }
+        }
+        assertTrue(secondProbeAt in 1..6, "首次拒绝后应在短持有期后重试，实际 $secondProbeAt")
+
+        // 2nd reject -> hold doubles to 4
+        assertEquals(32, feed(c, 1_000_000.0).target)
+        var thirdProbeAt = -1
+        for (w in 1..12) {
+            val d = c.observe(3_200_000.0, rampDone = true, concurrencyLimit = 32)
+            if (d.target == 16) {
+                thirdProbeAt = w
+                break
+            }
+        }
+        assertTrue(thirdProbeAt > secondProbeAt, "连续被拒后持有期必须指数拉长：first=$secondProbeAt second=$thirdProbeAt")
+    }
+
+    @Test
+    fun `adaptive window rejects samples polluted by earlier higher concurrency`() {
+        assertTrue(
+            !SegmentScheduler.adaptiveWindowActiveAtTarget(
+                activeNow = 8,
+                windowMaxActive = 16,
+                measuredAt = 8,
+            ),
+            "窗口内曾出现超过目标的旧高并发连接时，不得判为合格样本",
+        )
+        assertTrue(
+            SegmentScheduler.adaptiveWindowActiveAtTarget(
+                activeNow = 8,
+                windowMaxActive = 8,
+                measuredAt = 8,
+            ),
+            "全程处于目标并发区间内的干净窗口应判为合格",
+        )
+    }
 }
